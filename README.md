@@ -103,6 +103,11 @@ What changes:
   near-identity adaptive skip connections and row-wise random weight factorization. This
   follows the moving-interface PINN/PirateNet literature, where dynamic fronts benefit
   more from architecture and training stabilization than from heavy geometric penalties.
+- A NIF-style last-layer parameterized head is implemented as `architecture="nif_pirate"`.
+  It separates a spatial ShapeNet from a time/physics ParameterNet, following Neural
+  Implicit Flow's mesh-agnostic low-rank representation. It is exposed through the
+  `geo_nif_front_area` ablation case rather than used as the default because a 60-epoch
+  wiring check underperformed the current PirateNet/RWF profile on this Fisher-KPP front.
 - Spatial Fourier features are used as positional encoding, not as a periodic boundary
   assumption. The forward preset now uses a lower Fourier scale because the target
   solution is a smooth diffusive Fisher-KPP front; high-frequency features caused
@@ -230,6 +235,12 @@ Current 60-epoch quick check on one seed with the PirateNet/RWF default gives
 check, not a final benchmark; use the forward ablation script over multiple seeds before
 making claims.
 
+The same 60-epoch sanity check with the new `nif_pirate` head ran successfully but was
+weaker on this setup (`final_time_relative_l2 = 0.5401`,
+`validation_observation_mse = 1.41e-3`, `front_area_010_mae = 0.0269`,
+`mass_mae = 0.0040`), so it remains an explicit ablation until multi-seed tuning supports
+promoting it.
+
 ## Colab Notebook
 
 Upload `fisher_kpp_origin_lab.ipynb` to Google Colab and run from the first cell.
@@ -292,6 +303,8 @@ Outputs:
   forward and inverse PDE problems", arXiv:2111.02801.
 - Wang, Li, Chen, Perdikaris, "PirateNets: Physics-informed Deep Learning with
   Residual Adaptive Networks", arXiv:2402.00326.
+- Pan, Brunton, Kutz, "Neural Implicit Flow: a mesh-agnostic dimensionality reduction
+  paradigm of spatio-temporal data", JMLR 2023.
 - Rohrhofer, Posch, Gößnitzer, Geiger, "Approximating families of sharp solutions to
   Fisher's equation with physics-informed neural networks", Computer Physics
   Communications 2025.

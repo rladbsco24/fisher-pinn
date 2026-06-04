@@ -55,6 +55,7 @@ class ModelConfig:
     fourier_sigma: float = 3.5
     hidden: int = 96
     layers: int = 5
+    nif_rank: int = 16
     use_random_weight_factorization: bool = False
     learn_diffusion: bool = False
     learn_reaction: bool = False
@@ -186,6 +187,7 @@ class ExperimentConfig:
                 fourier_sigma=self.model.fourier_sigma,
                 hidden=48,
                 layers=3,
+                nif_rank=self.model.nif_rank,
                 use_random_weight_factorization=self.model.use_random_weight_factorization,
                 learn_diffusion=self.model.learn_diffusion,
                 learn_reaction=self.model.learn_reaction,
@@ -301,6 +303,7 @@ class ExperimentConfig:
                 fourier_sigma=self.model.fourier_sigma,
                 hidden=self.model.hidden,
                 layers=self.model.layers,
+                nif_rank=self.model.nif_rank,
                 use_random_weight_factorization=self.model.use_random_weight_factorization,
                 learn_diffusion=True,
                 learn_reaction=True,
@@ -361,6 +364,7 @@ class ExperimentConfig:
                 fourier_sigma=1.0,
                 hidden=base.model.hidden,
                 layers=base.model.layers,
+                nif_rank=24,
                 use_random_weight_factorization=True,
                 learn_diffusion=True,
                 learn_reaction=True,

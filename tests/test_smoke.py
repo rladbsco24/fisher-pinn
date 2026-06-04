@@ -132,6 +132,23 @@ def test_geo_spectral_forward_model_terms_are_finite() -> None:
     assert torch.isfinite(sparse)
 
 
+def test_nif_pirate_model_terms_are_finite() -> None:
+    domain = DomainConfig(grid=25, truth_steps=80)
+    cfg = ExperimentConfig(domain=domain).geo_spectral_forward()
+    model_cfg = replace(cfg.model, architecture="nif_pirate", hidden=16, layers=1, fourier_features=8, nif_rank=6)
+    model = OriginPINN(domain, cfg.pde, cfg.seed, model_cfg)
+    xy = torch.rand(12, 2)
+    t = torch.rand(12, 1) * domain.t_end
+    pred = model(xy, t)
+    residual = pde_residual(model, xy, t)
+    sparse = model.sparse_last_layer_l1()
+    assert pred.shape == (12, 1)
+    assert residual.shape == (12, 1)
+    assert torch.isfinite(pred).all()
+    assert torch.isfinite(residual).all()
+    assert torch.isfinite(sparse)
+
+
 def test_parabolic_mass_balance_loss_is_finite() -> None:
     domain = DomainConfig(grid=25, truth_steps=80)
     cfg = ExperimentConfig(domain=domain).geo_spectral_forward()
@@ -195,6 +212,7 @@ def test_geo_spectral_forward_profile_extends_korea_setup() -> None:
     assert cfg.geo.mask_kind == "box"
     assert cfg.model.use_geo_features is True
     assert cfg.model.architecture == "pirate"
+    assert cfg.model.nif_rank > 0
     assert cfg.model.use_random_weight_factorization is True
     assert cfg.model.spatial_fourier_only is True
     assert cfg.model.use_source_envelope is False
@@ -264,8 +282,10 @@ def test_forward_ablation_cases_report_front_metrics() -> None:
     names = [case["name"] for case in cases]
     assert "korea_style_forward" in names
     assert "geo_front_area" in names
+    assert "geo_nif_front_area" in names
     assert "geo_gated_front_area" in names
     assert any(case["cfg"].weights.leading_edge_area > 0.0 for case in cases)
+    assert any(case["cfg"].model.architecture == "nif_pirate" for case in cases)
     assert any(case["cfg"].model.architecture == "pirate" for case in cases)
     assert any(case["cfg"].model.architecture == "gated_mlp" for case in cases)
     summary = aggregate_forward_ablation(
