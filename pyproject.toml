@@ -1,0 +1,14 @@
+[project]
+name = "fisher-kpp-origin-lab"
+version = "0.1.0"
+description = "Inverse origin inference for Fisher-KPP fronts with modern PINN stabilizers and baselines."
+requires-python = ">=3.9"
+dependencies = [
+  "numpy>=1.26,<3",
+  "torch>=2.2",
+  "matplotlib>=3.8",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
