@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import torch
 
 from .models import OriginPINN
@@ -205,12 +207,14 @@ def front_speed_consistency_loss(
     low: float = 0.05,
     high: float = 0.95,
     max_points: int = 128,
+    min_grad: float = 1.0e-2,
 ) -> torch.Tensor:
     kin = front_speed_kinematics(model, xy, t)
     u = kin["u"]
-    front_mask = ((u.detach() > low) & (u.detach() < high)).flatten()
+    grad_norm = torch.linalg.norm(kin["u_xy"].detach(), dim=-1, keepdim=True)
+    front_mask = ((u.detach() > low) & (u.detach() < high) & (grad_norm > min_grad)).flatten()
     if not torch.any(front_mask):
-        indicator = kin["front_indicator"].flatten()
+        indicator = (kin["front_indicator"] * grad_norm).flatten()
         keep = min(max_points, len(indicator))
         if keep == 0:
             return torch.zeros((), dtype=xy.dtype, device=xy.device)
@@ -227,6 +231,180 @@ def front_speed_consistency_loss(
     if len(selected_error) == 0:
         return torch.zeros((), dtype=xy.dtype, device=xy.device)
     return torch.mean(selected_weight * selected_error.clamp(-2.0, 2.0).pow(2))
+
+
+def expected_front_samples(
+    model: OriginPINN,
+    n: int,
+    device: torch.device,
+    *,
+    width: float = 0.08,
+    speed_factor: float = 0.45,
+    level: float = 0.1,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Sample collocation points in the conservative Fisher-KPP front corridor."""
+
+    if n <= 0:
+        empty_xy = torch.empty(0, 2, device=device)
+        empty_t = torch.empty(0, 1, device=device)
+        return empty_xy, empty_t
+
+    dtype = next(model.parameters()).dtype
+    t = torch.rand(n, 1, device=device, dtype=dtype) * model.domain.t_end
+    angle = 2.0 * math.pi * torch.rand(n, 1, device=device, dtype=dtype)
+    direction = torch.cat([torch.cos(angle), torch.sin(angle)], dim=1)
+    diffusion = torch.as_tensor(model.reference_diffusion, dtype=dtype, device=device).clamp_min(1.0e-10)
+    reaction = torch.as_tensor(model.reference_reaction, dtype=dtype, device=device).clamp_min(1.0e-10)
+    c_star = 2.0 * torch.sqrt(diffusion * reaction)
+    amplitude = max(float(model.seed_amplitude), 1.0e-8)
+    ratio = min(max(float(level) / amplitude, 1.0e-8), 1.0 - 1.0e-7)
+    base_radius = float(model.seed_sigma) * math.sqrt(max(0.0, -2.0 * math.log(ratio)))
+    radial_jitter = torch.randn(n, 1, device=device, dtype=dtype) * float(width)
+    min_radius = max(0.25 * float(model.seed_sigma), 1.0e-4)
+    radius = (base_radius + float(speed_factor) * c_star * t + radial_jitter).clamp(min_radius, model.domain.box)
+    center = model.seed_center.to(dtype=dtype, device=device).view(1, 2)
+    if model.pde.include_advection:
+        center = center + model.pde.velocity.detach().view(1, 2).to(dtype=dtype, device=device) * t
+    xy = (center + radius * direction).clamp(0.0, model.domain.box)
+    return xy, t
+
+
+def expected_front_pde_loss(
+    model: OriginPINN,
+    n: int,
+    device: torch.device,
+    *,
+    width: float = 0.08,
+    speed_factor: float = 0.45,
+    level: float = 0.1,
+    front_alpha: float = 1.0,
+    front_gradient: float = 0.1,
+) -> torch.Tensor:
+    xy, t = expected_front_samples(
+        model,
+        n,
+        device,
+        width=width,
+        speed_factor=speed_factor,
+        level=level,
+    )
+    if len(xy) == 0:
+        return torch.zeros((), device=device)
+    residual, u, u_xy, _, _ = pde_residual_terms(model, xy, t)
+    weights = front_indicator_weights(u, u_xy, front_alpha, front_gradient).flatten()
+    return torch.mean(weights * residual.pow(2).flatten())
+
+
+def linearized_kpp_gaussian(
+    model: OriginPINN,
+    xy: torch.Tensor,
+    t: torch.Tensor,
+) -> torch.Tensor:
+    """Leading-edge Fisher-KPP approximation from the known Gaussian initial seed.
+
+    In the pulled-front regime u is small, so u(1-u) is well approximated by u.
+    The resulting heat-kernel Gaussian times exp(r t) is used only as a weak
+    one-sided floor, not as a supervised truth field.
+    """
+
+    center = model.seed_center.to(device=xy.device, dtype=xy.dtype).view(1, 2)
+    if model.pde.include_advection:
+        center = center + model.pde.velocity.detach().view(1, 2).to(device=xy.device, dtype=xy.dtype) * t
+    diffusion = torch.as_tensor(model.reference_diffusion, dtype=xy.dtype, device=xy.device).clamp_min(1.0e-10)
+    reaction = torch.as_tensor(model.reference_reaction, dtype=xy.dtype, device=xy.device).clamp_min(1.0e-10)
+    sigma2 = torch.as_tensor(model.seed_sigma**2, dtype=xy.dtype, device=xy.device)
+    spread = sigma2 + 2.0 * diffusion * t
+    dist2 = ((xy - center) ** 2).sum(dim=-1, keepdim=True)
+    heat = model.seed_amplitude * sigma2 / spread.clamp_min(1.0e-8) * torch.exp(-dist2 / (2.0 * spread))
+    return (heat * torch.exp(reaction * t)).clamp(0.0, 1.0)
+
+
+def leading_edge_floor_loss(
+    model: OriginPINN,
+    n: int,
+    device: torch.device,
+    *,
+    width: float = 0.08,
+    speed_factor: float = 0.45,
+    level: float = 0.1,
+    floor_fraction: float = 0.65,
+    max_floor: float = 0.18,
+) -> torch.Tensor:
+    xy, t = expected_front_samples(
+        model,
+        n,
+        device,
+        width=width,
+        speed_factor=speed_factor,
+        level=level,
+    )
+    if len(xy) == 0:
+        return torch.zeros((), device=device)
+    pred = model(xy, t)
+    floor = (float(floor_fraction) * linearized_kpp_gaussian(model, xy, t)).clamp(0.0, float(max_floor))
+    active = (floor.detach() > 1.0e-4).float()
+    return torch.mean(active * torch.relu(floor - pred).pow(2))
+
+
+def linearized_kpp_area_targets(
+    model: OriginPINN,
+    times: torch.Tensor,
+    levels: tuple[float, ...] = (0.05, 0.10),
+) -> torch.Tensor:
+    diffusion = torch.as_tensor(model.reference_diffusion, dtype=times.dtype, device=times.device).clamp_min(1.0e-10)
+    reaction = torch.as_tensor(model.reference_reaction, dtype=times.dtype, device=times.device).clamp_min(1.0e-10)
+    sigma2 = torch.as_tensor(model.seed_sigma**2, dtype=times.dtype, device=times.device)
+    amplitude = torch.as_tensor(model.seed_amplitude, dtype=times.dtype, device=times.device)
+    spread = sigma2 + 2.0 * diffusion * times
+    leading_amplitude = amplitude * sigma2 / spread.clamp_min(1.0e-8) * torch.exp(reaction * times)
+    targets = []
+    for level in levels:
+        level_tensor = torch.as_tensor(float(level), dtype=times.dtype, device=times.device)
+        log_ratio = torch.log(leading_amplitude.clamp_min(1.0e-12) / level_tensor)
+        radius_sq = torch.where(log_ratio > 0.0, 2.0 * spread * log_ratio, torch.zeros_like(spread))
+        area = math.pi * radius_sq / float(model.domain.box**2)
+        targets.append(area.clamp(0.0, 1.0))
+    return torch.cat(targets, dim=1)
+
+
+def leading_edge_area_loss(
+    model: OriginPINN,
+    n_times: int,
+    grid: int,
+    device: torch.device,
+    *,
+    levels: tuple[float, ...] = (0.05, 0.10),
+    temperature: float = 0.015,
+) -> torch.Tensor:
+    if n_times <= 0 or grid <= 1:
+        return torch.zeros((), device=device)
+    dtype = next(model.parameters()).dtype
+    xs = torch.linspace(0.0, model.domain.box, grid, dtype=dtype, device=device)
+    x, y = torch.meshgrid(xs, xs, indexing="ij")
+    xy_one = torch.stack([x.reshape(-1), y.reshape(-1)], dim=1)
+    times = torch.linspace(0.0, model.domain.t_end, n_times, dtype=dtype, device=device).reshape(-1, 1)
+    xy = xy_one.repeat(n_times, 1)
+    t = times.repeat_interleave(grid * grid, dim=0)
+    pred = model(xy, t).reshape(n_times, grid * grid, 1)
+    soft_areas = []
+    temp = max(float(temperature), 1.0e-4)
+    for level in levels:
+        soft = torch.sigmoid((pred - float(level)) / temp).mean(dim=1)
+        soft_areas.append(soft)
+    soft_area = torch.cat(soft_areas, dim=1)
+    target_area = linearized_kpp_area_targets(model, times, levels)
+    area_loss = torch.mean((soft_area - target_area).pow(2))
+
+    sorted_pred, _ = torch.sort(pred.squeeze(-1), dim=1, descending=True)
+    n_points = sorted_pred.shape[1]
+    hinge_terms = []
+    for level_index, level in enumerate(levels):
+        target_fraction = target_area[:, level_index].detach().clamp(1.0 / n_points, 1.0)
+        rank = torch.ceil(target_fraction * n_points).long().clamp(1, n_points) - 1
+        kth_values = sorted_pred[torch.arange(n_times, device=device), rank]
+        hinge_terms.append(torch.relu(float(level) - kth_values).pow(2).mean())
+    quantile_hinge = torch.stack(hinge_terms).mean() if hinge_terms else torch.zeros((), device=device)
+    return area_loss + 4.0 * quantile_hinge
 
 
 def gradient_residual_loss(

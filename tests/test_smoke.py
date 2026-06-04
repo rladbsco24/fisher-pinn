@@ -11,10 +11,14 @@ from scripts.run_inverse_origin import build_config
 
 from fisher_origin_lab.config import DomainConfig, ExperimentConfig, ModelConfig, PDEConfig, SeedConfig, WarmStartConfig
 from fisher_origin_lab.losses import (
+    expected_front_pde_loss,
+    expected_front_samples,
     front_local_gradient_residual_loss,
     front_speed_consistency_loss,
     front_speed_kinematics,
     known_initial_condition_loss,
+    leading_edge_area_loss,
+    leading_edge_floor_loss,
     parabolic_mass_balance_loss,
     pde_residual,
 )
@@ -149,6 +153,23 @@ def test_front_speed_consistency_loss_is_finite() -> None:
     assert torch.isfinite(loss)
 
 
+def test_expected_front_losses_are_finite() -> None:
+    domain = DomainConfig(grid=25, truth_steps=80)
+    cfg = ExperimentConfig(domain=domain).geo_spectral_forward()
+    model = OriginPINN(domain, cfg.pde, cfg.seed, cfg.model)
+    xy, t = expected_front_samples(model, 16, torch.device("cpu"))
+    pde_loss = expected_front_pde_loss(model, 16, torch.device("cpu"))
+    floor_loss = leading_edge_floor_loss(model, 16, torch.device("cpu"))
+    area_loss = leading_edge_area_loss(model, n_times=3, grid=8, device=torch.device("cpu"))
+    assert xy.shape == (16, 2)
+    assert t.shape == (16, 1)
+    assert torch.isfinite(xy).all()
+    assert torch.isfinite(t).all()
+    assert torch.isfinite(pde_loss)
+    assert torch.isfinite(floor_loss)
+    assert torch.isfinite(area_loss)
+
+
 def test_korea_pine_style_matches_forward_pinn_setup() -> None:
     cfg = ExperimentConfig().korea_pine_style()
     assert cfg.pde.include_advection is False
@@ -182,12 +203,21 @@ def test_geo_spectral_forward_profile_extends_korea_setup() -> None:
     assert cfg.weights.front_gradient > 0.0
     assert cfg.weights.front_speed > 0.0
     assert cfg.weights.mass_balance > 0.0
+    assert cfg.weights.expected_front_pde == 0.0
+    assert cfg.weights.leading_edge == 0.0
+    assert cfg.weights.leading_edge_area > 0.0
     assert cfg.weights.sparse > 0.0
     assert cfg.train.adaptive_loss_balancing is True
     assert cfg.train.mass_balance_times > 0
     assert cfg.train.mass_balance_grid > 1
     assert cfg.train.front_speed_points > 0
     assert cfg.train.front_speed_max_points > 0
+    assert cfg.train.front_speed_min_grad > 0.0
+    assert cfg.train.expected_front_points > 0
+    assert cfg.train.expected_front_width > 0.0
+    assert cfg.train.expected_front_speed_factor > 0.0
+    assert cfg.train.leading_edge_area_times > 0
+    assert cfg.train.leading_edge_area_grid > 1
     assert cfg.train.residual_curriculum_epochs > 0
     assert cfg.train.residual_weight_exponent_start < cfg.train.residual_weight_exponent_end
 

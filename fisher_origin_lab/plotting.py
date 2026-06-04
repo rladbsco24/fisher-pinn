@@ -125,6 +125,7 @@ def residual_front_maps(
     *,
     front_alpha: float = 0.0,
     front_gradient: float = 0.0,
+    front_speed_min_grad: float = 1.0e-2,
 ) -> dict[str, np.ndarray]:
     xs = np.linspace(0.0, model.domain.box, n)
     x, y = np.meshgrid(xs, xs, indexing="ij")
@@ -134,7 +135,11 @@ def residual_front_maps(
     grad_norm = torch.linalg.norm(u_xy, dim=-1, keepdim=True)
     weights = front_indicator_weights(u, u_xy, front_alpha, front_gradient)
     kin = front_speed_kinematics(model, xy, t)
-    front_band = ((u.detach() > 0.05) & (u.detach() < 0.95)).cpu().numpy().reshape(n, n)
+    front_band = (
+        (u.detach() > 0.05)
+        & (u.detach() < 0.95)
+        & (grad_norm.detach() > front_speed_min_grad)
+    ).cpu().numpy().reshape(n, n)
     normal_speed = kin["observed_normal_speed"].detach().cpu().numpy().reshape(n, n)
     target_speed = kin["target_normal_speed"].detach().cpu().numpy().reshape(n, n)
     speed_error = np.abs(kin["speed_error"].detach().cpu().numpy().reshape(n, n))
@@ -232,6 +237,10 @@ def save_spacetime_error_figure(
     pred_mass = []
     truth_front = []
     pred_front = []
+    truth_level_005 = []
+    pred_level_005 = []
+    truth_level_010 = []
+    pred_level_010 = []
     for time_value in times:
         _, true_field = truth_field_at(truth, float(time_value), n=n)
         _, pred = predict_field(model, float(time_value), n=n, device=device)
@@ -240,35 +249,48 @@ def save_spacetime_error_figure(
         pred_mass.append(float(pred.mean()))
         truth_front.append(float(np.mean((true_field > 0.1) & (true_field < 0.9))))
         pred_front.append(float(np.mean((pred > 0.1) & (pred < 0.9))))
+        truth_level_005.append(float(np.mean(true_field > 0.05)))
+        pred_level_005.append(float(np.mean(pred > 0.05)))
+        truth_level_010.append(float(np.mean(true_field > 0.10)))
+        pred_level_010.append(float(np.mean(pred > 0.10)))
 
-    fig, axes = plt.subplots(1, 3, figsize=(13.5, 3.6), constrained_layout=False)
-    fig.subplots_adjust(left=0.055, right=0.985, bottom=0.16, top=0.78, wspace=0.24)
-    axes[0].plot(times, rel_l2, marker="o", color=COLORS["blue"], linewidth=1.4)
-    axes[0].set_ylabel("Relative L2")
-    axes[0].set_xlabel("Time")
-    axes[0].set_title("field error", fontsize=9)
+    fig, axes = plt.subplots(2, 2, figsize=(12.8, 7.2), constrained_layout=False)
+    fig.subplots_adjust(left=0.065, right=0.985, bottom=0.08, top=0.84, hspace=0.34, wspace=0.24)
+    axes[0, 0].plot(times, rel_l2, marker="o", color=COLORS["blue"], linewidth=1.4)
+    axes[0, 0].set_ylabel("Relative L2")
+    axes[0, 0].set_xlabel("Time")
+    axes[0, 0].set_title("field error", fontsize=9)
 
-    axes[1].plot(times, truth_mass, marker="o", color=COLORS["neutral"], linewidth=1.2, label="truth")
-    axes[1].plot(times, pred_mass, marker="o", color=COLORS["olive"], linewidth=1.2, label="pinn")
-    axes[1].set_ylabel("Mean density")
-    axes[1].set_xlabel("Time")
-    axes[1].set_title("mass trajectory", fontsize=9)
-    axes[1].legend(frameon=False, fontsize=8)
+    axes[0, 1].plot(times, truth_mass, marker="o", color=COLORS["neutral"], linewidth=1.2, label="truth")
+    axes[0, 1].plot(times, pred_mass, marker="o", color=COLORS["olive"], linewidth=1.2, label="pinn")
+    axes[0, 1].set_ylabel("Mean density")
+    axes[0, 1].set_xlabel("Time")
+    axes[0, 1].set_title("mass trajectory", fontsize=9)
+    axes[0, 1].legend(frameon=False, fontsize=8)
 
-    axes[2].plot(times, truth_front, marker="o", color=COLORS["neutral"], linewidth=1.2, label="truth")
-    axes[2].plot(times, pred_front, marker="o", color=COLORS["orange"], linewidth=1.2, label="pinn")
-    axes[2].set_ylabel("Area fraction")
-    axes[2].set_xlabel("Time")
-    axes[2].set_title("active-front band", fontsize=9)
-    axes[2].legend(frameon=False, fontsize=8)
+    axes[1, 0].plot(times, truth_front, marker="o", color=COLORS["neutral"], linewidth=1.2, label="truth")
+    axes[1, 0].plot(times, pred_front, marker="o", color=COLORS["orange"], linewidth=1.2, label="pinn")
+    axes[1, 0].set_ylabel("Area fraction")
+    axes[1, 0].set_xlabel("Time")
+    axes[1, 0].set_title("active-front band", fontsize=9)
+    axes[1, 0].legend(frameon=False, fontsize=8)
 
-    for ax in axes:
+    axes[1, 1].plot(times, truth_level_005, marker="o", color=COLORS["neutral"], linewidth=1.2, label="truth u>0.05")
+    axes[1, 1].plot(times, pred_level_005, marker="o", color=COLORS["teal"], linewidth=1.2, linestyle="--", label="pinn u>0.05")
+    axes[1, 1].plot(times, truth_level_010, marker="s", color=COLORS["blue"], linewidth=1.2, label="truth u>0.10")
+    axes[1, 1].plot(times, pred_level_010, marker="s", color=COLORS["pink"], linewidth=1.2, linestyle="--", label="pinn u>0.10")
+    axes[1, 1].set_ylabel("Area fraction")
+    axes[1, 1].set_xlabel("Time")
+    axes[1, 1].set_title("low-level front area", fontsize=9)
+    axes[1, 1].legend(frameon=False, fontsize=7, ncol=2)
+
+    for ax in axes.ravel():
         _style_axis(ax, grid=True)
     _write_title(
         fig,
         "Space-time prediction diagnostics",
-        "Trend views summarize field error, total infected density, and 0.1<u<0.9 active-front coverage.",
-        top=0.78,
+        "Trend views summarize field error, mass, active front, and low-level moving-front area.",
+        top=0.84,
     )
     fig.savefig(path, dpi=150)
     plt.close(fig)
@@ -294,6 +316,9 @@ def save_training_diagnostics_figure(
         ("ic", COLORS["gold"]),
         ("bc", COLORS["neutral"]),
         ("mass", COLORS["teal"]),
+        ("expected_front_pde", COLORS["gold"]),
+        ("leading_edge", COLORS["pink"]),
+        ("leading_edge_area", COLORS["teal"]),
         ("front_speed", COLORS["blue_light"]),
         ("front_grad", COLORS["pink"]),
         ("grad", COLORS["neutral"]),
@@ -342,6 +367,8 @@ def save_training_diagnostics_figure(
         ("aw_ic", COLORS["gold"]),
         ("aw_bc", COLORS["neutral"]),
         ("aw_mass", COLORS["teal"]),
+        ("aw_expected_front_pde", COLORS["gold"]),
+        ("aw_leading_edge", COLORS["pink"]),
         ("aw_front_speed", COLORS["blue_light"]),
         ("aw_front_grad", COLORS["pink"]),
     ]

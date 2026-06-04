@@ -85,6 +85,9 @@ class LossWeights:
     front_gradient: float = 0.0
     front_speed: float = 0.0
     mass_balance: float = 0.0
+    expected_front_pde: float = 0.0
+    leading_edge: float = 0.0
+    leading_edge_area: float = 0.0
     sparse: float = 0.0
 
 
@@ -124,6 +127,14 @@ class TrainConfig:
     restore_best_validation: bool = True
     front_speed_points: int = 256
     front_speed_max_points: int = 128
+    front_speed_min_grad: float = 1.0e-2
+    expected_front_points: int = 256
+    expected_front_width: float = 0.08
+    expected_front_speed_factor: float = 0.45
+    expected_front_level: float = 0.1
+    leading_edge_area_times: int = 5
+    leading_edge_area_grid: int = 32
+    leading_edge_area_temperature: float = 0.015
     mass_balance_times: int = 4
     mass_balance_grid: int = 18
     print_every: int = 100
@@ -201,6 +212,9 @@ class ExperimentConfig:
                 front_gradient=self.weights.front_gradient,
                 front_speed=self.weights.front_speed,
                 mass_balance=self.weights.mass_balance,
+                expected_front_pde=self.weights.expected_front_pde,
+                leading_edge=self.weights.leading_edge,
+                leading_edge_area=self.weights.leading_edge_area,
                 sparse=self.weights.sparse,
             ),
             warm_start=self.warm_start,
@@ -236,6 +250,14 @@ class ExperimentConfig:
                 restore_best_validation=self.train.restore_best_validation,
                 front_speed_points=min(self.train.front_speed_points, 128),
                 front_speed_max_points=min(self.train.front_speed_max_points, 64),
+                front_speed_min_grad=self.train.front_speed_min_grad,
+                expected_front_points=min(self.train.expected_front_points, 128),
+                expected_front_width=self.train.expected_front_width,
+                expected_front_speed_factor=self.train.expected_front_speed_factor,
+                expected_front_level=self.train.expected_front_level,
+                leading_edge_area_times=min(self.train.leading_edge_area_times, 4),
+                leading_edge_area_grid=min(self.train.leading_edge_area_grid, 24),
+                leading_edge_area_temperature=self.train.leading_edge_area_temperature,
                 mass_balance_times=min(self.train.mass_balance_times, 4),
                 mass_balance_grid=min(self.train.mass_balance_grid, 18),
                 print_every=30,
@@ -303,6 +325,9 @@ class ExperimentConfig:
                 front_gradient=0.0,
                 front_speed=0.0,
                 mass_balance=0.0,
+                expected_front_pde=0.0,
+                leading_edge=0.0,
+                leading_edge_area=0.0,
                 sparse=0.0,
             ),
             warm_start=WarmStartConfig(mode="neutral"),
@@ -358,6 +383,9 @@ class ExperimentConfig:
                 front_gradient=0.02,
                 front_speed=0.01,
                 mass_balance=0.10,
+                expected_front_pde=0.0,
+                leading_edge=0.0,
+                leading_edge_area=1.0,
                 sparse=1.0e-5,
             ),
             warm_start=base.warm_start,
@@ -370,6 +398,14 @@ class ExperimentConfig:
                 adaptive_loss_momentum=0.9,
                 adaptive_loss_min=0.33,
                 adaptive_loss_max=3.0,
+                front_speed_min_grad=1.0e-2,
+                expected_front_points=256,
+                expected_front_width=0.08,
+                expected_front_speed_factor=0.45,
+                expected_front_level=0.1,
+                leading_edge_area_times=5,
+                leading_edge_area_grid=32,
+                leading_edge_area_temperature=0.015,
             ),
             ensemble=base.ensemble,
             base_seed=base.base_seed,

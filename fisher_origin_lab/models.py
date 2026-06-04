@@ -150,6 +150,7 @@ class OriginPINN(nn.Module):
         self.seed_sigma = float(seed.sigma)
         self.seed_amplitude = float(seed.amplitude)
         self.reference_diffusion = float(pde.diffusion)
+        self.reference_reaction = float(pde.reaction)
         self.reference_front_speed = float(2.0 * math.sqrt(max(pde.diffusion, 1.0e-12) * max(pde.reaction, 1.0e-12)))
         self.register_buffer("seed_center", torch.tensor([seed.center_x, seed.center_y], dtype=torch.float32))
         fourier_dim = 2 if self.spatial_fourier_only else 3

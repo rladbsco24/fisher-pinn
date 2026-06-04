@@ -20,11 +20,14 @@ from .losses import (
     bounded_residual_weights,
     boundary_neumann_loss,
     causal_weights,
+    expected_front_pde_loss,
     front_indicator_weights,
     front_local_gradient_residual_loss,
     front_speed_consistency_loss,
     gradient_residual_loss,
     known_initial_condition_loss,
+    leading_edge_floor_loss,
+    leading_edge_area_loss,
     parabolic_mass_balance_loss,
     pde_residual,
     pde_residual_terms,
@@ -95,6 +98,59 @@ def _weighted_data_mse(
     return torch.mean(weights * err_sq)
 
 
+def _front_geometry_summary(
+    truth,
+    model: OriginPINN,
+    cfg: ExperimentConfig,
+    device: torch.device,
+    *,
+    levels: tuple[float, ...] = (0.05, 0.10),
+    n: int = 96,
+    max_times: int = 14,
+) -> dict[str, object]:
+    if len(truth.times) <= max_times:
+        times = truth.times
+    else:
+        idx = np.linspace(0, len(truth.times) - 1, max_times).astype(int)
+        times = truth.times[idx]
+
+    summary: dict[str, object] = {
+        "levels": list(levels),
+        "times": [float(t) for t in times],
+        "truth_mass": [],
+        "pinn_mass": [],
+        "truth_active_band": [],
+        "pinn_active_band": [],
+        "area_above": {f"{level:.2f}": {"truth": [], "pinn": []} for level in levels},
+    }
+    for time_value in times:
+        _, true_field = truth_field_at(truth, float(time_value), n=n)
+        _, pred = predict_field(model, float(time_value), n=n, device=device)
+        summary["truth_mass"].append(float(true_field.mean()))
+        summary["pinn_mass"].append(float(pred.mean()))
+        summary["truth_active_band"].append(float(np.mean((true_field > 0.1) & (true_field < 0.9))))
+        summary["pinn_active_band"].append(float(np.mean((pred > 0.1) & (pred < 0.9))))
+        for level in levels:
+            bucket = summary["area_above"][f"{level:.2f}"]
+            bucket["truth"].append(float(np.mean(true_field > level)))
+            bucket["pinn"].append(float(np.mean(pred > level)))
+
+    mass_truth = np.asarray(summary["truth_mass"], dtype=np.float64)
+    mass_pred = np.asarray(summary["pinn_mass"], dtype=np.float64)
+    active_truth = np.asarray(summary["truth_active_band"], dtype=np.float64)
+    active_pred = np.asarray(summary["pinn_active_band"], dtype=np.float64)
+    summary["mass_mae"] = float(np.mean(np.abs(mass_pred - mass_truth)))
+    summary["active_band_mae"] = float(np.mean(np.abs(active_pred - active_truth)))
+    summary["area_mae"] = {}
+    for level in levels:
+        bucket = summary["area_above"][f"{level:.2f}"]
+        truth_area = np.asarray(bucket["truth"], dtype=np.float64)
+        pred_area = np.asarray(bucket["pinn"], dtype=np.float64)
+        summary["area_mae"][f"{level:.2f}"] = float(np.mean(np.abs(pred_area - truth_area)))
+        summary[f"area_above_{int(round(level * 1000)):03d}_mae"] = summary["area_mae"][f"{level:.2f}"]
+    return summary
+
+
 class _AdaptiveLossBalancer:
     """Relative-progress loss balancer for multi-term PINN objectives."""
 
@@ -152,6 +208,8 @@ def _combine_loss_terms(
         "grad",
         "front_grad",
         "mass",
+        "expected_front_pde",
+        "leading_edge",
     }
     active = [(name, weight, loss) for name, weight, loss in terms if weight > 0.0]
     if not active:
@@ -285,9 +343,44 @@ def train_single(
                 xy_col[:fs_subset],
                 t_col[:fs_subset],
                 max_points=cfg.train.front_speed_max_points,
+                min_grad=cfg.train.front_speed_min_grad,
             )
         else:
             front_speed_loss = torch.zeros((), device=device)
+        if cfg.weights.expected_front_pde > 0.0 and cfg.train.expected_front_points > 0:
+            expected_front_loss = expected_front_pde_loss(
+                model,
+                cfg.train.expected_front_points,
+                device,
+                width=cfg.train.expected_front_width,
+                speed_factor=cfg.train.expected_front_speed_factor,
+                level=cfg.train.expected_front_level,
+                front_alpha=cfg.weights.front_pde_alpha,
+                front_gradient=cfg.weights.front_pde_gradient,
+            )
+        else:
+            expected_front_loss = torch.zeros((), device=device)
+        if cfg.weights.leading_edge > 0.0 and cfg.train.expected_front_points > 0:
+            leading_edge_loss = leading_edge_floor_loss(
+                model,
+                cfg.train.expected_front_points,
+                device,
+                width=cfg.train.expected_front_width,
+                speed_factor=cfg.train.expected_front_speed_factor,
+                level=cfg.train.expected_front_level,
+            )
+        else:
+            leading_edge_loss = torch.zeros((), device=device)
+        if cfg.weights.leading_edge_area > 0.0 and cfg.train.leading_edge_area_times > 0:
+            leading_edge_area = leading_edge_area_loss(
+                model,
+                cfg.train.leading_edge_area_times,
+                cfg.train.leading_edge_area_grid,
+                device,
+                temperature=cfg.train.leading_edge_area_temperature,
+            )
+        else:
+            leading_edge_area = torch.zeros((), device=device)
         if cfg.weights.mass_balance > 0.0:
             mass_loss = parabolic_mass_balance_loss(
                 model,
@@ -312,6 +405,9 @@ def train_single(
                 ("grad", cfg.weights.gradient, grad_loss),
                 ("front_grad", cfg.weights.front_gradient, front_grad_loss),
                 ("front_speed", cfg.weights.front_speed, front_speed_loss),
+                ("expected_front_pde", cfg.weights.expected_front_pde, expected_front_loss),
+                ("leading_edge", cfg.weights.leading_edge, leading_edge_loss),
+                ("leading_edge_area", cfg.weights.leading_edge_area, leading_edge_area),
                 ("mass", cfg.weights.mass_balance, mass_loss),
                 ("sparse", cfg.weights.sparse, sparse_loss),
             ],
@@ -369,6 +465,9 @@ def train_single(
                 "grad": float(grad_loss.detach().cpu()),
                 "front_grad": float(front_grad_loss.detach().cpu()),
                 "front_speed": float(front_speed_loss.detach().cpu()),
+                "expected_front_pde": float(expected_front_loss.detach().cpu()),
+                "leading_edge": float(leading_edge_loss.detach().cpu()),
+                "leading_edge_area": float(leading_edge_area.detach().cpu()),
                 "mass": float(mass_loss.detach().cpu()),
                 "sparse": float(sparse_loss.detach().cpu()),
                 "residual_exponent": float(residual_exponent),
@@ -517,9 +616,44 @@ def _lbfgs_polish(
                 xy_col[:fs_subset],
                 t_col[:fs_subset],
                 max_points=cfg.train.front_speed_max_points,
+                min_grad=cfg.train.front_speed_min_grad,
             )
         else:
             front_speed_loss = torch.zeros((), device=device)
+        if cfg.weights.expected_front_pde > 0.0 and cfg.train.expected_front_points > 0:
+            expected_front_loss = expected_front_pde_loss(
+                model,
+                min(cfg.train.expected_front_points, 256),
+                device,
+                width=cfg.train.expected_front_width,
+                speed_factor=cfg.train.expected_front_speed_factor,
+                level=cfg.train.expected_front_level,
+                front_alpha=cfg.weights.front_pde_alpha,
+                front_gradient=cfg.weights.front_pde_gradient,
+            )
+        else:
+            expected_front_loss = torch.zeros((), device=device)
+        if cfg.weights.leading_edge > 0.0 and cfg.train.expected_front_points > 0:
+            leading_edge_loss = leading_edge_floor_loss(
+                model,
+                min(cfg.train.expected_front_points, 256),
+                device,
+                width=cfg.train.expected_front_width,
+                speed_factor=cfg.train.expected_front_speed_factor,
+                level=cfg.train.expected_front_level,
+            )
+        else:
+            leading_edge_loss = torch.zeros((), device=device)
+        if cfg.weights.leading_edge_area > 0.0 and cfg.train.leading_edge_area_times > 0:
+            leading_edge_area = leading_edge_area_loss(
+                model,
+                cfg.train.leading_edge_area_times,
+                cfg.train.leading_edge_area_grid,
+                device,
+                temperature=cfg.train.leading_edge_area_temperature,
+            )
+        else:
+            leading_edge_area = torch.zeros((), device=device)
         if cfg.weights.mass_balance > 0.0:
             mass_loss = parabolic_mass_balance_loss(
                 model,
@@ -542,6 +676,9 @@ def _lbfgs_polish(
             + cfg.weights.seed_match * seed_match
             + cfg.weights.seed_mass * seed_mass
             + cfg.weights.front_speed * front_speed_loss
+            + cfg.weights.expected_front_pde * expected_front_loss
+            + cfg.weights.leading_edge * leading_edge_loss
+            + cfg.weights.leading_edge_area * leading_edge_area
             + cfg.weights.mass_balance * mass_loss
             + cfg.weights.sparse * model.sparse_last_layer_l1()
         )
@@ -600,6 +737,7 @@ def run_experiment(cfg: ExperimentConfig) -> dict[str, object]:
     _, final_truth = truth_field_at(truth, cfg.domain.t_end, n=96)
     _, final_pred = predict_field(best.model, cfg.domain.t_end, n=96, device=device)
     pinn_final_time_relative_l2 = relative_l2(final_pred, final_truth)
+    front_geometry = _front_geometry_summary(truth, best.model, cfg, device)
     rk4_start = time.time()
     rk4_truth = forward_fisher_kpp_rk4(cfg.domain, cfg.pde, cfg.seed)
     rk4_runtime_sec = time.time() - rk4_start
@@ -684,6 +822,10 @@ def run_experiment(cfg: ExperimentConfig) -> dict[str, object]:
         "pinn_final_time_relative_l2": pinn_final_time_relative_l2,
         "rk4_final_time_relative_l2": rk4_final_time_relative_l2,
         "pinn_vs_rk4_final_relative_l2": pinn_vs_rk4_final_relative_l2,
+        "front_area_005_mae": front_geometry.get("area_above_050_mae"),
+        "front_area_010_mae": front_geometry.get("area_above_100_mae"),
+        "active_front_area_mae": front_geometry.get("active_band_mae"),
+        "mass_mae": front_geometry.get("mass_mae"),
         "train_observation_mse": train_observation_mse,
         "validation_observation_mse": validation_observation_mse,
         "rk4_train_observation_mse": rk4_train_observation_mse,
@@ -692,6 +834,7 @@ def run_experiment(cfg: ExperimentConfig) -> dict[str, object]:
         "train_observation_count": int(len(train_observations.xyt)),
         "validation_observation_count": int(len(validation_observations.xyt)),
         "warm_start_mode": cfg.warm_start.mode,
+        "front_geometry": front_geometry,
         "figures": figure_paths,
         "runs": [
             {

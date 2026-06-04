@@ -43,6 +43,8 @@ The main estimator is `CaRA-gPINN-Seed`:
   high-residual collocation points.
 - Residual-adaptive collocation points inspired by RAD/RAR-D sampling.
 - Optional gradient-enhanced residual penalty for sharp fronts.
+- Moving-front validation metrics for mass, active-front area, and low-level front
+  geometry instead of relying on final-time L2 alone.
 - Ensemble mode for epistemic uncertainty over origin estimates.
 
 The novelty here is deliberately scoped: this repository combines modern PINN stabilizers
@@ -116,10 +118,19 @@ What changes:
   `|grad u|`.
 - A moving-front speed loss enforces the Fisher-KPP traveling-front relation
   `u_t + (2 sqrt(D r) + v.n) grad(u).n = 0` on active level-set bands. This makes the
-  front move like a Fisher-KPP front instead of merely fitting late-time blobs.
+  front move like a Fisher-KPP front instead of merely fitting late-time blobs. The
+  implementation now ignores near-flat gradients so the speed diagnostic is not dominated
+  by regions where normal speed is numerically ill-defined.
 - A parabolic mass-balance loss enforces the no-flux Fisher-KPP integral identity
   `d mean(u)/dt = r mean(u(1-u))`. This adds a global growth check that the pointwise
   residual and sparse observations can miss.
+- A leading-edge soft area constraint uses the known Gaussian initial condition and the
+  linearized Fisher-KPP heat-kernel approximation to set analytic targets for low-level
+  front areas (`u>0.05`, `u>0.10`). It combines soft area matching with a quantile hinge,
+  so the metric is not satisfied merely by spreading tiny values everywhere.
+- Expected-front PDE sampling and one-sided leading-edge floor losses are implemented as
+  optional ablation knobs. Quick experiments showed they can improve apparent active
+  area while degrading held-out MSE/mass, so they are not enabled in the default profile.
 - Residual weighting follows an easy-to-hard curriculum: early epochs avoid overfitting
   residual outliers, then the exponent ramps toward the full adaptive residual weight.
 - Adaptive relative loss balancing updates multipliers from each term's relative training
@@ -147,6 +158,10 @@ Every experiment now computes an RK4 reference run after PINN training and repor
 - `pinn_final_time_relative_l2`: final-time PINN error against the synthetic reference.
 - `rk4_final_time_relative_l2`: final-time RK4 error against the same synthetic reference.
 - `pinn_vs_rk4_final_relative_l2`: final-time field difference between the two solvers.
+- `front_area_005_mae` / `front_area_010_mae`: mean absolute error of the area where
+  `u>0.05` and `u>0.10` across time.
+- `active_front_area_mae`: mean absolute error of the `0.1<u<0.9` active-front band.
+- `mass_mae`: mean absolute error of spatial mean density across time.
 - `train_observation_mse` / `validation_observation_mse`: PINN data fit.
 - `rk4_train_observation_mse` / `rk4_validation_observation_mse`: RK4 data fit at the
   same observation coordinates.
@@ -203,9 +218,10 @@ Outputs:
 - `metrics.json`: origin errors, learned PDE coefficients, loss history.
 - `observation_coverage.png`: train/validation spatial and temporal sample coverage.
 - `reconstruction.png`: truth, PINN reconstruction, and absolute-error panels.
-- `spacetime_error.png`: relative L2, mean density, and active-front coverage over time.
+- `spacetime_error.png`: relative L2, mean density, active-front coverage, and low-level
+  front area over time.
 - `residual_front_diagnostics.png`: final-time residual, front indicator, adaptive
-  weighting maps, normal front speed, and front-speed error.
+  weighting maps, gradient-filtered normal front speed, and front-speed error.
 - `pinn_vs_rk4_comparison.png`: final-time truth/PINN/RK4 fields, absolute-error maps,
   and a compact accuracy summary.
 - `training_diagnostics.png`: loss components including known IC, moving-front speed,
@@ -236,11 +252,18 @@ Outputs:
   physics-informed neural networks", arXiv:2203.07404.
 - Wu, Zhu, Tan, Kartha, Lu, "A comprehensive study of non-adaptive and residual-based
   adaptive sampling for physics-informed neural networks", arXiv:2207.10289.
+- Hao et al., "PINNacle: A Comprehensive Benchmark of Physics-Informed Neural Networks
+  for Solving PDEs", NeurIPS Datasets and Benchmarks 2024 / arXiv:2306.08827.
 - Jagtap, Kharazmi, Karniadakis, "Conservative physics-informed neural networks on
   discrete domains for conservation laws", Computer Methods in Applied Mechanics and
   Engineering 2020.
 - Yu, Lu, Meng, Karniadakis, "Gradient-enhanced physics-informed neural networks for
   forward and inverse PDE problems", arXiv:2111.02801.
+- Wang, Li, Chen, Perdikaris, "PirateNets: Physics-informed Deep Learning with
+  Residual Adaptive Networks", arXiv:2402.00326.
+- Rohrhofer, Posch, Gößnitzer, Geiger, "Approximating families of sharp solutions to
+  Fisher's equation with physics-informed neural networks", Computer Physics
+  Communications 2025.
 - Chen, Howard, Stinis, "Self-adaptive weights based on balanced residual decay rate for
   physics-informed neural networks and deep operator networks", arXiv:2407.01613.
 - Bischof, Kraus, "Multi-Objective Loss Balancing for Physics-Informed Deep Learning",
