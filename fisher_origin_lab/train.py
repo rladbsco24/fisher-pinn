@@ -24,6 +24,7 @@ from .losses import (
     front_local_gradient_residual_loss,
     gradient_residual_loss,
     known_initial_condition_loss,
+    parabolic_mass_balance_loss,
     pde_residual,
     pde_residual_terms,
     seed_regularization_loss,
@@ -149,6 +150,7 @@ def _combine_loss_terms(
         "shooting",
         "grad",
         "front_grad",
+        "mass",
     }
     active = [(name, weight, loss) for name, weight, loss in terms if weight > 0.0]
     if not active:
@@ -275,6 +277,15 @@ def train_single(
         else:
             grad_loss = torch.zeros((), device=device)
             front_grad_loss = torch.zeros((), device=device)
+        if cfg.weights.mass_balance > 0.0:
+            mass_loss = parabolic_mass_balance_loss(
+                model,
+                cfg.train.mass_balance_times,
+                cfg.train.mass_balance_grid,
+                device,
+            )
+        else:
+            mass_loss = torch.zeros((), device=device)
         sparse_loss = model.sparse_last_layer_l1() if cfg.weights.sparse > 0.0 else torch.zeros((), device=device)
 
         total, adaptive_weights = _combine_loss_terms(
@@ -289,6 +300,7 @@ def train_single(
                 ("shooting", cfg.weights.shooting, shooting_loss),
                 ("grad", cfg.weights.gradient, grad_loss),
                 ("front_grad", cfg.weights.front_gradient, front_grad_loss),
+                ("mass", cfg.weights.mass_balance, mass_loss),
                 ("sparse", cfg.weights.sparse, sparse_loss),
             ],
             loss_balancer,
@@ -344,6 +356,7 @@ def train_single(
                 "shooting": float(shooting_loss.detach().cpu()),
                 "grad": float(grad_loss.detach().cpu()),
                 "front_grad": float(front_grad_loss.detach().cpu()),
+                "mass": float(mass_loss.detach().cpu()),
                 "sparse": float(sparse_loss.detach().cpu()),
                 "residual_exponent": float(residual_exponent),
                 "front_weight_mean": float(front_weights.detach().mean().cpu()),
@@ -484,6 +497,15 @@ def _lbfgs_polish(
             ic_loss = known_initial_condition_loss(model, cfg.seed, cfg.train.seed_points, device)
         else:
             ic_loss = torch.zeros((), device=device)
+        if cfg.weights.mass_balance > 0.0:
+            mass_loss = parabolic_mass_balance_loss(
+                model,
+                cfg.train.mass_balance_times,
+                cfg.train.mass_balance_grid,
+                device,
+            )
+        else:
+            mass_loss = torch.zeros((), device=device)
         if (cfg.weights.seed_match > 0.0 or cfg.weights.seed_mass > 0.0) and cfg.train.seed_points > 0:
             seed_match, seed_mass = seed_regularization_loss(model, cfg.train.seed_points, device)
         else:
@@ -496,6 +518,7 @@ def _lbfgs_polish(
             + cfg.weights.boundary * bc_loss
             + cfg.weights.seed_match * seed_match
             + cfg.weights.seed_mass * seed_mass
+            + cfg.weights.mass_balance * mass_loss
             + cfg.weights.sparse * model.sparse_last_layer_l1()
         )
         loss.backward()

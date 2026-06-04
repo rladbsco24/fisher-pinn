@@ -107,6 +107,43 @@ def known_initial_condition_loss(
     return torch.mean((pred - target) ** 2)
 
 
+def parabolic_mass_balance_loss(
+    model: OriginPINN,
+    n_times: int,
+    grid: int,
+    device: torch.device,
+) -> torch.Tensor:
+    """No-flux Fisher-KPP integral balance over the square domain.
+
+    For u_t = D Laplacian(u) + r u(1-u) with Neumann boundaries, integrating
+    over the domain removes the diffusion term, leaving d mean(u)/dt =
+    r mean(u(1-u)). This low-dimensional parabolic constraint is cheap and
+    discourages sparse-data fits that create the right local blobs but the
+    wrong global growth trajectory.
+    """
+
+    if n_times <= 0 or grid <= 1 or model.pde.include_advection:
+        return torch.zeros((), device=device)
+    xs = torch.linspace(0.0, model.domain.box, grid, device=device)
+    x, y = torch.meshgrid(xs, xs, indexing="ij")
+    xy_one = torch.stack([x.reshape(-1), y.reshape(-1)], dim=1)
+    times = torch.linspace(
+        0.0,
+        model.domain.t_end,
+        n_times + 2,
+        device=device,
+    )[1:-1].reshape(-1, 1)
+    xy = xy_one.repeat(n_times, 1)
+    t = times.repeat_interleave(grid * grid, dim=0).requires_grad_(True)
+    u = model(xy, t)
+    u_t = torch.autograd.grad(u, t, torch.ones_like(u), create_graph=True)[0]
+    u_by_time = u.reshape(n_times, grid * grid, 1)
+    ut_by_time = u_t.reshape(n_times, grid * grid, 1)
+    lhs = ut_by_time.mean(dim=1)
+    rhs = model.pde.reaction() * (u_by_time * (1.0 - u_by_time)).mean(dim=1)
+    return torch.mean((lhs - rhs) ** 2)
+
+
 def gradient_residual_loss(
     model: OriginPINN,
     xy: torch.Tensor,

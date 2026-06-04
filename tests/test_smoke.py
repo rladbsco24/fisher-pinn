@@ -10,7 +10,12 @@ import torch
 from scripts.run_inverse_origin import build_config
 
 from fisher_origin_lab.config import DomainConfig, ExperimentConfig, ModelConfig, PDEConfig, SeedConfig, WarmStartConfig
-from fisher_origin_lab.losses import front_local_gradient_residual_loss, known_initial_condition_loss, pde_residual
+from fisher_origin_lab.losses import (
+    front_local_gradient_residual_loss,
+    known_initial_condition_loss,
+    parabolic_mass_balance_loss,
+    pde_residual,
+)
 from fisher_origin_lab.models import OriginPINN
 from fisher_origin_lab.plotting import (
     save_observation_coverage_figure,
@@ -119,6 +124,15 @@ def test_geo_spectral_forward_model_terms_are_finite() -> None:
     assert torch.isfinite(sparse)
 
 
+def test_parabolic_mass_balance_loss_is_finite() -> None:
+    domain = DomainConfig(grid=25, truth_steps=80)
+    cfg = ExperimentConfig(domain=domain).geo_spectral_forward()
+    model = OriginPINN(domain, cfg.pde, cfg.seed, ModelConfig(hidden=16, layers=1, fourier_features=8))
+    loss = parabolic_mass_balance_loss(model, n_times=2, grid=8, device=torch.device("cpu"))
+    assert loss.shape == ()
+    assert torch.isfinite(loss)
+
+
 def test_korea_pine_style_matches_forward_pinn_setup() -> None:
     cfg = ExperimentConfig().korea_pine_style()
     assert cfg.pde.include_advection is False
@@ -150,8 +164,11 @@ def test_geo_spectral_forward_profile_extends_korea_setup() -> None:
     assert cfg.weights.boundary > 0.0
     assert cfg.weights.front_pde_alpha > 0.0
     assert cfg.weights.front_gradient > 0.0
+    assert cfg.weights.mass_balance > 0.0
     assert cfg.weights.sparse > 0.0
     assert cfg.train.adaptive_loss_balancing is True
+    assert cfg.train.mass_balance_times > 0
+    assert cfg.train.mass_balance_grid > 1
     assert cfg.train.residual_curriculum_epochs > 0
     assert cfg.train.residual_weight_exponent_start < cfg.train.residual_weight_exponent_end
 
@@ -270,12 +287,14 @@ def test_visualization_exports_are_created(tmp_path) -> None:
             "pde": 0.5,
             "bc": 0.1,
             "ic": 0.2,
+            "mass": 0.04,
             "front_grad": 0.3,
             "residual_exponent": 0.5,
             "front_weight_mean": 1.5,
             "aw_data": 0.8,
             "aw_pde": 1.2,
             "aw_ic": 1.0,
+            "aw_mass": 1.1,
             "sparse": 0.05,
             "origin_error": 0.1,
             "elapsed_sec": 0.2,

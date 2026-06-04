@@ -114,6 +114,9 @@ What changes:
 - A Neumann boundary loss is enabled.
 - PDE residuals are weighted toward infection-front regions using `u(1-u)` and
   `|grad u|`.
+- A parabolic mass-balance loss enforces the no-flux Fisher-KPP integral identity
+  `d mean(u)/dt = r mean(u(1-u))`. This adds a global growth check that the pointwise
+  residual and sparse observations can miss.
 - Residual weighting follows an easy-to-hard curriculum: early epochs avoid overfitting
   residual outliers, then the exponent ramps toward the full adaptive residual weight.
 - Adaptive relative loss balancing updates multipliers from each term's relative training
@@ -201,8 +204,9 @@ Outputs:
   weighting maps.
 - `pinn_vs_rk4_comparison.png`: final-time truth/PINN/RK4 fields, absolute-error maps,
   and a compact accuracy summary.
-- `training_diagnostics.png`: loss components including known IC, learned `D/r`,
-  residual curriculum, adaptive loss multipliers, and front/sparsity diagnostics.
+- `training_diagnostics.png`: loss components including known IC, parabolic mass balance,
+  learned `D/r`, residual curriculum, adaptive loss multipliers, and front/sparsity
+  diagnostics.
 
 ## Why This Is Better Than The Original Demo
 
@@ -225,6 +229,9 @@ Outputs:
   physics-informed neural networks", arXiv:2203.07404.
 - Wu, Zhu, Tan, Kartha, Lu, "A comprehensive study of non-adaptive and residual-based
   adaptive sampling for physics-informed neural networks", arXiv:2207.10289.
+- Jagtap, Kharazmi, Karniadakis, "Conservative physics-informed neural networks on
+  discrete domains for conservation laws", Computer Methods in Applied Mechanics and
+  Engineering 2020.
 - Yu, Lu, Meng, Karniadakis, "Gradient-enhanced physics-informed neural networks for
   forward and inverse PDE problems", arXiv:2111.02801.
 - Chen, Howard, Stinis, "Self-adaptive weights based on balanced residual decay rate for

@@ -30,6 +30,7 @@ COLORS = {
     "orange": "#CC6F47",
     "olive": "#71B436",
     "pink": "#BD569B",
+    "teal": "#2A9D8F",
     "neutral": "#7A828F",
 }
 
@@ -284,6 +285,7 @@ def save_training_diagnostics_figure(
         ("pde", COLORS["orange"]),
         ("ic", COLORS["gold"]),
         ("bc", COLORS["neutral"]),
+        ("mass", COLORS["teal"]),
         ("front_grad", COLORS["pink"]),
         ("grad", COLORS["blue_light"]),
     ]:
@@ -330,6 +332,7 @@ def save_training_diagnostics_figure(
         ("aw_pde", COLORS["orange"]),
         ("aw_ic", COLORS["gold"]),
         ("aw_bc", COLORS["neutral"]),
+        ("aw_mass", COLORS["teal"]),
         ("aw_front_grad", COLORS["pink"]),
     ]
     plotted_adaptive = False
