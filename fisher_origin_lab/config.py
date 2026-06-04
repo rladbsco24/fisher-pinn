@@ -50,10 +50,12 @@ class GeoConfig:
 
 @dataclass(frozen=True)
 class ModelConfig:
+    architecture: str = "gated_mlp"
     fourier_features: int = 32
     fourier_sigma: float = 3.5
     hidden: int = 96
     layers: int = 5
+    use_random_weight_factorization: bool = False
     learn_diffusion: bool = False
     learn_reaction: bool = False
     learn_drift: bool = False
@@ -179,10 +181,12 @@ class ExperimentConfig:
             ),
             geo=self.geo,
             model=ModelConfig(
+                architecture=self.model.architecture,
                 fourier_features=16,
                 fourier_sigma=self.model.fourier_sigma,
                 hidden=48,
                 layers=3,
+                use_random_weight_factorization=self.model.use_random_weight_factorization,
                 learn_diffusion=self.model.learn_diffusion,
                 learn_reaction=self.model.learn_reaction,
                 learn_drift=self.model.learn_drift,
@@ -292,10 +296,12 @@ class ExperimentConfig:
             observations=self.observations,
             geo=self.geo,
             model=ModelConfig(
+                architecture=self.model.architecture,
                 fourier_features=self.model.fourier_features,
                 fourier_sigma=self.model.fourier_sigma,
                 hidden=self.model.hidden,
                 layers=self.model.layers,
+                use_random_weight_factorization=self.model.use_random_weight_factorization,
                 learn_diffusion=True,
                 learn_reaction=True,
                 learn_drift=False,
@@ -350,10 +356,12 @@ class ExperimentConfig:
             observations=base.observations,
             geo=GeoConfig(enabled=True, mask_kind="box"),
             model=ModelConfig(
+                architecture="pirate",
                 fourier_features=base.model.fourier_features,
                 fourier_sigma=1.0,
                 hidden=base.model.hidden,
                 layers=base.model.layers,
+                use_random_weight_factorization=True,
                 learn_diffusion=True,
                 learn_reaction=True,
                 learn_drift=False,

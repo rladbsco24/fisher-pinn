@@ -194,6 +194,8 @@ def test_geo_spectral_forward_profile_extends_korea_setup() -> None:
     assert cfg.geo.enabled is True
     assert cfg.geo.mask_kind == "box"
     assert cfg.model.use_geo_features is True
+    assert cfg.model.architecture == "pirate"
+    assert cfg.model.use_random_weight_factorization is True
     assert cfg.model.spatial_fourier_only is True
     assert cfg.model.use_source_envelope is False
     assert cfg.model.use_seed_front_features is True
@@ -262,7 +264,10 @@ def test_forward_ablation_cases_report_front_metrics() -> None:
     names = [case["name"] for case in cases]
     assert "korea_style_forward" in names
     assert "geo_front_area" in names
+    assert "geo_gated_front_area" in names
     assert any(case["cfg"].weights.leading_edge_area > 0.0 for case in cases)
+    assert any(case["cfg"].model.architecture == "pirate" for case in cases)
+    assert any(case["cfg"].model.architecture == "gated_mlp" for case in cases)
     summary = aggregate_forward_ablation(
         [
             {

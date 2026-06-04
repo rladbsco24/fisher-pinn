@@ -99,6 +99,10 @@ python scripts\run_inverse_origin.py --quick --geo-spectral-forward --out-dir ru
 
 What changes:
 
+- The default forward backbone is now a PirateNet-style residual architecture with
+  near-identity adaptive skip connections and row-wise random weight factorization. This
+  follows the moving-interface PINN/PirateNet literature, where dynamic fronts benefit
+  more from architecture and training stabilization than from heavy geometric penalties.
 - Spatial Fourier features are used as positional encoding, not as a periodic boundary
   assumption. The forward preset now uses a lower Fourier scale because the target
   solution is a smooth diffusive Fisher-KPP front; high-frequency features caused
@@ -131,6 +135,10 @@ What changes:
 - Expected-front PDE sampling and one-sided leading-edge floor losses are implemented as
   optional ablation knobs. Quick experiments showed they can improve apparent active
   area while degrading held-out MSE/mass, so they are not enabled in the default profile.
+- Eikonal regularization from level-set moving-interface PINNs is not enabled here because
+  Fisher-KPP `u` is not a signed-distance level-set field. The cited moving-interface
+  paper also shows that Eikonal/mass penalties can hurt when their weights are not chosen
+  carefully, so this lab treats them as diagnostics/ablations rather than default truth.
 - Residual weighting follows an easy-to-hard curriculum: early epochs avoid overfitting
   residual outliers, then the exponent ramps toward the full adaptive residual weight.
 - Adaptive relative loss balancing updates multipliers from each term's relative training
@@ -216,6 +224,12 @@ Forward ablation outputs:
   MAE, and mass MAE.
 - `summary.png`: side-by-side bars for final L2, `u>0.10` front-area MAE, and mass MAE.
 
+Current 60-epoch quick check on one seed with the PirateNet/RWF default gives
+`final_time_relative_l2 = 0.3806`, `validation_observation_mse = 7.46e-4`,
+`front_area_010_mae = 0.0126`, and `mass_mae = 0.0035`. Treat this as a wiring
+check, not a final benchmark; use the forward ablation script over multiple seeds before
+making claims.
+
 ## Colab Notebook
 
 Upload `fisher_kpp_origin_lab.ipynb` to Google Colab and run from the first cell.
@@ -281,6 +295,8 @@ Outputs:
 - Rohrhofer, Posch, Gößnitzer, Geiger, "Approximating families of sharp solutions to
   Fisher's equation with physics-informed neural networks", Computer Physics
   Communications 2025.
+- Mullins, Kamil, Fahsi, Soulaïmani, "Physics-informed neural networks for solving
+  moving interface flow problems using the level set approach", arXiv:2502.02440.
 - Chen, Howard, Stinis, "Self-adaptive weights based on balanced residual decay rate for
   physics-informed neural networks and deep operator networks", arXiv:2407.01613.
 - Bischof, Kraus, "Multi-Objective Loss Balancing for Physics-Informed Deep Learning",

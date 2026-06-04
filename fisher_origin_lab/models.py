@@ -23,6 +23,46 @@ class FourierFeatures(nn.Module):
         return torch.cat([torch.sin(projection), torch.cos(projection)], dim=-1)
 
 
+class FactorizedLinear(nn.Module):
+    """Linear layer with row-wise random weight factorization.
+
+    The parameterization follows the PINN/PirateNet literature:
+    W = diag(exp(s)) V. It keeps the initial effective weight equal to a
+    Glorot-initialized matrix while optimizing the scale and direction
+    separately.
+    """
+
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        *,
+        bias: bool = True,
+        scale_mu: float = 0.0,
+        scale_sigma: float = 0.1,
+    ) -> None:
+        super().__init__()
+        weight = torch.empty(out_features, in_features)
+        nn.init.xavier_uniform_(weight)
+        scale = torch.empty(out_features).normal_(mean=scale_mu, std=scale_sigma)
+        self.log_scale = nn.Parameter(scale)
+        self.weight_v = nn.Parameter(weight / torch.exp(scale).view(-1, 1))
+        self.bias = nn.Parameter(torch.zeros(out_features)) if bias else None
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        weight = torch.exp(self.log_scale).view(-1, 1) * self.weight_v
+        return F.linear(x, weight, self.bias)
+
+
+def _linear(in_features: int, out_features: int, *, factorized: bool) -> nn.Module:
+    if factorized:
+        return FactorizedLinear(in_features, out_features)
+    layer = nn.Linear(in_features, out_features)
+    nn.init.xavier_uniform_(layer.weight)
+    nn.init.zeros_(layer.bias)
+    return layer
+
+
 def square_geo_features(xy: torch.Tensor, box: float) -> torch.Tensor:
     scaled = (xy / box).clamp(0.0, 1.0)
     x = scaled[:, 0:1]
@@ -57,13 +97,13 @@ def seed_front_features(
 
 
 class GatedMLP(nn.Module):
-    def __init__(self, in_dim: int, hidden: int, layers: int, out_dim: int) -> None:
+    def __init__(self, in_dim: int, hidden: int, layers: int, out_dim: int, *, factorized: bool = False) -> None:
         super().__init__()
-        self.in_layer = nn.Linear(in_dim, hidden)
-        self.u_layer = nn.Linear(in_dim, hidden)
-        self.v_layer = nn.Linear(in_dim, hidden)
-        self.hidden_layers = nn.ModuleList(nn.Linear(hidden, hidden) for _ in range(layers))
-        self.out_layer = nn.Linear(hidden, out_dim)
+        self.in_layer = _linear(in_dim, hidden, factorized=factorized)
+        self.u_layer = _linear(in_dim, hidden, factorized=factorized)
+        self.v_layer = _linear(in_dim, hidden, factorized=factorized)
+        self.hidden_layers = nn.ModuleList(_linear(hidden, hidden, factorized=factorized) for _ in range(layers))
+        self.out_layer = _linear(hidden, out_dim, factorized=factorized)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         h = torch.tanh(self.in_layer(x))
@@ -72,6 +112,49 @@ class GatedMLP(nn.Module):
         for layer in self.hidden_layers:
             gate = torch.sigmoid(layer(h))
             h = (1.0 - gate) * u + gate * v
+        return self.out_layer(h)
+
+
+class PirateBlock(nn.Module):
+    def __init__(self, hidden: int, *, factorized: bool) -> None:
+        super().__init__()
+        self.f_layer = _linear(hidden, hidden, factorized=factorized)
+        self.g_layer = _linear(hidden, hidden, factorized=factorized)
+        self.h_layer = _linear(hidden, hidden, factorized=factorized)
+        self.raw_alpha = nn.Parameter(torch.tensor(-6.0))
+
+    def forward(self, x: torch.Tensor, u_gate: torch.Tensor, v_gate: torch.Tensor) -> torch.Tensor:
+        f = torch.tanh(self.f_layer(x))
+        z1 = f * u_gate + (1.0 - f) * v_gate
+        g = torch.tanh(self.g_layer(z1))
+        z2 = g * u_gate + (1.0 - g) * v_gate
+        h = torch.tanh(self.h_layer(z2))
+        alpha = torch.sigmoid(self.raw_alpha)
+        return alpha * h + (1.0 - alpha) * x
+
+
+class PirateNet(nn.Module):
+    """PirateNet-style gated residual MLP for PINNs.
+
+    The adaptive skip starts nearly at the identity map and gradually lets
+    residual blocks contribute, mirroring the moving-interface PINN paper's
+    use of PirateNet for dynamic fronts.
+    """
+
+    def __init__(self, in_dim: int, hidden: int, blocks: int, out_dim: int, *, factorized: bool = False) -> None:
+        super().__init__()
+        self.in_layer = _linear(in_dim, hidden, factorized=factorized)
+        self.u_layer = _linear(in_dim, hidden, factorized=factorized)
+        self.v_layer = _linear(in_dim, hidden, factorized=factorized)
+        self.blocks = nn.ModuleList(PirateBlock(hidden, factorized=factorized) for _ in range(blocks))
+        self.out_layer = _linear(hidden, out_dim, factorized=factorized)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        h = torch.tanh(self.in_layer(x))
+        u_gate = torch.tanh(self.u_layer(x))
+        v_gate = torch.tanh(self.v_layer(x))
+        for block in self.blocks:
+            h = block(h, u_gate, v_gate)
         return self.out_layer(h)
 
 
@@ -139,6 +222,7 @@ class OriginPINN(nn.Module):
         super().__init__()
         self.domain = domain
         self.use_source_envelope = bool(model.use_source_envelope)
+        self.architecture = model.architecture
         self.use_geo_features = bool(model.use_geo_features)
         self.spatial_fourier_only = bool(model.spatial_fourier_only)
         self.use_seed_front_features = bool(model.use_seed_front_features)
@@ -157,7 +241,25 @@ class OriginPINN(nn.Module):
         self.features = FourierFeatures(fourier_dim, model.fourier_features, model.fourier_sigma)
         geo_dim = 8 if self.use_geo_features else 0
         seed_front_dim = 4 if self.use_seed_front_features else 0
-        self.mlp = GatedMLP(2 * model.fourier_features + 3 + geo_dim + seed_front_dim, model.hidden, model.layers, 1)
+        network_in_dim = 2 * model.fourier_features + 3 + geo_dim + seed_front_dim
+        if model.architecture == "gated_mlp":
+            self.mlp = GatedMLP(
+                network_in_dim,
+                model.hidden,
+                model.layers,
+                1,
+                factorized=model.use_random_weight_factorization,
+            )
+        elif model.architecture == "pirate":
+            self.mlp = PirateNet(
+                network_in_dim,
+                model.hidden,
+                model.layers,
+                1,
+                factorized=model.use_random_weight_factorization,
+            )
+        else:
+            raise ValueError(f"Unknown ModelConfig.architecture={model.architecture!r}")
         self.source = SourceHead(domain, seed)
         self.pde = PDEParameters(pde, model)
 
@@ -213,7 +315,12 @@ class OriginPINN(nn.Module):
         return torch.sigmoid((support_radius - radius) / width)
 
     def sparse_last_layer_l1(self) -> torch.Tensor:
-        return self.mlp.out_layer.weight.abs().mean()
+        out_layer = self.mlp.out_layer
+        if isinstance(out_layer, FactorizedLinear):
+            weight = torch.exp(out_layer.log_scale).view(-1, 1) * out_layer.weight_v
+        else:
+            weight = out_layer.weight
+        return weight.abs().mean()
 
     def physics_dict(self) -> dict[str, float]:
         return {

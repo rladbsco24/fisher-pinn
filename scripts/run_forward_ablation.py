@@ -101,6 +101,10 @@ def make_forward_cases(base: ExperimentConfig) -> list[dict[str, Any]]:
     )
     geo_front_area = base
     geo_area_strong = replace(base, weights=replace(base.weights, leading_edge_area=3.0))
+    geo_gated_front_area = replace(
+        base,
+        model=replace(base.model, architecture="gated_mlp", use_random_weight_factorization=False),
+    )
 
     return [
         _case("korea_style_forward", korea, "Korea pine-wilt compatible forward PINN objective."),
@@ -108,6 +112,7 @@ def make_forward_cases(base: ExperimentConfig) -> list[dict[str, Any]]:
         _case("geo_speed_mass", geo_speed_mass, "Adds gradient-filtered front-speed and parabolic mass-balance losses."),
         _case("geo_front_area", geo_front_area, "Default paper-grade profile with analytic leading-edge front-area loss."),
         _case("geo_front_area_strong", geo_area_strong, "Stronger front-area ablation; useful for checking metric tradeoffs."),
+        _case("geo_gated_front_area", geo_gated_front_area, "Ablates PirateNet/RWF by using the previous gated MLP backbone."),
     ]
 
 
