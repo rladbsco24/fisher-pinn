@@ -114,6 +114,9 @@ What changes:
 - A Neumann boundary loss is enabled.
 - PDE residuals are weighted toward infection-front regions using `u(1-u)` and
   `|grad u|`.
+- A moving-front speed loss enforces the Fisher-KPP traveling-front relation
+  `u_t + (2 sqrt(D r) + v.n) grad(u).n = 0` on active level-set bands. This makes the
+  front move like a Fisher-KPP front instead of merely fitting late-time blobs.
 - A parabolic mass-balance loss enforces the no-flux Fisher-KPP integral identity
   `d mean(u)/dt = r mean(u(1-u))`. This adds a global growth check that the pointwise
   residual and sparse observations can miss.
@@ -127,7 +130,8 @@ What changes:
 - The training loop restores the best validation-observation checkpoint, which prevents
   longer runs from drifting after residual-adaptive refreshes.
 - Residual-adaptive collocation uses a combined residual/front score.
-- Front-local gPINN loss penalizes residual gradients only near the active front.
+- Front-local gPINN loss penalizes residual gradients only near the active front, while
+  the moving-front speed loss checks the front's normal propagation speed.
 - Last-layer L1 regularization discourages overusing the expanded spectral/geo feature
   basis.
 
@@ -200,13 +204,13 @@ Outputs:
 - `observation_coverage.png`: train/validation spatial and temporal sample coverage.
 - `reconstruction.png`: truth, PINN reconstruction, and absolute-error panels.
 - `spacetime_error.png`: relative L2, mean density, and active-front coverage over time.
-- `residual_front_diagnostics.png`: final-time residual, front indicator, and adaptive
-  weighting maps.
+- `residual_front_diagnostics.png`: final-time residual, front indicator, adaptive
+  weighting maps, normal front speed, and front-speed error.
 - `pinn_vs_rk4_comparison.png`: final-time truth/PINN/RK4 fields, absolute-error maps,
   and a compact accuracy summary.
-- `training_diagnostics.png`: loss components including known IC, parabolic mass balance,
-  learned `D/r`, residual curriculum, adaptive loss multipliers, and front/sparsity
-  diagnostics.
+- `training_diagnostics.png`: loss components including known IC, moving-front speed,
+  parabolic mass balance, learned `D/r`, residual curriculum, adaptive loss multipliers,
+  and front/sparsity diagnostics.
 
 ## Why This Is Better Than The Original Demo
 
@@ -225,6 +229,9 @@ Outputs:
 ## References
 
 - Raissi, Perdikaris, Karniadakis, "Physics-informed neural networks", JCP 2019.
+- Fisher, "The wave of advance of advantageous genes", Annals of Eugenics 1937.
+- Kolmogorov, Petrovskii, Piskunov, "A study of the diffusion equation with increase
+  in the amount of substance, and its application to a biological problem", 1937.
 - Wang, Sankaran, Perdikaris, "Respecting causality is all you need for training
   physics-informed neural networks", arXiv:2203.07404.
 - Wu, Zhu, Tan, Kartha, Lu, "A comprehensive study of non-adaptive and residual-based

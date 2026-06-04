@@ -22,6 +22,7 @@ from .losses import (
     causal_weights,
     front_indicator_weights,
     front_local_gradient_residual_loss,
+    front_speed_consistency_loss,
     gradient_residual_loss,
     known_initial_condition_loss,
     parabolic_mass_balance_loss,
@@ -277,6 +278,16 @@ def train_single(
         else:
             grad_loss = torch.zeros((), device=device)
             front_grad_loss = torch.zeros((), device=device)
+        if cfg.weights.front_speed > 0.0 and cfg.train.front_speed_points > 0:
+            fs_subset = min(cfg.train.front_speed_points, len(xy_col))
+            front_speed_loss = front_speed_consistency_loss(
+                model,
+                xy_col[:fs_subset],
+                t_col[:fs_subset],
+                max_points=cfg.train.front_speed_max_points,
+            )
+        else:
+            front_speed_loss = torch.zeros((), device=device)
         if cfg.weights.mass_balance > 0.0:
             mass_loss = parabolic_mass_balance_loss(
                 model,
@@ -300,6 +311,7 @@ def train_single(
                 ("shooting", cfg.weights.shooting, shooting_loss),
                 ("grad", cfg.weights.gradient, grad_loss),
                 ("front_grad", cfg.weights.front_gradient, front_grad_loss),
+                ("front_speed", cfg.weights.front_speed, front_speed_loss),
                 ("mass", cfg.weights.mass_balance, mass_loss),
                 ("sparse", cfg.weights.sparse, sparse_loss),
             ],
@@ -356,6 +368,7 @@ def train_single(
                 "shooting": float(shooting_loss.detach().cpu()),
                 "grad": float(grad_loss.detach().cpu()),
                 "front_grad": float(front_grad_loss.detach().cpu()),
+                "front_speed": float(front_speed_loss.detach().cpu()),
                 "mass": float(mass_loss.detach().cpu()),
                 "sparse": float(sparse_loss.detach().cpu()),
                 "residual_exponent": float(residual_exponent),
@@ -497,6 +510,16 @@ def _lbfgs_polish(
             ic_loss = known_initial_condition_loss(model, cfg.seed, cfg.train.seed_points, device)
         else:
             ic_loss = torch.zeros((), device=device)
+        if cfg.weights.front_speed > 0.0 and cfg.train.front_speed_points > 0:
+            fs_subset = min(cfg.train.front_speed_points, len(xy_col))
+            front_speed_loss = front_speed_consistency_loss(
+                model,
+                xy_col[:fs_subset],
+                t_col[:fs_subset],
+                max_points=cfg.train.front_speed_max_points,
+            )
+        else:
+            front_speed_loss = torch.zeros((), device=device)
         if cfg.weights.mass_balance > 0.0:
             mass_loss = parabolic_mass_balance_loss(
                 model,
@@ -518,6 +541,7 @@ def _lbfgs_polish(
             + cfg.weights.boundary * bc_loss
             + cfg.weights.seed_match * seed_match
             + cfg.weights.seed_mass * seed_mass
+            + cfg.weights.front_speed * front_speed_loss
             + cfg.weights.mass_balance * mass_loss
             + cfg.weights.sparse * model.sparse_last_layer_l1()
         )

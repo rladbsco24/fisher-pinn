@@ -8,7 +8,7 @@ import numpy as np
 import torch
 
 from .config import DomainConfig, ObservationConfig, SeedConfig
-from .losses import front_indicator_weights, pde_residual_terms
+from .losses import front_indicator_weights, front_speed_kinematics, pde_residual_terms
 from .metrics import centroid_from_field, relative_l2
 from .models import OriginPINN
 from .simulate import ObservationData, TruthData, truth_field_at
@@ -133,12 +133,20 @@ def residual_front_maps(
     residual, u, u_xy, _, _ = pde_residual_terms(model, xy, t)
     grad_norm = torch.linalg.norm(u_xy, dim=-1, keepdim=True)
     weights = front_indicator_weights(u, u_xy, front_alpha, front_gradient)
+    kin = front_speed_kinematics(model, xy, t)
+    front_band = ((u.detach() > 0.05) & (u.detach() < 0.95)).cpu().numpy().reshape(n, n)
+    normal_speed = kin["observed_normal_speed"].detach().cpu().numpy().reshape(n, n)
+    target_speed = kin["target_normal_speed"].detach().cpu().numpy().reshape(n, n)
+    speed_error = np.abs(kin["speed_error"].detach().cpu().numpy().reshape(n, n))
     return {
         "u": u.detach().cpu().numpy().reshape(n, n),
         "residual_abs": residual.detach().abs().cpu().numpy().reshape(n, n),
         "front_indicator": (u.detach() * (1.0 - u.detach())).cpu().numpy().reshape(n, n),
         "grad_norm": grad_norm.detach().cpu().numpy().reshape(n, n),
         "front_weight": weights.detach().cpu().numpy().reshape(n, n),
+        "normal_speed": np.where(front_band, normal_speed, np.nan),
+        "target_speed": np.where(front_band, target_speed, np.nan),
+        "front_speed_error": np.where(front_band, speed_error, np.nan),
     }
 
 
@@ -286,8 +294,9 @@ def save_training_diagnostics_figure(
         ("ic", COLORS["gold"]),
         ("bc", COLORS["neutral"]),
         ("mass", COLORS["teal"]),
+        ("front_speed", COLORS["blue_light"]),
         ("front_grad", COLORS["pink"]),
-        ("grad", COLORS["blue_light"]),
+        ("grad", COLORS["neutral"]),
     ]:
         epochs, values = _as_history_arrays(history, key)
         if len(values) and np.nanmax(values) > 0.0:
@@ -333,6 +342,7 @@ def save_training_diagnostics_figure(
         ("aw_ic", COLORS["gold"]),
         ("aw_bc", COLORS["neutral"]),
         ("aw_mass", COLORS["teal"]),
+        ("aw_front_speed", COLORS["blue_light"]),
         ("aw_front_grad", COLORS["pink"]),
     ]
     plotted_adaptive = False
@@ -359,7 +369,7 @@ def save_training_diagnostics_figure(
     _write_title(
         fig,
         "Training diagnostics",
-        "Loss including known IC, residual curriculum, adaptive multipliers, coefficients, and front/sparsity diagnostics.",
+        "Loss including known IC, moving-front speed, mass balance, adaptive multipliers, and learned coefficients.",
         top=0.84,
     )
     fig.savefig(path, dpi=150)
@@ -399,16 +409,18 @@ def save_residual_front_diagnostics_figure(
         ("log10 |PDE residual|", residual_log, "cividis", None, None),
         ("u(1-u) front indicator", maps["front_indicator"], "plasma", 0.0, 0.25),
         ("front/adaptive weight", maps["front_weight"], "YlGnBu", None, None),
+        ("normal front speed", maps["normal_speed"], "coolwarm", None, None),
+        ("front-speed error", maps["front_speed_error"], "magma", 0.0, None),
     ]
-    fig, axes = plt.subplots(2, 3, figsize=(12.2, 7.4), constrained_layout=False)
-    fig.subplots_adjust(left=0.035, right=0.965, bottom=0.06, top=0.84, hspace=0.30, wspace=0.20)
+    fig, axes = plt.subplots(2, 4, figsize=(15.2, 7.4), constrained_layout=False)
+    fig.subplots_adjust(left=0.03, right=0.97, bottom=0.06, top=0.84, hspace=0.30, wspace=0.20)
     for ax, (title, field, cmap, vmin, vmax) in zip(axes.ravel(), panels):
         _imshow(fig, ax, field, domain, title=title, cmap=cmap, vmin=vmin, vmax=vmax, colorbar=True)
 
     _write_title(
         fig,
         "Residual and active-front diagnostics",
-        f"Maps at t={time_value:.2f}; residual and front weights explain where the physics loss concentrates.",
+        f"Maps at t={time_value:.2f}; residual, active-front weights, and normal speed explain moving-front behavior.",
         top=0.84,
     )
     fig.savefig(path, dpi=150)

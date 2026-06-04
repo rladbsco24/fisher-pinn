@@ -58,6 +58,60 @@ def front_indicator_weights(
     return weights.clamp(0.25, 8.0)
 
 
+def front_speed_kinematics(
+    model: OriginPINN,
+    xy: torch.Tensor,
+    t: torch.Tensor,
+    eps: float = 1.0e-3,
+) -> dict[str, torch.Tensor]:
+    """KPP moving-front kinematics for the implicit level sets of u.
+
+    In the leading-edge approximation of Fisher-KPP, the asymptotic front speed
+    relative to the medium is c*=2*sqrt(D*r). With outward normal n, a level set
+    should satisfy u_t + (v.n + c*) grad(u).n = 0 near the active front.
+    """
+
+    xy_req = xy.detach().clone().requires_grad_(True)
+    t_req = t.detach().clone().requires_grad_(True)
+    u = model(xy_req, t_req)
+    grad = torch.autograd.grad
+    u_t = grad(u, t_req, torch.ones_like(u), create_graph=True)[0]
+    u_xy = grad(u, xy_req, torch.ones_like(u), create_graph=True)[0]
+
+    center = model.seed_center.to(dtype=xy_req.dtype, device=xy_req.device).view(1, 2)
+    radial = xy_req - center
+    radius = torch.linalg.norm(radial, dim=-1, keepdim=True).clamp_min(eps)
+    normal = radial / radius
+    directional_grad = torch.sum(u_xy * normal, dim=-1, keepdim=True)
+    advective_speed = torch.sum(model.pde.velocity.view(1, 2) * normal, dim=-1, keepdim=True)
+    kpp_speed = 2.0 * torch.sqrt(
+        model.pde.diffusion().clamp_min(1.0e-10) * model.pde.reaction().clamp_min(1.0e-10)
+    )
+    target_normal_speed = advective_speed + kpp_speed
+    signed_residual = u_t + target_normal_speed * directional_grad
+    abs_denom = directional_grad.detach().abs().clamp_min(eps)
+    signed_denom = torch.where(
+        directional_grad.detach().abs() < eps,
+        -torch.full_like(directional_grad, eps),
+        directional_grad,
+    )
+    speed_error = signed_residual / abs_denom
+    observed_normal_speed = -u_t / signed_denom
+    front_indicator = (u.detach() * (1.0 - u.detach())).clamp_min(0.0)
+    return {
+        "u": u,
+        "u_t": u_t,
+        "u_xy": u_xy,
+        "normal": normal,
+        "directional_grad": directional_grad,
+        "target_normal_speed": target_normal_speed,
+        "observed_normal_speed": observed_normal_speed,
+        "signed_residual": signed_residual,
+        "speed_error": speed_error,
+        "front_indicator": front_indicator,
+    }
+
+
 def boundary_neumann_loss(model: OriginPINN, n: int, device: torch.device) -> torch.Tensor:
     t = torch.rand(n, 1, device=device) * model.domain.t_end
     xy = torch.rand(n, 2, device=device) * model.domain.box
@@ -142,6 +196,37 @@ def parabolic_mass_balance_loss(
     lhs = ut_by_time.mean(dim=1)
     rhs = model.pde.reaction() * (u_by_time * (1.0 - u_by_time)).mean(dim=1)
     return torch.mean((lhs - rhs) ** 2)
+
+
+def front_speed_consistency_loss(
+    model: OriginPINN,
+    xy: torch.Tensor,
+    t: torch.Tensor,
+    low: float = 0.05,
+    high: float = 0.95,
+    max_points: int = 128,
+) -> torch.Tensor:
+    kin = front_speed_kinematics(model, xy, t)
+    u = kin["u"]
+    front_mask = ((u.detach() > low) & (u.detach() < high)).flatten()
+    if not torch.any(front_mask):
+        indicator = kin["front_indicator"].flatten()
+        keep = min(max_points, len(indicator))
+        if keep == 0:
+            return torch.zeros((), dtype=xy.dtype, device=xy.device)
+        front_mask = torch.zeros_like(indicator, dtype=torch.bool)
+        front_mask[torch.topk(indicator, k=keep).indices] = True
+    elif max_points > 0 and int(front_mask.sum()) > max_points:
+        idx = torch.where(front_mask)[0]
+        chosen = idx[torch.randperm(len(idx), device=idx.device)[:max_points]]
+        front_mask = torch.zeros_like(front_mask)
+        front_mask[chosen] = True
+
+    selected_error = kin["speed_error"][front_mask]
+    selected_weight = (4.0 * kin["front_indicator"][front_mask]).clamp(0.1, 1.0)
+    if len(selected_error) == 0:
+        return torch.zeros((), dtype=xy.dtype, device=xy.device)
+    return torch.mean(selected_weight * selected_error.clamp(-2.0, 2.0).pow(2))
 
 
 def gradient_residual_loss(

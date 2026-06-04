@@ -83,6 +83,7 @@ class LossWeights:
     front_pde_alpha: float = 0.0
     front_pde_gradient: float = 0.0
     front_gradient: float = 0.0
+    front_speed: float = 0.0
     mass_balance: float = 0.0
     sparse: float = 0.0
 
@@ -121,6 +122,8 @@ class TrainConfig:
     adaptive_loss_max: float = 4.0
     validation_every: int = 50
     restore_best_validation: bool = True
+    front_speed_points: int = 256
+    front_speed_max_points: int = 128
     mass_balance_times: int = 4
     mass_balance_grid: int = 18
     print_every: int = 100
@@ -196,6 +199,7 @@ class ExperimentConfig:
                 front_pde_alpha=self.weights.front_pde_alpha,
                 front_pde_gradient=self.weights.front_pde_gradient,
                 front_gradient=self.weights.front_gradient,
+                front_speed=self.weights.front_speed,
                 mass_balance=self.weights.mass_balance,
                 sparse=self.weights.sparse,
             ),
@@ -230,6 +234,8 @@ class ExperimentConfig:
                 adaptive_loss_max=self.train.adaptive_loss_max,
                 validation_every=30,
                 restore_best_validation=self.train.restore_best_validation,
+                front_speed_points=min(self.train.front_speed_points, 128),
+                front_speed_max_points=min(self.train.front_speed_max_points, 64),
                 mass_balance_times=min(self.train.mass_balance_times, 4),
                 mass_balance_grid=min(self.train.mass_balance_grid, 18),
                 print_every=30,
@@ -295,6 +301,7 @@ class ExperimentConfig:
                 front_pde_alpha=0.0,
                 front_pde_gradient=0.0,
                 front_gradient=0.0,
+                front_speed=0.0,
                 mass_balance=0.0,
                 sparse=0.0,
             ),
@@ -349,6 +356,7 @@ class ExperimentConfig:
                 front_pde_alpha=2.0,
                 front_pde_gradient=0.5,
                 front_gradient=0.02,
+                front_speed=0.01,
                 mass_balance=0.10,
                 sparse=1.0e-5,
             ),
