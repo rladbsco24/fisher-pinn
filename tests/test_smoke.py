@@ -8,6 +8,8 @@ import numpy as np
 import torch
 
 from scripts.run_inverse_origin import build_config
+from scripts.run_forward_ablation import aggregate as aggregate_forward_ablation
+from scripts.run_forward_ablation import make_forward_cases
 
 from fisher_origin_lab.config import DomainConfig, ExperimentConfig, ModelConfig, PDEConfig, SeedConfig, WarmStartConfig
 from fisher_origin_lab.losses import (
@@ -252,6 +254,32 @@ def test_cli_quick_epochs_preserves_geo_training_stabilizers() -> None:
     assert cfg.train.adaptive_loss_balancing is True
     assert cfg.train.residual_curriculum_epochs > 0
     assert cfg.train.residual_weight_exponent_start < cfg.train.residual_weight_exponent_end
+
+
+def test_forward_ablation_cases_report_front_metrics() -> None:
+    cfg = ExperimentConfig(domain=DomainConfig(grid=25, truth_steps=80)).geo_spectral_forward().quick()
+    cases = make_forward_cases(cfg)
+    names = [case["name"] for case in cases]
+    assert "korea_style_forward" in names
+    assert "geo_front_area" in names
+    assert any(case["cfg"].weights.leading_edge_area > 0.0 for case in cases)
+    summary = aggregate_forward_ablation(
+        [
+            {
+                "case": "geo_front_area",
+                "seed": 7,
+                "validation_observation_mse": 1.0e-3,
+                "final_time_relative_l2": 0.4,
+                "front_area_005_mae": 0.03,
+                "front_area_010_mae": 0.02,
+                "active_front_area_mae": 0.02,
+                "mass_mae": 0.01,
+                "note": "test",
+            }
+        ]
+    )
+    assert summary["cases"][0]["final_time_relative_l2_mean"] == 0.4
+    assert summary["cases"][0]["front_area_010_mae_mean"] == 0.02
 
 
 def test_warm_start_modes() -> None:

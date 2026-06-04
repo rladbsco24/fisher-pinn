@@ -169,7 +169,8 @@ Every experiment now computes an RK4 reference run after PINN training and repor
 
 ## Ablation Experiments
 
-Run a small experiment matrix before making claims:
+For the original inverse-origin setup, run a source/warm-start matrix before making
+origin-localization claims:
 
 ```bash
 python scripts\run_ablation.py --preset quick --case-set core --seeds 7,8,9 --out-dir runs\ablations_core
@@ -198,6 +199,22 @@ Important ablation axes:
   an ablation, not an automatic improvement.
 - `focus_fraction`: compares front-focused sensors against uniform-only sensors.
 - `learn_drift`: tests harder settings where drift is not assumed in the model weights.
+
+For the Korea-style forward Fisher-KPP setting, use the dedicated forward ablation
+script. It scores the same problem by field error, RK4 comparison, low-level front
+geometry, active-front coverage, and mass trajectory:
+
+```bash
+python scripts\run_forward_ablation.py --preset smoke --seeds 7 --out-dir runs\forward_ablation_smoke
+python scripts\run_forward_ablation.py --preset quick --seeds 7,8,9 --out-dir runs\forward_ablation_quick
+```
+
+Forward ablation outputs:
+
+- `results.csv`: one row per method/seed.
+- `summary.json`: mean/std for final L2, validation MSE, front-area MAE, active-front
+  MAE, and mass MAE.
+- `summary.png`: side-by-side bars for final L2, `u>0.10` front-area MAE, and mass MAE.
 
 ## Colab Notebook
 
