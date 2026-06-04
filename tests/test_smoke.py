@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import argparse
 from dataclasses import replace
+from pathlib import Path
 
 import numpy as np
 import torch
 
+from scripts.run_inverse_origin import build_config
+
 from fisher_origin_lab.config import DomainConfig, ExperimentConfig, ModelConfig, PDEConfig, SeedConfig, WarmStartConfig
-from fisher_origin_lab.losses import front_local_gradient_residual_loss, pde_residual
+from fisher_origin_lab.losses import front_local_gradient_residual_loss, known_initial_condition_loss, pde_residual
 from fisher_origin_lab.models import OriginPINN
 from fisher_origin_lab.plotting import (
     save_observation_coverage_figure,
@@ -125,6 +129,7 @@ def test_korea_pine_style_matches_forward_pinn_setup() -> None:
     assert cfg.model.learn_drift is False
     assert cfg.model.use_source_envelope is False
     assert cfg.weights.boundary == 0.0
+    assert cfg.weights.initial_condition == 0.0
     assert cfg.weights.seed_match == 0.0
     assert cfg.weights.shooting == 0.0
     assert cfg.weights.data_density_gain == 4.0
@@ -138,10 +143,46 @@ def test_geo_spectral_forward_profile_extends_korea_setup() -> None:
     assert cfg.model.use_geo_features is True
     assert cfg.model.spatial_fourier_only is True
     assert cfg.model.use_source_envelope is False
+    assert cfg.weights.initial_condition > 0.0
     assert cfg.weights.boundary > 0.0
     assert cfg.weights.front_pde_alpha > 0.0
     assert cfg.weights.front_gradient > 0.0
     assert cfg.weights.sparse > 0.0
+    assert cfg.train.adaptive_loss_balancing is True
+    assert cfg.train.residual_curriculum_epochs > 0
+    assert cfg.train.residual_weight_exponent_start < cfg.train.residual_weight_exponent_end
+
+
+def test_cli_quick_epochs_preserves_geo_training_stabilizers() -> None:
+    args = argparse.Namespace(
+        out_dir=Path("runs/test"),
+        quick=True,
+        epochs=12,
+        ensemble=1,
+        seed=7,
+        grid=101,
+        truth_steps=500,
+        obs_samples=500,
+        noise=0.02,
+        focus_fraction=0.5,
+        validation_fraction=0.2,
+        learn_drift=False,
+        learn_diffusion=False,
+        learn_reaction=False,
+        run_classical_baseline=False,
+        baseline_epochs=250,
+        gradient_weight=0.01,
+        shooting_weight=5.0,
+        data_density_gain=None,
+        korea_pine_style=False,
+        geo_spectral_forward=True,
+        warm_start="drift_corrected",
+    )
+    cfg = build_config(args)
+    assert cfg.train.epochs == 12
+    assert cfg.train.adaptive_loss_balancing is True
+    assert cfg.train.residual_curriculum_epochs > 0
+    assert cfg.train.residual_weight_exponent_start < cfg.train.residual_weight_exponent_end
 
 
 def test_warm_start_modes() -> None:
@@ -175,6 +216,15 @@ def test_source_shooting_loss_is_finite() -> None:
     assert torch.isfinite(loss)
 
 
+def test_known_initial_condition_loss_is_finite() -> None:
+    domain = DomainConfig(grid=25, truth_steps=80)
+    seed = SeedConfig()
+    model = OriginPINN(domain, PDEConfig(include_advection=False), seed, ModelConfig(hidden=16, layers=1, fourier_features=8, use_source_envelope=False))
+    loss = known_initial_condition_loss(model, seed, n=64, device=torch.device("cpu"))
+    assert loss.shape == ()
+    assert torch.isfinite(loss)
+
+
 def test_visualization_exports_are_created(tmp_path) -> None:
     domain = DomainConfig(grid=21, truth_steps=60)
     cfg = ExperimentConfig(domain=domain).geo_spectral_forward().quick()
@@ -190,8 +240,13 @@ def test_visualization_exports_are_created(tmp_path) -> None:
             "data": 0.2,
             "pde": 0.5,
             "bc": 0.1,
+            "ic": 0.2,
             "front_grad": 0.3,
+            "residual_exponent": 0.5,
             "front_weight_mean": 1.5,
+            "aw_data": 0.8,
+            "aw_pde": 1.2,
+            "aw_ic": 1.0,
             "sparse": 0.05,
             "origin_error": 0.1,
             "elapsed_sec": 0.2,

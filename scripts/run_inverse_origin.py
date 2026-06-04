@@ -106,42 +106,7 @@ def build_config(args: argparse.Namespace) -> ExperimentConfig:
     if args.quick:
         cfg = cfg.quick()
         if args.epochs is not None:
-            cfg = ExperimentConfig(
-                domain=cfg.domain,
-                pde=cfg.pde,
-                seed=cfg.seed,
-                observations=cfg.observations,
-                geo=cfg.geo,
-                model=cfg.model,
-                weights=cfg.weights,
-                warm_start=cfg.warm_start,
-                train=TrainConfig(
-                    epochs=args.epochs,
-                    lr=cfg.train.lr,
-                    source_lr_multiplier=cfg.train.source_lr_multiplier,
-                    collocation_points=cfg.train.collocation_points,
-                    boundary_points=cfg.train.boundary_points,
-                    seed_points=cfg.train.seed_points,
-                    time_bins=cfg.train.time_bins,
-                    causal_eps=cfg.train.causal_eps,
-                    decay_beta=cfg.train.decay_beta,
-                    rar_interval=cfg.train.rar_interval,
-                    rar_candidates=cfg.train.rar_candidates,
-                    rar_keep=cfg.train.rar_keep,
-                    shooting_grid=cfg.train.shooting_grid,
-                    shooting_steps=cfg.train.shooting_steps,
-                    shooting_points=cfg.train.shooting_points,
-                    shooting_prefit_steps=cfg.train.shooting_prefit_steps,
-                    print_every=cfg.train.print_every,
-                    adam_to_lbfgs=cfg.train.adam_to_lbfgs,
-                    lbfgs_steps=cfg.train.lbfgs_steps,
-                ),
-                ensemble=cfg.ensemble,
-                base_seed=cfg.base_seed,
-                out_dir=cfg.out_dir,
-                run_classical_baseline=cfg.run_classical_baseline,
-                baseline_epochs=cfg.baseline_epochs,
-            )
+            cfg = replace(cfg, train=replace(cfg.train, epochs=args.epochs))
     return cfg
 
 

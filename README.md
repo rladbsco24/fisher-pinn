@@ -37,6 +37,10 @@ The main estimator is `CaRA-gPINN-Seed`:
   only on the neural-field PDE residual.
 - Causal time-bin weighting inspired by causal PINNs.
 - Bounded residual-decay weighting inspired by recent adaptive weighting work.
+- Relative-progress adaptive loss balancing for active PINN terms, keeping data, PDE,
+  known-IC, boundary, and front-gradient losses from drifting onto incompatible scales.
+- Residual curriculum weighting that starts flatter and gradually emphasizes harder
+  high-residual collocation points.
 - Residual-adaptive collocation points inspired by RAD/RAR-D sampling.
 - Optional gradient-enhanced residual penalty for sharp fronts.
 - Ensemble mode for epistemic uncertainty over origin estimates.
@@ -98,9 +102,17 @@ What changes:
 - Square-domain geo features encode boundary distance and simple interior geometry.
   The current synthetic problem treats the whole square as valid land; the sampler has a
   mask interface so a real land mask can replace `box` later.
+- A known initial-condition loss enforces the same Gaussian seed used by the reference
+  solver. Half of the IC points are sampled near the seed so the narrow initial pulse is
+  not overwhelmed by zero background.
 - A Neumann boundary loss is enabled.
 - PDE residuals are weighted toward infection-front regions using `u(1-u)` and
   `|grad u|`.
+- Residual weighting follows an easy-to-hard curriculum: early epochs avoid overfitting
+  residual outliers, then the exponent ramps toward the full adaptive residual weight.
+- Adaptive relative loss balancing updates multipliers from each term's relative training
+  progress. This is a lightweight Colab-friendly alternative to full per-term gradient
+  surgery while targeting the same multi-objective imbalance issue.
 - Residual-adaptive collocation uses a combined residual/front score.
 - Front-local gPINN loss penalizes residual gradients only near the active front.
 - Last-layer L1 regularization discourages overusing the expanded spectral/geo feature
@@ -179,8 +191,8 @@ Outputs:
   weighting maps.
 - `pinn_vs_rk4_comparison.png`: final-time truth/PINN/RK4 fields, absolute-error maps,
   and a compact accuracy summary.
-- `training_diagnostics.png`: loss components, learned `D/r`, front/sparsity diagnostics,
-  and runtime trace.
+- `training_diagnostics.png`: loss components including known IC, learned `D/r`,
+  residual curriculum, adaptive loss multipliers, and front/sparsity diagnostics.
 
 ## Why This Is Better Than The Original Demo
 
@@ -193,8 +205,8 @@ Outputs:
   baseline.
 - A drift-corrected centroid baseline is included because known advection makes the
   original centroid-only comparison too weak.
-- The training loop has causal weighting, residual-adaptive sampling, reproducible seeds,
-  structured metrics, and tests.
+- The training loop has causal weighting, residual curriculum, adaptive relative loss
+  balancing, residual-adaptive sampling, reproducible seeds, structured metrics, and tests.
 
 ## References
 
@@ -207,6 +219,12 @@ Outputs:
   forward and inverse PDE problems", arXiv:2111.02801.
 - Chen, Howard, Stinis, "Self-adaptive weights based on balanced residual decay rate for
   physics-informed neural networks and deep operator networks", arXiv:2407.01613.
+- Bischof, Kraus, "Multi-Objective Loss Balancing for Physics-Informed Deep Learning",
+  SSRN 2024. Introduces ReLoBRaLo-style relative loss balancing for PINNs.
+- Liu, Chu, Thuerey, "ConFIG: Towards Conflict-free Training of Physics Informed Neural
+  Networks", arXiv:2408.11104 / ICLR 2025.
+- Yang, Wang, Li, Cao, Yan, Liu, "From Simple to Complex: Curriculum-Guided
+  Physics-Informed Neural Networks via Gaussian Mixture Models", arXiv:2605.19263.
 - Chuprov, Derkach, Efremenko, Kychkin, "Application of Physics-Informed Neural Networks
   for Solving the Inverse Advection-Diffusion Problem to Localize Pollution Sources",
   arXiv:2503.18849.

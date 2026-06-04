@@ -3,6 +3,7 @@ from __future__ import annotations
 import torch
 
 from .models import OriginPINN
+from .config import SeedConfig
 
 
 def pde_residual(
@@ -81,6 +82,29 @@ def seed_regularization_loss(
     match = torch.mean((predicted - source) ** 2)
     mass = predicted.mean() + 0.25 * source.mean()
     return match, mass
+
+
+def known_initial_condition_loss(
+    model: OriginPINN,
+    seed: SeedConfig,
+    n: int,
+    device: torch.device,
+) -> torch.Tensor:
+    uniform_n = n // 2
+    focused_n = n - uniform_n
+    xy_parts = []
+    if uniform_n > 0:
+        xy_parts.append(torch.rand(uniform_n, 2, device=device) * model.domain.box)
+    if focused_n > 0:
+        center = torch.tensor([seed.center_x, seed.center_y], dtype=torch.float32, device=device)
+        jitter = torch.randn(focused_n, 2, device=device) * (3.0 * seed.sigma)
+        xy_parts.append((center + jitter).clamp(0.0, model.domain.box))
+    xy = torch.cat(xy_parts, dim=0)
+    t0 = torch.zeros(len(xy), 1, device=device)
+    pred = model(xy, t0)
+    dist2 = (xy[:, 0:1] - seed.center_x) ** 2 + (xy[:, 1:2] - seed.center_y) ** 2
+    target = seed.amplitude * torch.exp(-dist2 / (2.0 * seed.sigma**2))
+    return torch.mean((pred - target) ** 2)
 
 
 def gradient_residual_loss(

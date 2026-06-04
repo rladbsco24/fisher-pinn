@@ -281,9 +281,10 @@ def save_training_diagnostics_figure(
         ("total", COLORS["blue"]),
         ("data", COLORS["olive"]),
         ("pde", COLORS["orange"]),
-        ("bc", COLORS["gold"]),
+        ("ic", COLORS["gold"]),
+        ("bc", COLORS["neutral"]),
         ("front_grad", COLORS["pink"]),
-        ("grad", COLORS["neutral"]),
+        ("grad", COLORS["blue_light"]),
     ]:
         epochs, values = _as_history_arrays(history, key)
         if len(values) and np.nanmax(values) > 0.0:
@@ -310,6 +311,7 @@ def save_training_diagnostics_figure(
 
     for key, color in [
         ("front_weight_mean", COLORS["blue"]),
+        ("residual_exponent", COLORS["gold"]),
         ("sparse", COLORS["orange"]),
         ("origin_error", COLORS["olive"]),
     ]:
@@ -322,19 +324,38 @@ def save_training_diagnostics_figure(
     axes[1, 0].set_ylabel("Value")
     axes[1, 0].legend(frameon=False, fontsize=8)
 
-    epochs, elapsed = _as_history_arrays(history, "elapsed_sec")
-    if len(elapsed):
-        axes[1, 1].plot(epochs, elapsed, marker="o", linewidth=1.2, color=COLORS["neutral"])
-    axes[1, 1].set_title("runtime accumulation", fontsize=9)
-    axes[1, 1].set_xlabel("Epoch")
-    axes[1, 1].set_ylabel("Seconds")
+    adaptive_keys = [
+        ("aw_data", COLORS["olive"]),
+        ("aw_pde", COLORS["orange"]),
+        ("aw_ic", COLORS["gold"]),
+        ("aw_bc", COLORS["neutral"]),
+        ("aw_front_grad", COLORS["pink"]),
+    ]
+    plotted_adaptive = False
+    for key, color in adaptive_keys:
+        epochs, values = _as_history_arrays(history, key)
+        if len(values):
+            axes[1, 1].plot(epochs, values, marker="o", linewidth=1.2, label=key.replace("aw_", ""), color=color)
+            plotted_adaptive = True
+    if plotted_adaptive:
+        axes[1, 1].set_title("adaptive loss multipliers", fontsize=9)
+        axes[1, 1].set_xlabel("Epoch")
+        axes[1, 1].set_ylabel("Multiplier")
+        axes[1, 1].legend(frameon=False, fontsize=7, ncol=2)
+    else:
+        epochs, elapsed = _as_history_arrays(history, "elapsed_sec")
+        if len(elapsed):
+            axes[1, 1].plot(epochs, elapsed, marker="o", linewidth=1.2, color=COLORS["neutral"])
+        axes[1, 1].set_title("runtime accumulation", fontsize=9)
+        axes[1, 1].set_xlabel("Epoch")
+        axes[1, 1].set_ylabel("Seconds")
 
     for ax in axes.ravel():
         _style_axis(ax, grid=True)
     _write_title(
         fig,
         "Training diagnostics",
-        "Loss, coefficient, front-weight, sparsity, and runtime traces recorded during PINN training.",
+        "Loss including known IC, residual curriculum, adaptive multipliers, coefficients, and front/sparsity diagnostics.",
         top=0.84,
     )
     fig.savefig(path, dpi=150)

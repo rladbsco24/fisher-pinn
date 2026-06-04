@@ -23,6 +23,7 @@ from .losses import (
     front_indicator_weights,
     front_local_gradient_residual_loss,
     gradient_residual_loss,
+    known_initial_condition_loss,
     pde_residual,
     pde_residual_terms,
     seed_regularization_loss,
@@ -92,6 +93,63 @@ def _weighted_data_mse(
     return torch.mean(weights * err_sq)
 
 
+class _AdaptiveLossBalancer:
+    """Relative-progress loss balancer for multi-term PINN objectives."""
+
+    def __init__(self, momentum: float, min_weight: float, max_weight: float, eps: float = 1.0e-8) -> None:
+        self.momentum = float(momentum)
+        self.min_weight = float(min_weight)
+        self.max_weight = float(max_weight)
+        self.eps = float(eps)
+        self.initial: dict[str, float] = {}
+        self.weights: dict[str, float] = {}
+
+    def update(self, losses: dict[str, torch.Tensor]) -> dict[str, float]:
+        if not losses:
+            return {}
+        ratios: dict[str, float] = {}
+        for name, loss in losses.items():
+            value = max(float(loss.detach().cpu()), self.eps)
+            self.initial.setdefault(name, value)
+            ratios[name] = value / max(self.initial[name], self.eps)
+        mean_ratio = max(float(np.mean(list(ratios.values()))), self.eps)
+        next_weights: dict[str, float] = {}
+        for name, ratio in ratios.items():
+            target = float(np.clip(ratio / mean_ratio, self.min_weight, self.max_weight))
+            previous = self.weights.get(name, target)
+            next_weights[name] = self.momentum * previous + (1.0 - self.momentum) * target
+        mean_weight = max(float(np.mean(list(next_weights.values()))), self.eps)
+        self.weights = {
+            name: float(np.clip(weight / mean_weight, self.min_weight, self.max_weight))
+            for name, weight in next_weights.items()
+        }
+        return dict(self.weights)
+
+
+def _residual_weight_exponent(cfg: ExperimentConfig, epoch: int) -> float:
+    if cfg.train.residual_curriculum_epochs <= 0:
+        return float(cfg.train.residual_weight_exponent_end)
+    progress = min(1.0, max(0.0, epoch / float(cfg.train.residual_curriculum_epochs)))
+    start = float(cfg.train.residual_weight_exponent_start)
+    end = float(cfg.train.residual_weight_exponent_end)
+    return start + progress * (end - start)
+
+
+def _combine_loss_terms(
+    terms: list[tuple[str, float, torch.Tensor]],
+    balancer: _AdaptiveLossBalancer | None,
+) -> tuple[torch.Tensor, dict[str, float]]:
+    active = [(name, weight, loss) for name, weight, loss in terms if weight > 0.0]
+    if not active:
+        device = terms[0][2].device if terms else torch.device("cpu")
+        return torch.zeros((), device=device), {}
+    adaptive = balancer.update({name: loss for name, _, loss in active}) if balancer is not None else {}
+    total = torch.zeros((), dtype=active[0][2].dtype, device=active[0][2].device)
+    for name, weight, loss in active:
+        total = total + float(weight) * float(adaptive.get(name, 1.0)) * loss
+    return total, adaptive
+
+
 def train_single(
     cfg: ExperimentConfig,
     observations_xyt: torch.Tensor,
@@ -124,6 +182,15 @@ def train_single(
     mask_kind = cfg.geo.mask_kind if cfg.geo.enabled else "box"
     sampler = SobolCollocation(cfg.domain.box, cfg.domain.t_end, device, seed=run_seed, mask_kind=mask_kind)
     decay = BalancedDecayWeights(cfg.train.time_bins, cfg.train.decay_beta, device)
+    loss_balancer = (
+        _AdaptiveLossBalancer(
+            cfg.train.adaptive_loss_momentum,
+            cfg.train.adaptive_loss_min,
+            cfg.train.adaptive_loss_max,
+        )
+        if cfg.train.adaptive_loss_balancing
+        else None
+    )
     history: list[dict[str, float]] = []
     start = time.time()
 
@@ -135,13 +202,14 @@ def train_single(
         xy_col, t_col = sampler.sample(cfg.train.collocation_points)
         residual, u_col, u_xy_col, _, _ = pde_residual_terms(model, xy_col, t_col)
         residual_sq = residual.pow(2).flatten()
+        residual_exponent = _residual_weight_exponent(cfg, epoch)
         front_weights = front_indicator_weights(
             u_col,
             u_xy_col,
             cfg.weights.front_pde_alpha,
             cfg.weights.front_pde_gradient,
         ).flatten()
-        point_weights = bounded_residual_weights(residual_sq) * front_weights
+        point_weights = bounded_residual_weights(residual_sq, exponent=residual_exponent) * front_weights
         weighted_residual_sq = residual_sq * point_weights
         bins = _bin_losses(weighted_residual_sq, t_col, cfg.train.time_bins, cfg.domain.t_end)
         time_weights = causal_weights(bins, cfg.train.causal_eps) * decay.update(bins)
@@ -151,6 +219,10 @@ def train_single(
             bc_loss = boundary_neumann_loss(model, cfg.train.boundary_points, device)
         else:
             bc_loss = torch.zeros((), device=device)
+        if cfg.weights.initial_condition > 0.0 and cfg.train.seed_points > 0:
+            ic_loss = known_initial_condition_loss(model, cfg.seed, cfg.train.seed_points, device)
+        else:
+            ic_loss = torch.zeros((), device=device)
         if (cfg.weights.seed_match > 0.0 or cfg.weights.seed_mass > 0.0) and cfg.train.seed_points > 0:
             seed_match, seed_mass = seed_regularization_loss(model, cfg.train.seed_points, device)
         else:
@@ -184,17 +256,21 @@ def train_single(
             front_grad_loss = torch.zeros((), device=device)
         sparse_loss = model.sparse_last_layer_l1() if cfg.weights.sparse > 0.0 else torch.zeros((), device=device)
 
-        total = (
-            cfg.weights.data * data_loss
-            + cfg.weights.pde * pde_loss_value
-            + cfg.weights.boundary * bc_loss
-            + cfg.weights.seed_match * seed_match
-            + cfg.weights.seed_mass * seed_mass
-            + cfg.weights.source_anchor * source_anchor
-            + cfg.weights.shooting * shooting_loss
-            + cfg.weights.gradient * grad_loss
-            + cfg.weights.front_gradient * front_grad_loss
-            + cfg.weights.sparse * sparse_loss
+        total, adaptive_weights = _combine_loss_terms(
+            [
+                ("data", cfg.weights.data, data_loss),
+                ("pde", cfg.weights.pde, pde_loss_value),
+                ("ic", cfg.weights.initial_condition, ic_loss),
+                ("bc", cfg.weights.boundary, bc_loss),
+                ("seed_match", cfg.weights.seed_match, seed_match),
+                ("seed_mass", cfg.weights.seed_mass, seed_mass),
+                ("source_anchor", cfg.weights.source_anchor, source_anchor),
+                ("shooting", cfg.weights.shooting, shooting_loss),
+                ("grad", cfg.weights.gradient, grad_loss),
+                ("front_grad", cfg.weights.front_gradient, front_grad_loss),
+                ("sparse", cfg.weights.sparse, sparse_loss),
+            ],
+            loss_balancer,
         )
         total.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
@@ -216,6 +292,7 @@ def train_single(
                 "total": float(total.detach().cpu()),
                 "data": float(data_loss.detach().cpu()),
                 "pde": float(pde_loss_value.detach().cpu()),
+                "ic": float(ic_loss.detach().cpu()),
                 "bc": float(bc_loss.detach().cpu()),
                 "seed_match": float(seed_match.detach().cpu()),
                 "seed_mass": float(seed_mass.detach().cpu()),
@@ -224,6 +301,7 @@ def train_single(
                 "grad": float(grad_loss.detach().cpu()),
                 "front_grad": float(front_grad_loss.detach().cpu()),
                 "sparse": float(sparse_loss.detach().cpu()),
+                "residual_exponent": float(residual_exponent),
                 "front_weight_mean": float(front_weights.detach().mean().cpu()),
                 "diffusion": float(model.pde.diffusion().detach().cpu()),
                 "reaction": float(model.pde.reaction().detach().cpu()),
@@ -232,11 +310,14 @@ def train_single(
                 "origin_error": origin_error(center, cfg.seed),
                 "elapsed_sec": time.time() - start,
             }
+            for name, value in adaptive_weights.items():
+                row[f"aw_{name}"] = float(value)
             history.append(row)
             print(
                 f"seed={run_seed} ep={epoch:5d} "
                 f"loss={row['total']:.3e} data={row['data']:.2e} "
-                f"pde={row['pde']:.2e} origin_err={row['origin_error']:.3f}"
+                f"pde={row['pde']:.2e} rw_exp={row['residual_exponent']:.2f} "
+                f"origin_err={row['origin_error']:.3f}"
             )
 
     if cfg.train.adam_to_lbfgs and cfg.train.lbfgs_steps > 0:
@@ -337,11 +418,20 @@ def _lbfgs_polish(
             cfg.weights.front_pde_alpha,
             cfg.weights.front_pde_gradient,
         )
-        pde_loss_value = (front_weights * residual.pow(2)).mean()
+        residual_sq = residual.pow(2).flatten()
+        point_weights = bounded_residual_weights(
+            residual_sq,
+            exponent=cfg.train.residual_weight_exponent_end,
+        ) * front_weights.flatten()
+        pde_loss_value = torch.mean(point_weights * residual_sq)
         if cfg.weights.boundary > 0.0 and cfg.train.boundary_points > 0:
             bc_loss = boundary_neumann_loss(model, cfg.train.boundary_points, device)
         else:
             bc_loss = torch.zeros((), device=device)
+        if cfg.weights.initial_condition > 0.0 and cfg.train.seed_points > 0:
+            ic_loss = known_initial_condition_loss(model, cfg.seed, cfg.train.seed_points, device)
+        else:
+            ic_loss = torch.zeros((), device=device)
         if (cfg.weights.seed_match > 0.0 or cfg.weights.seed_mass > 0.0) and cfg.train.seed_points > 0:
             seed_match, seed_mass = seed_regularization_loss(model, cfg.train.seed_points, device)
         else:
@@ -350,6 +440,7 @@ def _lbfgs_polish(
         loss = (
             cfg.weights.data * data_loss
             + cfg.weights.pde * pde_loss_value
+            + cfg.weights.initial_condition * ic_loss
             + cfg.weights.boundary * bc_loss
             + cfg.weights.seed_match * seed_match
             + cfg.weights.seed_mass * seed_mass

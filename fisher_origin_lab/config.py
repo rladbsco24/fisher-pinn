@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -66,6 +66,7 @@ class ModelConfig:
 class LossWeights:
     data: float = 60.0
     pde: float = 1.0
+    initial_condition: float = 0.0
     boundary: float = 0.5
     seed_match: float = 4.0
     seed_mass: float = 0.25
@@ -104,6 +105,13 @@ class TrainConfig:
     shooting_steps: int = 80
     shooting_points: int = 512
     shooting_prefit_steps: int = 40
+    residual_weight_exponent_start: float = 0.5
+    residual_weight_exponent_end: float = 0.5
+    residual_curriculum_epochs: int = 0
+    adaptive_loss_balancing: bool = False
+    adaptive_loss_momentum: float = 0.9
+    adaptive_loss_min: float = 0.25
+    adaptive_loss_max: float = 4.0
     print_every: int = 100
     adam_to_lbfgs: bool = False
     lbfgs_steps: int = 100
@@ -160,6 +168,7 @@ class ExperimentConfig:
             weights=LossWeights(
                 data=self.weights.data,
                 pde=self.weights.pde,
+                initial_condition=self.weights.initial_condition,
                 boundary=self.weights.boundary,
                 seed_match=self.weights.seed_match,
                 seed_mass=self.weights.seed_mass,
@@ -190,6 +199,17 @@ class ExperimentConfig:
                 shooting_steps=80,
                 shooting_points=256,
                 shooting_prefit_steps=25,
+                residual_weight_exponent_start=self.train.residual_weight_exponent_start,
+                residual_weight_exponent_end=self.train.residual_weight_exponent_end,
+                residual_curriculum_epochs=(
+                    min(self.train.residual_curriculum_epochs, 60)
+                    if self.train.residual_curriculum_epochs > 0
+                    else 0
+                ),
+                adaptive_loss_balancing=self.train.adaptive_loss_balancing,
+                adaptive_loss_momentum=self.train.adaptive_loss_momentum,
+                adaptive_loss_min=self.train.adaptive_loss_min,
+                adaptive_loss_max=self.train.adaptive_loss_max,
                 print_every=30,
                 adam_to_lbfgs=False,
             ),
@@ -236,6 +256,7 @@ class ExperimentConfig:
             weights=LossWeights(
                 data=1.0,
                 pde=1.0,
+                initial_condition=0.0,
                 boundary=0.0,
                 seed_match=0.0,
                 seed_mass=0.0,
@@ -282,6 +303,7 @@ class ExperimentConfig:
             weights=LossWeights(
                 data=1.0,
                 pde=1.0,
+                initial_condition=10.0,
                 boundary=0.2,
                 seed_match=0.0,
                 seed_mass=0.0,
@@ -295,7 +317,16 @@ class ExperimentConfig:
                 sparse=1.0e-5,
             ),
             warm_start=base.warm_start,
-            train=base.train,
+            train=replace(
+                base.train,
+                residual_weight_exponent_start=0.0,
+                residual_weight_exponent_end=0.5,
+                residual_curriculum_epochs=max(1, base.train.epochs // 4),
+                adaptive_loss_balancing=True,
+                adaptive_loss_momentum=0.9,
+                adaptive_loss_min=0.33,
+                adaptive_loss_max=3.0,
+            ),
             ensemble=base.ensemble,
             base_seed=base.base_seed,
             out_dir=base.out_dir,
