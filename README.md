@@ -98,13 +98,19 @@ python scripts\run_inverse_origin.py --quick --geo-spectral-forward --out-dir ru
 What changes:
 
 - Spatial Fourier features are used as positional encoding, not as a periodic boundary
-  assumption.
+  assumption. The forward preset now uses a lower Fourier scale because the target
+  solution is a smooth diffusive Fisher-KPP front; high-frequency features caused
+  sparse-observation blob artifacts.
 - Square-domain geo features encode boundary distance and simple interior geometry.
   The current synthetic problem treats the whole square as valid land; the sampler has a
   mask interface so a real land mask can replace `box` later.
-- A known initial-condition loss enforces the same Gaussian seed used by the reference
-  solver. Half of the IC points are sampled near the seed so the narrow initial pulse is
-  not overwhelmed by zero background.
+- A hard known-initial-condition ansatz makes `u(x,y,0)` exactly equal to the Gaussian
+  seed. The known-IC loss remains in the objective and diagnostics, but for this preset it
+  should be near numerical zero because the constraint is structural.
+- Seed-centered radial/front features give the network coordinates aligned with the
+  initial seed and expected Fisher-KPP front radius.
+- A KPP front-speed envelope suppresses nonphysical low-amplitude background far outside
+  the reachable front region.
 - A Neumann boundary loss is enabled.
 - PDE residuals are weighted toward infection-front regions using `u(1-u)` and
   `|grad u|`.
@@ -113,6 +119,10 @@ What changes:
 - Adaptive relative loss balancing updates multipliers from each term's relative training
   progress. This is a lightweight Colab-friendly alternative to full per-term gradient
   surgery while targeting the same multi-objective imbalance issue.
+- Already-satisfied hard constraints and sparse regularization are excluded from adaptive
+  balancing so they cannot down-weight the active PDE/front losses.
+- The training loop restores the best validation-observation checkpoint, which prevents
+  longer runs from drifting after residual-adaptive refreshes.
 - Residual-adaptive collocation uses a combined residual/front score.
 - Front-local gPINN loss penalizes residual gradients only near the active front.
 - Last-layer L1 regularization discourages overusing the expanded spectral/geo feature

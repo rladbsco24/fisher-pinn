@@ -139,11 +139,27 @@ def _combine_loss_terms(
     terms: list[tuple[str, float, torch.Tensor]],
     balancer: _AdaptiveLossBalancer | None,
 ) -> tuple[torch.Tensor, dict[str, float]]:
+    balanceable = {
+        "data",
+        "pde",
+        "bc",
+        "seed_match",
+        "seed_mass",
+        "source_anchor",
+        "shooting",
+        "grad",
+        "front_grad",
+    }
     active = [(name, weight, loss) for name, weight, loss in terms if weight > 0.0]
     if not active:
         device = terms[0][2].device if terms else torch.device("cpu")
         return torch.zeros((), device=device), {}
-    adaptive = balancer.update({name: loss for name, _, loss in active}) if balancer is not None else {}
+    adaptive_losses = {
+        name: loss
+        for name, _, loss in active
+        if name in balanceable and float(loss.detach().cpu()) > 1.0e-10
+    }
+    adaptive = balancer.update(adaptive_losses) if balancer is not None else {}
     total = torch.zeros((), dtype=active[0][2].dtype, device=active[0][2].device)
     for name, weight, loss in active:
         total = total + float(weight) * float(adaptive.get(name, 1.0)) * loss
@@ -154,6 +170,8 @@ def train_single(
     cfg: ExperimentConfig,
     observations_xyt: torch.Tensor,
     observations_values: torch.Tensor,
+    validation_xyt: torch.Tensor | None,
+    validation_values: torch.Tensor | None,
     run_seed: int,
     device: torch.device,
 ) -> SingleRunResult:
@@ -192,6 +210,9 @@ def train_single(
         else None
     )
     history: list[dict[str, float]] = []
+    best_validation_loss = float("inf")
+    best_state: dict[str, torch.Tensor] | None = None
+    best_epoch = 0
     start = time.time()
 
     for epoch in range(1, cfg.train.epochs + 1):
@@ -286,6 +307,29 @@ def train_single(
             )
 
         if epoch == 1 or epoch % cfg.train.print_every == 0 or epoch == cfg.train.epochs:
+            validation_loss = None
+            should_validate = (
+                validation_xyt is not None
+                and validation_values is not None
+                and len(validation_xyt) > 0
+                and (
+                    epoch == 1
+                    or epoch == cfg.train.epochs
+                    or cfg.train.validation_every <= 0
+                    or epoch % cfg.train.validation_every == 0
+                )
+            )
+            if should_validate:
+                with torch.no_grad():
+                    validation_pred = model(validation_xyt[:, :2], validation_xyt[:, 2:3])
+                    validation_loss = float(torch.mean((validation_pred - validation_values) ** 2).detach().cpu())
+                if cfg.train.restore_best_validation and validation_loss < best_validation_loss:
+                    best_validation_loss = validation_loss
+                    best_epoch = epoch
+                    best_state = {
+                        name: value.detach().cpu().clone()
+                        for name, value in model.state_dict().items()
+                    }
             center = tensor_center(model)
             row = {
                 "epoch": float(epoch),
@@ -310,6 +354,10 @@ def train_single(
                 "origin_error": origin_error(center, cfg.seed),
                 "elapsed_sec": time.time() - start,
             }
+            if validation_loss is not None:
+                row["validation_data"] = validation_loss
+                row["best_validation_data"] = best_validation_loss
+                row["best_validation_epoch"] = float(best_epoch)
             for name, value in adaptive_weights.items():
                 row[f"aw_{name}"] = float(value)
             history.append(row)
@@ -322,6 +370,10 @@ def train_single(
 
     if cfg.train.adam_to_lbfgs and cfg.train.lbfgs_steps > 0:
         _lbfgs_polish(model, cfg, observations_xyt, observations_values, sampler, device)
+
+    if best_state is not None:
+        model.load_state_dict({name: value.to(device) for name, value in best_state.items()})
+        print(f"restored best validation checkpoint: epoch={best_epoch} mse={best_validation_loss:.3e}")
 
     center = tensor_center(model)
     return SingleRunResult(
@@ -487,7 +539,7 @@ def run_experiment(cfg: ExperimentConfig) -> dict[str, object]:
 
     runs = []
     for member in range(cfg.ensemble):
-        runs.append(train_single(cfg, obs_xyt, obs_values, cfg.base_seed + member, device))
+        runs.append(train_single(cfg, obs_xyt, obs_values, val_xyt, val_values, cfg.base_seed + member, device))
 
     best = min(runs, key=lambda r: r.origin_error)
     with torch.no_grad():

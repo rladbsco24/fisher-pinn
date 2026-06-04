@@ -143,6 +143,9 @@ def test_geo_spectral_forward_profile_extends_korea_setup() -> None:
     assert cfg.model.use_geo_features is True
     assert cfg.model.spatial_fourier_only is True
     assert cfg.model.use_source_envelope is False
+    assert cfg.model.use_seed_front_features is True
+    assert cfg.model.hard_initial_condition is True
+    assert cfg.model.use_kpp_front_envelope is True
     assert cfg.weights.initial_condition > 0.0
     assert cfg.weights.boundary > 0.0
     assert cfg.weights.front_pde_alpha > 0.0
@@ -225,6 +228,31 @@ def test_known_initial_condition_loss_is_finite() -> None:
     assert torch.isfinite(loss)
 
 
+def test_hard_initial_condition_matches_seed_profile() -> None:
+    domain = DomainConfig(grid=25, truth_steps=80)
+    seed = SeedConfig()
+    model = OriginPINN(
+        domain,
+        PDEConfig(include_advection=False),
+        seed,
+        ModelConfig(
+            hidden=16,
+            layers=1,
+            fourier_features=8,
+            use_source_envelope=False,
+            hard_initial_condition=True,
+            use_kpp_front_envelope=True,
+        ),
+    )
+    xy = torch.tensor([[seed.center_x, seed.center_y], [0.0, 0.0], [0.5, 0.5]], dtype=torch.float32)
+    t0 = torch.zeros(len(xy), 1)
+    pred = model(xy, t0).detach()
+    center = torch.tensor([seed.center_x, seed.center_y], dtype=torch.float32).view(1, 2)
+    dist2 = ((xy - center) ** 2).sum(dim=-1, keepdim=True)
+    target = seed.amplitude * torch.exp(-dist2 / (2.0 * seed.sigma**2))
+    assert torch.allclose(pred, target, atol=1.0e-6)
+
+
 def test_visualization_exports_are_created(tmp_path) -> None:
     domain = DomainConfig(grid=21, truth_steps=60)
     cfg = ExperimentConfig(domain=domain).geo_spectral_forward().quick()
@@ -238,6 +266,7 @@ def test_visualization_exports_are_created(tmp_path) -> None:
             "epoch": 1.0,
             "total": 1.0,
             "data": 0.2,
+            "validation_data": 0.25,
             "pde": 0.5,
             "bc": 0.1,
             "ic": 0.2,

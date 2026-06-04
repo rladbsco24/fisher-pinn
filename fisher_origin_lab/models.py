@@ -36,6 +36,26 @@ def square_geo_features(xy: torch.Tensor, box: float) -> torch.Tensor:
     return torch.cat([distances, boundary_distance, radius, interior_mode, interaction], dim=-1)
 
 
+def seed_front_features(
+    xy: torch.Tensor,
+    t: torch.Tensor,
+    center: torch.Tensor,
+    sigma: float,
+    diffusion: float,
+    front_speed: float,
+    box: float,
+) -> torch.Tensor:
+    center = center.to(device=xy.device, dtype=xy.dtype).view(1, 2)
+    dist = torch.linalg.norm(xy - center, dim=-1, keepdim=True)
+    speed = torch.as_tensor(front_speed, dtype=xy.dtype, device=xy.device)
+    sigma_t = torch.sqrt(torch.as_tensor(sigma**2, dtype=xy.dtype, device=xy.device) + 2.0 * diffusion * t)
+    expected_front = 3.0 * sigma + speed * t
+    signed_front_distance = (expected_front - dist) / box
+    gaussian_hint = torch.exp(-(dist**2) / (2.0 * sigma_t.clamp_min(1.0e-4) ** 2))
+    radial_decay = torch.exp(-dist / max(3.0 * sigma, 1.0e-4))
+    return torch.cat([dist / box, signed_front_distance, gaussian_hint, radial_decay], dim=-1)
+
+
 class GatedMLP(nn.Module):
     def __init__(self, in_dim: int, hidden: int, layers: int, out_dim: int) -> None:
         super().__init__()
@@ -121,10 +141,22 @@ class OriginPINN(nn.Module):
         self.use_source_envelope = bool(model.use_source_envelope)
         self.use_geo_features = bool(model.use_geo_features)
         self.spatial_fourier_only = bool(model.spatial_fourier_only)
+        self.use_seed_front_features = bool(model.use_seed_front_features)
+        self.hard_initial_condition = bool(model.hard_initial_condition)
+        self.initial_envelope_tau = float(model.initial_envelope_tau)
+        self.use_kpp_front_envelope = bool(model.use_kpp_front_envelope)
+        self.front_envelope_margin = float(model.front_envelope_margin)
+        self.front_envelope_width = float(model.front_envelope_width)
+        self.seed_sigma = float(seed.sigma)
+        self.seed_amplitude = float(seed.amplitude)
+        self.reference_diffusion = float(pde.diffusion)
+        self.reference_front_speed = float(2.0 * math.sqrt(max(pde.diffusion, 1.0e-12) * max(pde.reaction, 1.0e-12)))
+        self.register_buffer("seed_center", torch.tensor([seed.center_x, seed.center_y], dtype=torch.float32))
         fourier_dim = 2 if self.spatial_fourier_only else 3
         self.features = FourierFeatures(fourier_dim, model.fourier_features, model.fourier_sigma)
         geo_dim = 8 if self.use_geo_features else 0
-        self.mlp = GatedMLP(2 * model.fourier_features + 3 + geo_dim, model.hidden, model.layers, 1)
+        seed_front_dim = 4 if self.use_seed_front_features else 0
+        self.mlp = GatedMLP(2 * model.fourier_features + 3 + geo_dim + seed_front_dim, model.hidden, model.layers, 1)
         self.source = SourceHead(domain, seed)
         self.pde = PDEParameters(pde, model)
 
@@ -134,8 +166,26 @@ class OriginPINN(nn.Module):
         pieces = [xyt, self.features(spectral_input)]
         if self.use_geo_features:
             pieces.append(square_geo_features(xy, self.domain.box))
+        if self.use_seed_front_features:
+            pieces.append(
+                seed_front_features(
+                    xy,
+                    t,
+                    self.seed_center,
+                    self.seed_sigma,
+                    self.reference_diffusion,
+                    self.reference_front_speed,
+                    self.domain.box,
+                )
+            )
         z = torch.cat(pieces, dim=-1)
         neural_field = torch.sigmoid(self.mlp(z))
+        if self.use_kpp_front_envelope:
+            neural_field = self._front_envelope(xy, t) * neural_field
+        if self.hard_initial_condition:
+            initial_field = self._known_initial_profile(xy).clamp(0.0, 1.0)
+            blend = torch.exp(-t / (self.initial_envelope_tau * self.domain.t_end + 1.0e-8))
+            return blend * initial_field + (1.0 - blend) * neural_field
         if not self.use_source_envelope:
             return neural_field
         source_field = self.source.profile(xy).clamp(0.0, 1.0)
@@ -145,6 +195,21 @@ class OriginPINN(nn.Module):
         # as a post-hoc argmax.
         blend = torch.exp(-t / (0.08 * self.domain.t_end + 1.0e-8))
         return blend * source_field + (1.0 - blend) * neural_field
+
+    def _known_initial_profile(self, xy: torch.Tensor) -> torch.Tensor:
+        center = self.seed_center.to(device=xy.device, dtype=xy.dtype).view(1, 2)
+        sigma = torch.as_tensor(self.seed_sigma, dtype=xy.dtype, device=xy.device)
+        dist2 = ((xy - center) ** 2).sum(dim=-1, keepdim=True)
+        return self.seed_amplitude * torch.exp(-dist2 / (2.0 * sigma**2))
+
+    def _front_envelope(self, xy: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        center = self.seed_center.to(device=xy.device, dtype=xy.dtype).view(1, 2)
+        radius = torch.linalg.norm(xy - center, dim=-1, keepdim=True)
+        speed = torch.as_tensor(self.reference_front_speed, dtype=xy.dtype, device=xy.device)
+        base_radius = 3.0 * self.seed_sigma + self.front_envelope_margin
+        support_radius = base_radius + speed * t
+        width = max(self.front_envelope_width, 1.0e-4)
+        return torch.sigmoid((support_radius - radius) / width)
 
     def sparse_last_layer_l1(self) -> torch.Tensor:
         return self.mlp.out_layer.weight.abs().mean()

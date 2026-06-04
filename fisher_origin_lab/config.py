@@ -60,6 +60,12 @@ class ModelConfig:
     use_source_envelope: bool = True
     use_geo_features: bool = False
     spatial_fourier_only: bool = False
+    use_seed_front_features: bool = False
+    hard_initial_condition: bool = False
+    initial_envelope_tau: float = 0.06
+    use_kpp_front_envelope: bool = False
+    front_envelope_margin: float = 0.08
+    front_envelope_width: float = 0.04
 
 
 @dataclass(frozen=True)
@@ -112,6 +118,8 @@ class TrainConfig:
     adaptive_loss_momentum: float = 0.9
     adaptive_loss_min: float = 0.25
     adaptive_loss_max: float = 4.0
+    validation_every: int = 50
+    restore_best_validation: bool = True
     print_every: int = 100
     adam_to_lbfgs: bool = False
     lbfgs_steps: int = 100
@@ -164,6 +172,12 @@ class ExperimentConfig:
                 use_source_envelope=self.model.use_source_envelope,
                 use_geo_features=self.model.use_geo_features,
                 spatial_fourier_only=self.model.spatial_fourier_only,
+                use_seed_front_features=self.model.use_seed_front_features,
+                hard_initial_condition=self.model.hard_initial_condition,
+                initial_envelope_tau=self.model.initial_envelope_tau,
+                use_kpp_front_envelope=self.model.use_kpp_front_envelope,
+                front_envelope_margin=self.model.front_envelope_margin,
+                front_envelope_width=self.model.front_envelope_width,
             ),
             weights=LossWeights(
                 data=self.weights.data,
@@ -210,6 +224,8 @@ class ExperimentConfig:
                 adaptive_loss_momentum=self.train.adaptive_loss_momentum,
                 adaptive_loss_min=self.train.adaptive_loss_min,
                 adaptive_loss_max=self.train.adaptive_loss_max,
+                validation_every=30,
+                restore_best_validation=self.train.restore_best_validation,
                 print_every=30,
                 adam_to_lbfgs=False,
             ),
@@ -252,6 +268,12 @@ class ExperimentConfig:
                 use_source_envelope=False,
                 use_geo_features=self.model.use_geo_features,
                 spatial_fourier_only=self.model.spatial_fourier_only,
+                use_seed_front_features=self.model.use_seed_front_features,
+                hard_initial_condition=False,
+                initial_envelope_tau=self.model.initial_envelope_tau,
+                use_kpp_front_envelope=False,
+                front_envelope_margin=self.model.front_envelope_margin,
+                front_envelope_width=self.model.front_envelope_width,
             ),
             weights=LossWeights(
                 data=1.0,
@@ -290,7 +312,7 @@ class ExperimentConfig:
             geo=GeoConfig(enabled=True, mask_kind="box"),
             model=ModelConfig(
                 fourier_features=base.model.fourier_features,
-                fourier_sigma=base.model.fourier_sigma,
+                fourier_sigma=1.0,
                 hidden=base.model.hidden,
                 layers=base.model.layers,
                 learn_diffusion=True,
@@ -299,6 +321,12 @@ class ExperimentConfig:
                 use_source_envelope=False,
                 use_geo_features=True,
                 spatial_fourier_only=True,
+                use_seed_front_features=True,
+                hard_initial_condition=True,
+                initial_envelope_tau=0.06,
+                use_kpp_front_envelope=True,
+                front_envelope_margin=0.08,
+                front_envelope_width=0.04,
             ),
             weights=LossWeights(
                 data=1.0,
