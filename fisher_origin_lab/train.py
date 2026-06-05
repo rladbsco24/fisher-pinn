@@ -98,6 +98,27 @@ def _weighted_data_mse(
     return torch.mean(weights * err_sq)
 
 
+def _sample_rk4_teacher_points(
+    rk4_truth,
+    cfg: ExperimentConfig,
+    n: int,
+    rng: np.random.Generator,
+) -> tuple[np.ndarray, np.ndarray]:
+    candidate_n = max(4 * n, n + 1024)
+    xyt = np.empty((candidate_n, 3), dtype=np.float64)
+    xyt[:, 0] = rng.uniform(0.0, cfg.domain.box, size=candidate_n)
+    xyt[:, 1] = rng.uniform(0.0, cfg.domain.box, size=candidate_n)
+    xyt[:, 2] = rng.uniform(0.0, cfg.domain.t_end, size=candidate_n)
+    values = interpolate_truth(rk4_truth, xyt)
+    activity = np.clip(values, 0.0, 1.0) * (1.0 - np.clip(values, 0.0, 1.0))
+    low_front = ((values > 0.02) & (values < 0.30)).astype(np.float64)
+    weights = 0.05 + activity + 0.50 * low_front
+    weights = weights / np.sum(weights)
+    replace_points = n > candidate_n
+    idx = rng.choice(candidate_n, size=n, replace=replace_points, p=weights)
+    return xyt[idx].astype(np.float32), values[idx, None].astype(np.float32)
+
+
 def _front_geometry_summary(
     truth,
     model: OriginPINN,
@@ -199,6 +220,7 @@ def _combine_loss_terms(
 ) -> tuple[torch.Tensor, dict[str, float]]:
     balanceable = {
         "data",
+        "rk4_teacher",
         "pde",
         "bc",
         "seed_match",
@@ -233,6 +255,8 @@ def train_single(
     observations_values: torch.Tensor,
     validation_xyt: torch.Tensor | None,
     validation_values: torch.Tensor | None,
+    teacher_xyt: torch.Tensor | None,
+    teacher_values: torch.Tensor | None,
     run_seed: int,
     device: torch.device,
 ) -> SingleRunResult:
@@ -280,6 +304,22 @@ def train_single(
         optimizer.zero_grad()
         pred = model(observations_xyt[:, :2], observations_xyt[:, 2:3])
         data_loss = _weighted_data_mse(pred, observations_values, cfg.weights.data_density_gain)
+        if (
+            cfg.weights.rk4_teacher > 0.0
+            and teacher_xyt is not None
+            and teacher_values is not None
+            and len(teacher_xyt) > 0
+        ):
+            teacher_batch = min(max(1, cfg.train.rk4_teacher_batch), len(teacher_xyt))
+            teacher_idx = torch.randint(0, len(teacher_xyt), (teacher_batch,), device=device)
+            teacher_pred = model(teacher_xyt[teacher_idx, :2], teacher_xyt[teacher_idx, 2:3])
+            rk4_teacher_loss = _weighted_data_mse(
+                teacher_pred,
+                teacher_values[teacher_idx],
+                cfg.weights.data_density_gain,
+            )
+        else:
+            rk4_teacher_loss = torch.zeros((), device=device)
 
         xy_col, t_col = sampler.sample(cfg.train.collocation_points)
         residual, u_col, u_xy_col, _, _ = pde_residual_terms(model, xy_col, t_col)
@@ -395,6 +435,7 @@ def train_single(
         total, adaptive_weights = _combine_loss_terms(
             [
                 ("data", cfg.weights.data, data_loss),
+                ("rk4_teacher", cfg.weights.rk4_teacher, rk4_teacher_loss),
                 ("pde", cfg.weights.pde, pde_loss_value),
                 ("ic", cfg.weights.initial_condition, ic_loss),
                 ("bc", cfg.weights.boundary, bc_loss),
@@ -458,6 +499,7 @@ def train_single(
                 "epoch": float(epoch),
                 "total": float(total.detach().cpu()),
                 "data": float(data_loss.detach().cpu()),
+                "rk4_teacher": float(rk4_teacher_loss.detach().cpu()),
                 "pde": float(pde_loss_value.detach().cpu()),
                 "ic": float(ic_loss.detach().cpu()),
                 "bc": float(bc_loss.detach().cpu()),
@@ -706,6 +748,22 @@ def run_experiment(cfg: ExperimentConfig) -> dict[str, object]:
     )
     obs_xyt, obs_values = observation_tensors(train_observations, device)
     val_xyt, val_values = observation_tensors(validation_observations, device)
+    teacher_xyt = None
+    teacher_values = None
+    rk4_truth = None
+    rk4_runtime_sec = None
+    if cfg.weights.rk4_teacher > 0.0 and cfg.train.rk4_teacher_pool > 0 and cfg.train.rk4_teacher_batch > 0:
+        rk4_start = time.time()
+        rk4_truth = forward_fisher_kpp_rk4(cfg.domain, cfg.pde, cfg.seed)
+        rk4_runtime_sec = time.time() - rk4_start
+        teacher_np, teacher_values_np = _sample_rk4_teacher_points(
+            rk4_truth,
+            cfg,
+            cfg.train.rk4_teacher_pool,
+            rng,
+        )
+        teacher_xyt = torch.tensor(teacher_np, dtype=torch.float32, device=device)
+        teacher_values = torch.tensor(teacher_values_np, dtype=torch.float32, device=device)
 
     baseline_results: list[BaselineResult] = [
         observation_centroid_baseline(train_observations, cfg.seed),
@@ -726,7 +784,19 @@ def run_experiment(cfg: ExperimentConfig) -> dict[str, object]:
 
     runs = []
     for member in range(cfg.ensemble):
-        runs.append(train_single(cfg, obs_xyt, obs_values, val_xyt, val_values, cfg.base_seed + member, device))
+        runs.append(
+            train_single(
+                cfg,
+                obs_xyt,
+                obs_values,
+                val_xyt,
+                val_values,
+                teacher_xyt,
+                teacher_values,
+                cfg.base_seed + member,
+                device,
+            )
+        )
 
     best = min(runs, key=lambda r: r.origin_error)
     with torch.no_grad():
@@ -741,9 +811,12 @@ def run_experiment(cfg: ExperimentConfig) -> dict[str, object]:
     _, final_pred = predict_field(best.model, cfg.domain.t_end, n=96, device=device)
     pinn_final_time_relative_l2 = relative_l2(final_pred, final_truth)
     front_geometry = _front_geometry_summary(truth, best.model, cfg, device)
-    rk4_start = time.time()
-    rk4_truth = forward_fisher_kpp_rk4(cfg.domain, cfg.pde, cfg.seed)
-    rk4_runtime_sec = time.time() - rk4_start
+    if rk4_truth is None:
+        rk4_start = time.time()
+        rk4_truth = forward_fisher_kpp_rk4(cfg.domain, cfg.pde, cfg.seed)
+        rk4_runtime_sec = time.time() - rk4_start
+    else:
+        rk4_runtime_sec = float(rk4_runtime_sec or 0.0)
     _, final_rk4 = truth_field_at(rk4_truth, cfg.domain.t_end, n=96)
     rk4_final_time_relative_l2 = relative_l2(final_rk4, final_truth)
     pinn_vs_rk4_final_relative_l2 = relative_l2(final_pred, final_rk4)

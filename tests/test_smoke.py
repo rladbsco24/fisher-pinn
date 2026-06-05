@@ -314,6 +314,7 @@ def test_forward_ablation_cases_report_front_metrics() -> None:
     assert "korea_style_forward" in names
     assert "geo_front_area" in names
     assert "geo_no_tw_front_area" in names
+    assert "geo_rk4_teacher_front_area" in names
     assert "geo_nif_front_area" in names
     assert "geo_gated_front_area" in names
     assert any(case["cfg"].weights.leading_edge_area > 0.0 for case in cases)
@@ -321,6 +322,7 @@ def test_forward_ablation_cases_report_front_metrics() -> None:
     assert any(case["cfg"].model.architecture == "pirate" for case in cases)
     assert any(case["cfg"].model.architecture == "gated_mlp" for case in cases)
     assert any(case["cfg"].model.use_traveling_wave_features is False for case in cases)
+    assert any(case["cfg"].weights.rk4_teacher > 0.0 for case in cases)
     summary = aggregate_forward_ablation(
         [
             {

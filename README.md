@@ -132,6 +132,11 @@ What changes:
 - RAR anchor refresh now uses a normalized front-aware monitor combining residual
   magnitude, `|grad u|`, and logistic activity `u(1-u)`. This follows adaptive sampling
   work for sharp PDE layers where residual-only refinement can miss moving fronts.
+- A solver-assisted `geo_rk4_teacher_front_area` ablation adds RK4 pseudo-labels sampled
+  across the full space-time domain, with extra probability mass near the low-density
+  leading edge. This follows supervised/pretraining strategies for evolution-PDE PINNs.
+  It is deliberately not the default pure-PINN profile because it uses a numerical
+  teacher in addition to the PDE and sparse observations.
 - A moving-front speed loss enforces the Fisher-KPP traveling-front relation
   `u_t + (2 sqrt(D r) + v.n) grad(u).n = 0` on active level-set bands. This makes the
   front move like a Fisher-KPP front instead of merely fitting late-time blobs. The
@@ -249,6 +254,15 @@ weaker on this setup (`final_time_relative_l2 = 0.5401`,
 `mass_mae = 0.0040`), so it remains an explicit ablation until multi-seed tuning supports
 promoting it.
 
+The 60-epoch RK4-teacher sanity check (`geo_rk4_teacher_front_area` style,
+`rk4_teacher=0.75`, 2048 teacher points in the quick config) gives
+`final_time_relative_l2 = 0.3593`, `pinn_vs_rk4_final_relative_l2 = 0.3588`,
+`validation_observation_mse = 6.31e-4`, `front_area_010_mae = 0.0120`, and
+`mass_mae = 0.0042`. This is a small but consistent wiring improvement over the pure
+60-epoch default in final L2, low-threshold front area, and mass, while RK4 itself remains
+the much more accurate same-problem numerical baseline (`rk4_final_time_relative_l2 =
+0.00464`).
+
 ## Colab Notebook
 
 Upload `fisher_kpp_origin_lab.ipynb` to Google Colab and run from the first cell.
@@ -322,6 +336,9 @@ Outputs:
 - Han, Park, Gu, Jung, "A scaled TW-PINN: A physics-informed neural network for
   traveling wave solutions of reaction-diffusion equations with general coefficients",
   arXiv:2603.15331.
+- Penwarden, Jagtap, Zhe, Karniadakis, Kirby, "A physics-informed neural network with
+  supervised learning for evolution partial differential equations", Journal of
+  Computational Physics 2023.
 - Mullins, Kamil, Fahsi, Soulaïmani, "Physics-informed neural networks for solving
   moving interface flow problems using the level set approach", arXiv:2502.02440.
 - Chen, Howard, Stinis, "Self-adaptive weights based on balanced residual decay rate for

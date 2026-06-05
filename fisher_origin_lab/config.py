@@ -92,6 +92,7 @@ class LossWeights:
     expected_front_pde: float = 0.0
     leading_edge: float = 0.0
     leading_edge_area: float = 0.0
+    rk4_teacher: float = 0.0
     sparse: float = 0.0
 
 
@@ -144,6 +145,8 @@ class TrainConfig:
     leading_edge_area_temperature: float = 0.015
     mass_balance_times: int = 4
     mass_balance_grid: int = 18
+    rk4_teacher_pool: int = 0
+    rk4_teacher_batch: int = 0
     print_every: int = 100
     adam_to_lbfgs: bool = False
     lbfgs_steps: int = 100
@@ -226,6 +229,7 @@ class ExperimentConfig:
                 expected_front_pde=self.weights.expected_front_pde,
                 leading_edge=self.weights.leading_edge,
                 leading_edge_area=self.weights.leading_edge_area,
+                rk4_teacher=self.weights.rk4_teacher,
                 sparse=self.weights.sparse,
             ),
             warm_start=self.warm_start,
@@ -274,6 +278,8 @@ class ExperimentConfig:
                 leading_edge_area_temperature=self.train.leading_edge_area_temperature,
                 mass_balance_times=min(self.train.mass_balance_times, 4),
                 mass_balance_grid=min(self.train.mass_balance_grid, 18),
+                rk4_teacher_pool=min(self.train.rk4_teacher_pool, 2048) if self.train.rk4_teacher_pool > 0 else 0,
+                rk4_teacher_batch=min(self.train.rk4_teacher_batch, 256) if self.train.rk4_teacher_batch > 0 else 0,
                 print_every=30,
                 adam_to_lbfgs=False,
             ),
@@ -346,6 +352,7 @@ class ExperimentConfig:
                 expected_front_pde=0.0,
                 leading_edge=0.0,
                 leading_edge_area=0.0,
+                rk4_teacher=0.0,
                 sparse=0.0,
             ),
             warm_start=WarmStartConfig(mode="neutral"),
@@ -408,6 +415,7 @@ class ExperimentConfig:
                 expected_front_pde=0.0,
                 leading_edge=0.0,
                 leading_edge_area=1.0,
+                rk4_teacher=0.0,
                 sparse=1.0e-5,
             ),
             warm_start=base.warm_start,
