@@ -96,6 +96,28 @@ def seed_front_features(
     return torch.cat([dist / box, signed_front_distance, gaussian_hint, radial_decay], dim=-1)
 
 
+def traveling_wave_features(
+    xy: torch.Tensor,
+    t: torch.Tensor,
+    center: torch.Tensor,
+    sigma: float,
+    diffusion: torch.Tensor,
+    reaction: torch.Tensor,
+    box: float,
+) -> torch.Tensor:
+    center = center.to(device=xy.device, dtype=xy.dtype).view(1, 2)
+    dist = torch.linalg.norm(xy - center, dim=-1, keepdim=True)
+    diffusion = diffusion.to(dtype=xy.dtype, device=xy.device).clamp_min(1.0e-12)
+    reaction = reaction.to(dtype=xy.dtype, device=xy.device).clamp_min(1.0e-12)
+    speed = 2.0 * torch.sqrt(diffusion * reaction)
+    thickness = torch.sqrt(diffusion / reaction).clamp_min(1.0e-4)
+    front_radius = 3.0 * sigma + speed * t
+    xi = ((dist - front_radius) / thickness).clamp(-8.0, 8.0)
+    front_bump = torch.exp(-0.5 * xi.pow(2))
+    inside_hint = torch.sigmoid(-xi)
+    return torch.cat([xi / 8.0, torch.tanh(xi), inside_hint, front_bump, front_radius / box], dim=-1)
+
+
 def seed_spatial_features(
     xy: torch.Tensor,
     center: torch.Tensor,
@@ -293,6 +315,7 @@ class OriginPINN(nn.Module):
         self.use_geo_features = bool(model.use_geo_features)
         self.spatial_fourier_only = bool(model.spatial_fourier_only)
         self.use_seed_front_features = bool(model.use_seed_front_features)
+        self.use_traveling_wave_features = bool(model.use_traveling_wave_features)
         self.hard_initial_condition = bool(model.hard_initial_condition)
         self.initial_envelope_tau = float(model.initial_envelope_tau)
         self.use_kpp_front_envelope = bool(model.use_kpp_front_envelope)
@@ -308,7 +331,8 @@ class OriginPINN(nn.Module):
         self.features = FourierFeatures(fourier_dim, model.fourier_features, model.fourier_sigma)
         geo_dim = 8 if self.use_geo_features else 0
         seed_front_dim = 4 if self.use_seed_front_features else 0
-        network_in_dim = 2 * model.fourier_features + 3 + geo_dim + seed_front_dim
+        traveling_wave_dim = 5 if (self.use_traveling_wave_features and not self.use_nif_head) else 0
+        network_in_dim = 2 * model.fourier_features + 3 + geo_dim + seed_front_dim + traveling_wave_dim
         nif_spatial_dim = 2 * model.fourier_features + 2 + geo_dim + seed_front_dim
         nif_parameter_dim = 4
         if model.architecture == "gated_mlp":
@@ -378,6 +402,18 @@ class OriginPINN(nn.Module):
                     self.seed_sigma,
                     self.reference_diffusion,
                     self.reference_front_speed,
+                    self.domain.box,
+                )
+            )
+        if self.use_traveling_wave_features:
+            pieces.append(
+                traveling_wave_features(
+                    xy,
+                    t,
+                    self.seed_center,
+                    self.seed_sigma,
+                    self.pde.diffusion(),
+                    self.pde.reaction(),
                     self.domain.box,
                 )
             )

@@ -120,11 +120,18 @@ What changes:
   should be near numerical zero because the constraint is structural.
 - Seed-centered radial/front features give the network coordinates aligned with the
   initial seed and expected Fisher-KPP front radius.
+- Scaled traveling-wave features add a learned moving-frame coordinate based on
+  `xi = (||x-x0|| - (3 sigma + 2 sqrt(D r) t)) / sqrt(D/r)`. This follows recent
+  TW-PINN work and gives the network an explicit coordinate for translating Fisher-KPP
+  fronts instead of requiring a generic MLP to rediscover that frame.
 - A KPP front-speed envelope suppresses nonphysical low-amplitude background far outside
   the reachable front region.
 - A Neumann boundary loss is enabled.
 - PDE residuals are weighted toward infection-front regions using `u(1-u)` and
   `|grad u|`.
+- RAR anchor refresh now uses a normalized front-aware monitor combining residual
+  magnitude, `|grad u|`, and logistic activity `u(1-u)`. This follows adaptive sampling
+  work for sharp PDE layers where residual-only refinement can miss moving fronts.
 - A moving-front speed loss enforces the Fisher-KPP traveling-front relation
   `u_t + (2 sqrt(D r) + v.n) grad(u).n = 0` on active level-set bands. This makes the
   front move like a Fisher-KPP front instead of merely fitting late-time blobs. The
@@ -229,11 +236,12 @@ Forward ablation outputs:
   MAE, and mass MAE.
 - `summary.png`: side-by-side bars for final L2, `u>0.10` front-area MAE, and mass MAE.
 
-Current 60-epoch quick check on one seed with the PirateNet/RWF default gives
-`final_time_relative_l2 = 0.3806`, `validation_observation_mse = 7.46e-4`,
-`front_area_010_mae = 0.0126`, and `mass_mae = 0.0035`. Treat this as a wiring
-check, not a final benchmark; use the forward ablation script over multiple seeds before
-making claims.
+Current 60-epoch quick check on one seed with the PirateNet/RWF default, scaled
+traveling-wave features, and front-aware RAR gives `final_time_relative_l2 = 0.3600`,
+`validation_observation_mse = 6.32e-4`, `front_area_010_mae = 0.0119`, and
+`mass_mae = 0.0043`. Relative to the previous PirateNet/RWF quick check, field and
+front metrics improved while the mass trajectory became slightly worse; treat this as a
+wiring check, not a final benchmark.
 
 The same 60-epoch sanity check with the new `nif_pirate` head ran successfully but was
 weaker on this setup (`final_time_relative_l2 = 0.5401`,
@@ -294,6 +302,9 @@ Outputs:
   physics-informed neural networks", arXiv:2203.07404.
 - Wu, Zhu, Tan, Kartha, Lu, "A comprehensive study of non-adaptive and residual-based
   adaptive sampling for physics-informed neural networks", arXiv:2207.10289.
+- Mao, Meng, "Physics-informed neural networks with residual/gradient-based adaptive
+  sampling methods for solving partial differential equations with sharp solutions",
+  Applied Mathematics and Mechanics 2023.
 - Hao et al., "PINNacle: A Comprehensive Benchmark of Physics-Informed Neural Networks
   for Solving PDEs", NeurIPS Datasets and Benchmarks 2024 / arXiv:2306.08827.
 - Jagtap, Kharazmi, Karniadakis, "Conservative physics-informed neural networks on
@@ -308,6 +319,9 @@ Outputs:
 - Rohrhofer, Posch, Gößnitzer, Geiger, "Approximating families of sharp solutions to
   Fisher's equation with physics-informed neural networks", Computer Physics
   Communications 2025.
+- Han, Park, Gu, Jung, "A scaled TW-PINN: A physics-informed neural network for
+  traveling wave solutions of reaction-diffusion equations with general coefficients",
+  arXiv:2603.15331.
 - Mullins, Kamil, Fahsi, Soulaïmani, "Physics-informed neural networks for solving
   moving interface flow problems using the level set approach", arXiv:2502.02440.
 - Chen, Howard, Stinis, "Self-adaptive weights based on balanced residual decay rate for

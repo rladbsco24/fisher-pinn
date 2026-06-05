@@ -64,6 +64,7 @@ class ModelConfig:
     use_geo_features: bool = False
     spatial_fourier_only: bool = False
     use_seed_front_features: bool = False
+    use_traveling_wave_features: bool = False
     hard_initial_condition: bool = False
     initial_envelope_tau: float = 0.06
     use_kpp_front_envelope: bool = False
@@ -115,6 +116,9 @@ class TrainConfig:
     rar_interval: int = 200
     rar_candidates: int = 4096
     rar_keep: int = 512
+    rar_residual_weight: float = 1.0
+    rar_gradient_weight: float = 0.25
+    rar_activity_weight: float = 0.25
     shooting_grid: int = 33
     shooting_steps: int = 80
     shooting_points: int = 512
@@ -196,6 +200,7 @@ class ExperimentConfig:
                 use_geo_features=self.model.use_geo_features,
                 spatial_fourier_only=self.model.spatial_fourier_only,
                 use_seed_front_features=self.model.use_seed_front_features,
+                use_traveling_wave_features=self.model.use_traveling_wave_features,
                 hard_initial_condition=self.model.hard_initial_condition,
                 initial_envelope_tau=self.model.initial_envelope_tau,
                 use_kpp_front_envelope=self.model.use_kpp_front_envelope,
@@ -237,6 +242,9 @@ class ExperimentConfig:
                 rar_interval=60,
                 rar_candidates=1024,
                 rar_keep=128,
+                rar_residual_weight=self.train.rar_residual_weight,
+                rar_gradient_weight=self.train.rar_gradient_weight,
+                rar_activity_weight=self.train.rar_activity_weight,
                 shooting_grid=31,
                 shooting_steps=80,
                 shooting_points=256,
@@ -312,6 +320,7 @@ class ExperimentConfig:
                 use_geo_features=self.model.use_geo_features,
                 spatial_fourier_only=self.model.spatial_fourier_only,
                 use_seed_front_features=self.model.use_seed_front_features,
+                use_traveling_wave_features=self.model.use_traveling_wave_features,
                 hard_initial_condition=False,
                 initial_envelope_tau=self.model.initial_envelope_tau,
                 use_kpp_front_envelope=False,
@@ -373,6 +382,7 @@ class ExperimentConfig:
                 use_geo_features=True,
                 spatial_fourier_only=True,
                 use_seed_front_features=True,
+                use_traveling_wave_features=True,
                 hard_initial_condition=True,
                 initial_envelope_tau=0.06,
                 use_kpp_front_envelope=True,

@@ -33,6 +33,7 @@ from fisher_origin_lab.plotting import (
     save_training_diagnostics_figure,
 )
 from fisher_origin_lab.rk4 import forward_fisher_kpp_rk4
+from fisher_origin_lab.samplers import SobolCollocation
 from fisher_origin_lab.shooting import source_shooting_loss
 from fisher_origin_lab.simulate import forward_fisher_kpp, sample_observations, split_observations
 from fisher_origin_lab.train import _warm_start_center_from_observations
@@ -217,6 +218,7 @@ def test_geo_spectral_forward_profile_extends_korea_setup() -> None:
     assert cfg.model.spatial_fourier_only is True
     assert cfg.model.use_source_envelope is False
     assert cfg.model.use_seed_front_features is True
+    assert cfg.model.use_traveling_wave_features is True
     assert cfg.model.hard_initial_condition is True
     assert cfg.model.use_kpp_front_envelope is True
     assert cfg.weights.initial_condition > 0.0
@@ -242,6 +244,35 @@ def test_geo_spectral_forward_profile_extends_korea_setup() -> None:
     assert cfg.train.leading_edge_area_grid > 1
     assert cfg.train.residual_curriculum_epochs > 0
     assert cfg.train.residual_weight_exponent_start < cfg.train.residual_weight_exponent_end
+    assert cfg.train.rar_residual_weight > 0.0
+    assert cfg.train.rar_gradient_weight > 0.0
+    assert cfg.train.rar_activity_weight > 0.0
+
+
+def test_front_aware_adaptive_sampler_refreshes_anchors() -> None:
+    domain = DomainConfig(grid=25, truth_steps=80)
+    cfg = ExperimentConfig(domain=domain).geo_spectral_forward()
+    model = OriginPINN(
+        domain,
+        cfg.pde,
+        cfg.seed,
+        replace(cfg.model, hidden=16, layers=1, fourier_features=8),
+    )
+    sampler = SobolCollocation(domain.box, domain.t_end, torch.device("cpu"), seed=3)
+    sampler.refresh(
+        model,
+        candidate_n=40,
+        keep=8,
+        chunk=20,
+        front_alpha=cfg.weights.front_pde_alpha,
+        front_gradient=cfg.weights.front_pde_gradient,
+        residual_weight=cfg.train.rar_residual_weight,
+        gradient_weight=cfg.train.rar_gradient_weight,
+        activity_weight=cfg.train.rar_activity_weight,
+    )
+    assert sampler.anchors is not None
+    assert sampler.anchors.shape == (8, 3)
+    assert torch.isfinite(sampler.anchors).all()
 
 
 def test_cli_quick_epochs_preserves_geo_training_stabilizers() -> None:
@@ -282,12 +313,14 @@ def test_forward_ablation_cases_report_front_metrics() -> None:
     names = [case["name"] for case in cases]
     assert "korea_style_forward" in names
     assert "geo_front_area" in names
+    assert "geo_no_tw_front_area" in names
     assert "geo_nif_front_area" in names
     assert "geo_gated_front_area" in names
     assert any(case["cfg"].weights.leading_edge_area > 0.0 for case in cases)
     assert any(case["cfg"].model.architecture == "nif_pirate" for case in cases)
     assert any(case["cfg"].model.architecture == "pirate" for case in cases)
     assert any(case["cfg"].model.architecture == "gated_mlp" for case in cases)
+    assert any(case["cfg"].model.use_traveling_wave_features is False for case in cases)
     summary = aggregate_forward_ablation(
         [
             {

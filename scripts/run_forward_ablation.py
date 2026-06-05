@@ -101,9 +101,18 @@ def make_forward_cases(base: ExperimentConfig) -> list[dict[str, Any]]:
     )
     geo_front_area = base
     geo_area_strong = replace(base, weights=replace(base.weights, leading_edge_area=3.0))
+    geo_no_tw_front_area = replace(
+        base,
+        model=replace(base.model, use_traveling_wave_features=False),
+    )
     geo_nif_front_area = replace(
         base,
-        model=replace(base.model, architecture="nif_pirate", use_random_weight_factorization=True),
+        model=replace(
+            base.model,
+            architecture="nif_pirate",
+            use_random_weight_factorization=True,
+            use_traveling_wave_features=False,
+        ),
     )
     geo_gated_front_area = replace(
         base,
@@ -114,8 +123,9 @@ def make_forward_cases(base: ExperimentConfig) -> list[dict[str, Any]]:
         _case("korea_style_forward", korea, "Korea pine-wilt compatible forward PINN objective."),
         _case("geo_no_front_terms", geo_no_front, "Geo/spectral/hard-IC model without explicit front or mass losses."),
         _case("geo_speed_mass", geo_speed_mass, "Adds gradient-filtered front-speed and parabolic mass-balance losses."),
-        _case("geo_front_area", geo_front_area, "Default PirateNet/RWF profile with analytic leading-edge front-area loss."),
+        _case("geo_front_area", geo_front_area, "Default PirateNet/RWF profile with scaled traveling-wave features."),
         _case("geo_front_area_strong", geo_area_strong, "Stronger front-area ablation; useful for checking metric tradeoffs."),
+        _case("geo_no_tw_front_area", geo_no_tw_front_area, "Ablates the scaled traveling-wave moving-frame features."),
         _case("geo_nif_front_area", geo_nif_front_area, "NIF-style last-layer parameterized ShapeNet/ParameterNet head."),
         _case("geo_gated_front_area", geo_gated_front_area, "Ablates PirateNet/RWF by using the previous gated MLP backbone."),
     ]

@@ -33,6 +33,9 @@ class SobolCollocation:
         chunk: int = 1024,
         front_alpha: float = 0.0,
         front_gradient: float = 0.0,
+        residual_weight: float = 1.0,
+        gradient_weight: float = 0.25,
+        activity_weight: float = 0.25,
     ) -> None:
         candidates = self._draw_valid(candidate_n)
         scores = []
@@ -40,8 +43,16 @@ class SobolCollocation:
             part = candidates[start : start + chunk]
             with torch.enable_grad():
                 residual, u, u_xy, _, _ = pde_residual_terms(model, part[:, :2], part[:, 2:3])
-                front = front_indicator_weights(u, u_xy, front_alpha, front_gradient)
-                score = residual.detach().abs() * front.detach()
+                front = front_indicator_weights(u, u_xy, front_alpha, front_gradient).detach()
+                residual_score = _normalize_score(residual.detach().abs()) * front
+                gradient_score = _normalize_score(torch.linalg.norm(u_xy.detach(), dim=-1, keepdim=True))
+                activity = u.detach().clamp(0.0, 1.0) * (1.0 - u.detach().clamp(0.0, 1.0))
+                activity_score = _normalize_score(activity)
+                score = (
+                    float(residual_weight) * residual_score
+                    + float(gradient_weight) * gradient_score
+                    + float(activity_weight) * activity_score
+                )
             scores.append(score.flatten())
         score = torch.cat(scores)
         topk = min(keep, len(score))
@@ -76,3 +87,7 @@ class SobolCollocation:
         if self.mask_kind != "box":
             raise ValueError(f"Unknown mask_kind={self.mask_kind!r}; expected 'box' or 'ellipse'.")
         return torch.ones(len(xy), dtype=torch.bool, device=xy.device)
+
+
+def _normalize_score(score: torch.Tensor) -> torch.Tensor:
+    return score / score.mean().clamp_min(1.0e-8)

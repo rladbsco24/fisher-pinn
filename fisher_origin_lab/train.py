@@ -424,6 +424,9 @@ def train_single(
                 cfg.train.rar_keep,
                 front_alpha=cfg.weights.front_pde_alpha,
                 front_gradient=cfg.weights.front_pde_gradient,
+                residual_weight=cfg.train.rar_residual_weight,
+                gradient_weight=cfg.train.rar_gradient_weight,
+                activity_weight=cfg.train.rar_activity_weight,
             )
 
         if epoch == 1 or epoch % cfg.train.print_every == 0 or epoch == cfg.train.epochs:
