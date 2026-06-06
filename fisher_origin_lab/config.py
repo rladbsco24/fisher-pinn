@@ -147,6 +147,10 @@ class TrainConfig:
     mass_balance_grid: int = 18
     rk4_teacher_pool: int = 0
     rk4_teacher_batch: int = 0
+    rk4_teacher_late_fraction: float = 0.0
+    rk4_pretrain_steps: int = 0
+    rk4_pretrain_batch: int = 0
+    rk4_pretrain_lr: float = 1.0e-3
     print_every: int = 100
     adam_to_lbfgs: bool = False
     lbfgs_steps: int = 100
@@ -280,6 +284,14 @@ class ExperimentConfig:
                 mass_balance_grid=min(self.train.mass_balance_grid, 18),
                 rk4_teacher_pool=min(self.train.rk4_teacher_pool, 2048) if self.train.rk4_teacher_pool > 0 else 0,
                 rk4_teacher_batch=min(self.train.rk4_teacher_batch, 256) if self.train.rk4_teacher_batch > 0 else 0,
+                rk4_teacher_late_fraction=self.train.rk4_teacher_late_fraction,
+                rk4_pretrain_steps=min(self.train.rk4_pretrain_steps, 80)
+                if self.train.rk4_pretrain_steps > 0
+                else 0,
+                rk4_pretrain_batch=min(self.train.rk4_pretrain_batch, 256)
+                if self.train.rk4_pretrain_batch > 0
+                else 0,
+                rk4_pretrain_lr=self.train.rk4_pretrain_lr,
                 print_every=30,
                 adam_to_lbfgs=False,
             ),

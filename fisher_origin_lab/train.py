@@ -109,6 +109,11 @@ def _sample_rk4_teacher_points(
     xyt[:, 0] = rng.uniform(0.0, cfg.domain.box, size=candidate_n)
     xyt[:, 1] = rng.uniform(0.0, cfg.domain.box, size=candidate_n)
     xyt[:, 2] = rng.uniform(0.0, cfg.domain.t_end, size=candidate_n)
+    late_fraction = float(np.clip(cfg.train.rk4_teacher_late_fraction, 0.0, 1.0))
+    late_n = int(round(candidate_n * late_fraction))
+    if late_n > 0:
+        start = min(max(cfg.observations.start_time, 0.0), cfg.domain.t_end)
+        xyt[:late_n, 2] = rng.uniform(start, cfg.domain.t_end, size=late_n)
     values = interpolate_truth(rk4_truth, xyt)
     activity = np.clip(values, 0.0, 1.0) * (1.0 - np.clip(values, 0.0, 1.0))
     low_front = ((values > 0.02) & (values < 0.30)).astype(np.float64)
@@ -117,6 +122,22 @@ def _sample_rk4_teacher_points(
     replace_points = n > candidate_n
     idx = rng.choice(candidate_n, size=n, replace=replace_points, p=weights)
     return xyt[idx].astype(np.float32), values[idx, None].astype(np.float32)
+
+
+def _rk4_teacher_batch_loss(
+    model: OriginPINN,
+    teacher_xyt: torch.Tensor | None,
+    teacher_values: torch.Tensor | None,
+    batch_size: int,
+    density_gain: float,
+    device: torch.device,
+) -> torch.Tensor:
+    if teacher_xyt is None or teacher_values is None or len(teacher_xyt) == 0 or batch_size <= 0:
+        return torch.zeros((), device=device)
+    teacher_batch = min(max(1, int(batch_size)), len(teacher_xyt))
+    teacher_idx = torch.randint(0, len(teacher_xyt), (teacher_batch,), device=device)
+    teacher_pred = model(teacher_xyt[teacher_idx, :2], teacher_xyt[teacher_idx, 2:3])
+    return _weighted_data_mse(teacher_pred, teacher_values[teacher_idx], density_gain)
 
 
 def _front_geometry_summary(
@@ -249,6 +270,43 @@ def _combine_loss_terms(
     return total, adaptive
 
 
+def _pretrain_on_rk4_teacher(
+    model: OriginPINN,
+    cfg: ExperimentConfig,
+    teacher_xyt: torch.Tensor | None,
+    teacher_values: torch.Tensor | None,
+    device: torch.device,
+) -> float | None:
+    if (
+        cfg.train.rk4_pretrain_steps <= 0
+        or cfg.train.rk4_pretrain_batch <= 0
+        or teacher_xyt is None
+        or teacher_values is None
+        or len(teacher_xyt) == 0
+    ):
+        return None
+    optimizer = torch.optim.Adam(model.parameters(), lr=cfg.train.rk4_pretrain_lr)
+    last_loss = None
+    report_every = max(1, cfg.train.rk4_pretrain_steps // 4)
+    for step in range(1, cfg.train.rk4_pretrain_steps + 1):
+        optimizer.zero_grad()
+        loss = _rk4_teacher_batch_loss(
+            model,
+            teacher_xyt,
+            teacher_values,
+            cfg.train.rk4_pretrain_batch,
+            cfg.weights.data_density_gain,
+            device,
+        )
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
+        optimizer.step()
+        last_loss = float(loss.detach().cpu())
+        if step == 1 or step % report_every == 0 or step == cfg.train.rk4_pretrain_steps:
+            print(f"rk4_pretrain step={step:4d} teacher_mse={last_loss:.3e}")
+    return last_loss
+
+
 def train_single(
     cfg: ExperimentConfig,
     observations_xyt: torch.Tensor,
@@ -276,6 +334,7 @@ def train_single(
     source_ids = {id(param) for param in model.source.parameters()}
     source_params = [param for param in model.parameters() if id(param) in source_ids]
     other_params = [param for param in model.parameters() if id(param) not in source_ids]
+    rk4_pretrain_final_loss = _pretrain_on_rk4_teacher(model, cfg, teacher_xyt, teacher_values, device)
     optimizer = torch.optim.Adam(
         [
             {"params": other_params, "lr": cfg.train.lr},
@@ -304,19 +363,14 @@ def train_single(
         optimizer.zero_grad()
         pred = model(observations_xyt[:, :2], observations_xyt[:, 2:3])
         data_loss = _weighted_data_mse(pred, observations_values, cfg.weights.data_density_gain)
-        if (
-            cfg.weights.rk4_teacher > 0.0
-            and teacher_xyt is not None
-            and teacher_values is not None
-            and len(teacher_xyt) > 0
-        ):
-            teacher_batch = min(max(1, cfg.train.rk4_teacher_batch), len(teacher_xyt))
-            teacher_idx = torch.randint(0, len(teacher_xyt), (teacher_batch,), device=device)
-            teacher_pred = model(teacher_xyt[teacher_idx, :2], teacher_xyt[teacher_idx, 2:3])
-            rk4_teacher_loss = _weighted_data_mse(
-                teacher_pred,
-                teacher_values[teacher_idx],
+        if cfg.weights.rk4_teacher > 0.0:
+            rk4_teacher_loss = _rk4_teacher_batch_loss(
+                model,
+                teacher_xyt,
+                teacher_values,
+                cfg.train.rk4_teacher_batch,
                 cfg.weights.data_density_gain,
+                device,
             )
         else:
             rk4_teacher_loss = torch.zeros((), device=device)
@@ -528,6 +582,8 @@ def train_single(
                 row["validation_data"] = validation_loss
                 row["best_validation_data"] = best_validation_loss
                 row["best_validation_epoch"] = float(best_epoch)
+            if rk4_pretrain_final_loss is not None:
+                row["rk4_pretrain_final"] = rk4_pretrain_final_loss
             for name, value in adaptive_weights.items():
                 row[f"aw_{name}"] = float(value)
             history.append(row)
@@ -752,7 +808,11 @@ def run_experiment(cfg: ExperimentConfig) -> dict[str, object]:
     teacher_values = None
     rk4_truth = None
     rk4_runtime_sec = None
-    if cfg.weights.rk4_teacher > 0.0 and cfg.train.rk4_teacher_pool > 0 and cfg.train.rk4_teacher_batch > 0:
+    needs_rk4_teacher = cfg.train.rk4_teacher_pool > 0 and (
+        (cfg.weights.rk4_teacher > 0.0 and cfg.train.rk4_teacher_batch > 0)
+        or (cfg.train.rk4_pretrain_steps > 0 and cfg.train.rk4_pretrain_batch > 0)
+    )
+    if needs_rk4_teacher:
         rk4_start = time.time()
         rk4_truth = forward_fisher_kpp_rk4(cfg.domain, cfg.pde, cfg.seed)
         rk4_runtime_sec = time.time() - rk4_start

@@ -103,11 +103,32 @@ def make_forward_cases(base: ExperimentConfig) -> list[dict[str, Any]]:
     geo_area_strong = replace(base, weights=replace(base.weights, leading_edge_area=3.0))
     geo_rk4_teacher_front_area = replace(
         base,
+        weights=replace(base.weights, rk4_teacher=0.005),
+        train=replace(
+            base.train,
+            rk4_teacher_pool=max(base.train.rk4_teacher_pool, 4096),
+            rk4_teacher_batch=max(base.train.rk4_teacher_batch, 512),
+        ),
+    )
+    geo_rk4_late_teacher_front_area = replace(
+        base,
         weights=replace(base.weights, rk4_teacher=0.75),
         train=replace(
             base.train,
             rk4_teacher_pool=max(base.train.rk4_teacher_pool, 4096),
             rk4_teacher_batch=max(base.train.rk4_teacher_batch, 512),
+            rk4_teacher_late_fraction=0.65,
+        ),
+    )
+    geo_rk4_pretrain_front_area = replace(
+        base,
+        weights=replace(base.weights, rk4_teacher=0.25),
+        train=replace(
+            base.train,
+            rk4_teacher_pool=max(base.train.rk4_teacher_pool, 4096),
+            rk4_teacher_batch=max(base.train.rk4_teacher_batch, 512),
+            rk4_pretrain_steps=max(base.train.rk4_pretrain_steps, 80),
+            rk4_pretrain_batch=max(base.train.rk4_pretrain_batch, 512),
         ),
     )
     geo_no_tw_front_area = replace(
@@ -134,7 +155,9 @@ def make_forward_cases(base: ExperimentConfig) -> list[dict[str, Any]]:
         _case("geo_speed_mass", geo_speed_mass, "Adds gradient-filtered front-speed and parabolic mass-balance losses."),
         _case("geo_front_area", geo_front_area, "Default PirateNet/RWF profile with scaled traveling-wave features."),
         _case("geo_front_area_strong", geo_area_strong, "Stronger front-area ablation; useful for checking metric tradeoffs."),
-        _case("geo_rk4_teacher_front_area", geo_rk4_teacher_front_area, "Solver-assisted PT-PINN/distillation profile using RK4 pseudo-labels."),
+        _case("geo_rk4_teacher_front_area", geo_rk4_teacher_front_area, "Weak RK4 pseudo-label regularizer for solver-assisted PINN training."),
+        _case("geo_rk4_late_teacher_front_area", geo_rk4_late_teacher_front_area, "RK4 teacher profile biased toward late moving-front snapshots."),
+        _case("geo_rk4_pretrain_front_area", geo_rk4_pretrain_front_area, "RK4 teacher pretraining followed by PINN fine-tuning."),
         _case("geo_no_tw_front_area", geo_no_tw_front_area, "Ablates the scaled traveling-wave moving-frame features."),
         _case("geo_nif_front_area", geo_nif_front_area, "NIF-style last-layer parameterized ShapeNet/ParameterNet head."),
         _case("geo_gated_front_area", geo_gated_front_area, "Ablates PirateNet/RWF by using the previous gated MLP backbone."),
