@@ -17,6 +17,7 @@ from fisher_origin_lab.losses import (
     expected_front_samples,
     front_area_contrast_loss,
     front_local_gradient_residual_loss,
+    front_profile_alignment_loss,
     front_speed_consistency_loss,
     front_speed_kinematics,
     known_initial_condition_loss,
@@ -196,6 +197,7 @@ def test_expected_front_losses_are_finite() -> None:
     floor_loss = leading_edge_floor_loss(model, 16, torch.device("cpu"))
     area_loss = leading_edge_area_loss(model, n_times=3, grid=8, device=torch.device("cpu"))
     contrast_loss = front_area_contrast_loss(model, n_times=3, grid=8, device=torch.device("cpu"))
+    profile_loss = front_profile_alignment_loss(model, n=24, device=torch.device("cpu"))
     assert xy.shape == (16, 2)
     assert t.shape == (16, 1)
     assert torch.isfinite(xy).all()
@@ -204,6 +206,7 @@ def test_expected_front_losses_are_finite() -> None:
     assert torch.isfinite(floor_loss)
     assert torch.isfinite(area_loss)
     assert torch.isfinite(contrast_loss)
+    assert torch.isfinite(profile_loss)
 
 
 def test_korea_pine_style_matches_forward_pinn_setup() -> None:
@@ -338,6 +341,7 @@ def test_forward_ablation_cases_report_front_metrics() -> None:
     assert "geo_gated_front_area" in names
     assert any(case["cfg"].weights.leading_edge_area > 0.0 for case in cases)
     assert any(case["cfg"].weights.front_contrast > 0.0 for case in cases)
+    assert any(case["cfg"].weights.front_profile > 0.0 for case in cases)
     assert any(case["cfg"].weights.level_set_alignment > 0.0 for case in cases)
     assert any(case["cfg"].model.architecture == "nif_pirate" for case in cases)
     assert any(case["cfg"].model.architecture == "pirate" for case in cases)

@@ -321,6 +321,7 @@ def save_training_diagnostics_figure(
         ("leading_edge", COLORS["pink"]),
         ("leading_edge_area", COLORS["teal"]),
         ("front_contrast", COLORS["rose"]),
+        ("front_profile", COLORS["blue"]),
         ("level_set", COLORS["gold"]),
         ("front_speed", COLORS["blue_light"]),
         ("front_grad", COLORS["pink"]),
@@ -374,6 +375,7 @@ def save_training_diagnostics_figure(
         ("aw_expected_front_pde", COLORS["gold"]),
         ("aw_leading_edge", COLORS["pink"]),
         ("aw_front_contrast", COLORS["rose"]),
+        ("aw_front_profile", COLORS["blue"]),
         ("aw_level_set", COLORS["gold"]),
         ("aw_front_speed", COLORS["blue_light"]),
         ("aw_front_grad", COLORS["pink"]),
@@ -477,15 +479,29 @@ def save_pinn_rk4_comparison_figure(
     _, true_field = truth_field_at(truth, time_value, n=n)
     _, rk4_field = truth_field_at(rk4_truth, time_value, n=n)
     _, pinn_field = predict_field(model, time_value, n=n, device=device)
+    signed_error = pinn_field - true_field
+    signed_error_lim = float(np.nanmax(np.abs(signed_error)))
+    if not np.isfinite(signed_error_lim) or signed_error_lim <= 0.0:
+        signed_error_lim = 1.0e-12
     pinn_error = np.abs(pinn_field - true_field)
     rk4_error = np.abs(rk4_field - true_field)
 
-    fig = plt.figure(figsize=(14.6, 7.4))
-    fig.subplots_adjust(left=0.04, right=0.97, bottom=0.07, top=0.84, hspace=0.32, wspace=0.42)
+    fig = plt.figure(figsize=(17.5, 7.6))
+    fig.subplots_adjust(left=0.035, right=0.975, bottom=0.07, top=0.84, hspace=0.34, wspace=0.36)
     axes = np.array(
         [
-            [fig.add_subplot(2, 3, 1), fig.add_subplot(2, 3, 2), fig.add_subplot(2, 3, 3)],
-            [fig.add_subplot(2, 3, 4), fig.add_subplot(2, 3, 5), fig.add_subplot(2, 3, 6)],
+            [
+                fig.add_subplot(2, 4, 1),
+                fig.add_subplot(2, 4, 2),
+                fig.add_subplot(2, 4, 3),
+                fig.add_subplot(2, 4, 4),
+            ],
+            [
+                fig.add_subplot(2, 4, 5),
+                fig.add_subplot(2, 4, 6),
+                fig.add_subplot(2, 4, 7),
+                fig.add_subplot(2, 4, 8),
+            ],
         ]
     )
 
@@ -493,12 +509,25 @@ def save_pinn_rk4_comparison_figure(
         (axes[0, 0], "reference", true_field, "magma", 0.0, 1.0),
         (axes[0, 1], "PINN", pinn_field, "magma", 0.0, 1.0),
         (axes[0, 2], "RK4", rk4_field, "magma", 0.0, 1.0),
-        (axes[1, 0], "PINN absolute error", pinn_error, "viridis", 0.0, None),
-        (axes[1, 1], "RK4 absolute error", rk4_error, "viridis", 0.0, None),
+        (axes[1, 0], "PINN signed error", signed_error, "coolwarm", -signed_error_lim, signed_error_lim),
+        (axes[1, 1], "PINN absolute error", pinn_error, "viridis", 0.0, None),
+        (axes[1, 2], "RK4 absolute error", rk4_error, "viridis", 0.0, None),
     ]:
         _imshow(fig, ax, field, domain, title=title, cmap=cmap, vmin=vmin, vmax=vmax, colorbar=True)
 
-    ax = axes[1, 2]
+    contour_ax = axes[0, 3]
+    _imshow(fig, contour_ax, true_field, domain, title="front contours", cmap="Greys", vmin=0.0, vmax=max(0.2, float(true_field.max())), colorbar=False)
+    xs = np.linspace(0.0, domain.box, n)
+    levels = [0.05, 0.10]
+    truth_cs = contour_ax.contour(xs, xs, true_field.T, levels=levels, colors=[COLORS["teal"], COLORS["blue"]], linewidths=1.2)
+    pinn_cs = contour_ax.contour(xs, xs, pinn_field.T, levels=levels, colors=[COLORS["teal"], COLORS["blue"]], linewidths=1.2, linestyles="--")
+    contour_ax.clabel(truth_cs, fmt=lambda value: f"T {value:.2f}", fontsize=6)
+    contour_ax.clabel(pinn_cs, fmt=lambda value: f"P {value:.2f}", fontsize=6)
+    contour_ax.plot([], [], color=COLORS["neutral"], linewidth=1.2, label="solid truth")
+    contour_ax.plot([], [], color=COLORS["neutral"], linewidth=1.2, linestyle="--", label="dashed PINN")
+    contour_ax.legend(frameon=False, fontsize=6, loc="upper right")
+
+    ax = axes[1, 3]
     labels = ["PINN L2", "RK4 L2", "PINN/RK4 L2", "PINN val MSE", "RK4 val MSE"]
     values = [
         metrics.get("pinn_final_relative_l2"),
@@ -511,22 +540,20 @@ def save_pinn_rk4_comparison_figure(
     plot_values = [float(value) for value in values if value is not None and np.isfinite(value)]
     colors = [COLORS["blue"], COLORS["orange"], COLORS["gold"], COLORS["blue_light"], "#FFBDA1"][: len(plot_values)]
     if plot_values:
-        y = np.arange(len(plot_values))
-        ax.barh(y, plot_values, color=colors, edgecolor=TOKENS["ink"], linewidth=0.8)
-        ax.set_yticks(y, plot_labels)
-        ax.tick_params(axis="y", labelsize=7, pad=1)
-        ax.invert_yaxis()
-        ax.set_xlabel("Error")
         ax.set_title("accuracy summary", fontsize=9)
-        for yi, value in zip(y, plot_values):
-            ax.text(value, yi, f" {value:.3e}", va="center", ha="left", fontsize=8, color=TOKENS["ink"])
-        if min(plot_values) > 0.0 and max(plot_values) / min(plot_values) > 20.0:
-            ax.set_xscale("log")
+        ax.set_axis_off()
+        ax.text(0.02, 0.92, "metric", transform=ax.transAxes, fontsize=8, color=TOKENS["muted"], ha="left")
+        ax.text(0.98, 0.92, "value", transform=ax.transAxes, fontsize=8, color=TOKENS["muted"], ha="right")
+        for idx, (label, value, color) in enumerate(zip(plot_labels, plot_values, colors)):
+            y = 0.78 - idx * 0.14
+            ax.scatter([0.035], [y], transform=ax.transAxes, s=36, color=color, edgecolor=TOKENS["ink"], linewidth=0.5)
+            ax.text(0.09, y, label, transform=ax.transAxes, va="center", ha="left", fontsize=8, color=TOKENS["ink"])
+            ax.text(0.98, y, f"{value:.3e}", transform=ax.transAxes, va="center", ha="right", fontsize=8, color=TOKENS["ink"])
     else:
         ax.text(0.5, 0.5, "No comparable metrics", ha="center", va="center", color=TOKENS["muted"])
         ax.set_xticks([])
         ax.set_yticks([])
-    _style_axis(ax, grid=True)
+        _style_axis(ax, grid=True)
 
     _write_title(
         fig,

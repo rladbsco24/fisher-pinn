@@ -24,6 +24,7 @@ from .losses import (
     front_area_contrast_loss,
     front_indicator_weights,
     front_local_gradient_residual_loss,
+    front_profile_alignment_loss,
     front_level_set_alignment_loss,
     front_speed_consistency_loss,
     gradient_residual_loss,
@@ -340,6 +341,7 @@ def _combine_loss_terms(
         "expected_front_pde",
         "leading_edge",
         "front_contrast",
+        "front_profile",
         "level_set",
     }
     active = [(name, weight, loss) for name, weight, loss in terms if weight > 0.0]
@@ -589,6 +591,17 @@ def train_single(
             )
         else:
             front_contrast = torch.zeros((), device=device)
+        if cfg.weights.front_profile > 0.0 and cfg.train.front_profile_points > 0:
+            front_profile = front_profile_alignment_loss(
+                model,
+                cfg.train.front_profile_points,
+                device,
+                width=cfg.train.front_profile_width,
+                t_low=window_t_low,
+                t_high=window_t_high,
+            )
+        else:
+            front_profile = torch.zeros((), device=device)
         if cfg.weights.level_set_alignment > 0.0 and cfg.train.level_set_points > 0:
             level_set_loss = front_level_set_alignment_loss(
                 model,
@@ -629,6 +642,7 @@ def train_single(
                 ("leading_edge", cfg.weights.leading_edge, leading_edge_loss),
                 ("leading_edge_area", cfg.weights.leading_edge_area, leading_edge_area),
                 ("front_contrast", cfg.weights.front_contrast, front_contrast),
+                ("front_profile", cfg.weights.front_profile, front_profile),
                 ("level_set", cfg.weights.level_set_alignment, level_set_loss),
                 ("mass", cfg.weights.mass_balance, mass_loss),
                 ("sparse", cfg.weights.sparse, sparse_loss),
@@ -697,6 +711,7 @@ def train_single(
                 "leading_edge": float(leading_edge_loss.detach().cpu()),
                 "leading_edge_area": float(leading_edge_area.detach().cpu()),
                 "front_contrast": float(front_contrast.detach().cpu()),
+                "front_profile": float(front_profile.detach().cpu()),
                 "level_set": float(level_set_loss.detach().cpu()),
                 "mass": float(mass_loss.detach().cpu()),
                 "sparse": float(sparse_loss.detach().cpu()),
@@ -898,6 +913,15 @@ def _lbfgs_polish(
             )
         else:
             front_contrast = torch.zeros((), device=device)
+        if cfg.weights.front_profile > 0.0 and cfg.train.front_profile_points > 0:
+            front_profile = front_profile_alignment_loss(
+                model,
+                cfg.train.front_profile_points,
+                device,
+                width=cfg.train.front_profile_width,
+            )
+        else:
+            front_profile = torch.zeros((), device=device)
         if cfg.weights.mass_balance > 0.0:
             mass_loss = parabolic_mass_balance_loss(
                 model,
@@ -924,6 +948,7 @@ def _lbfgs_polish(
             + cfg.weights.leading_edge * leading_edge_loss
             + cfg.weights.leading_edge_area * leading_edge_area
             + cfg.weights.front_contrast * front_contrast
+            + cfg.weights.front_profile * front_profile
             + cfg.weights.mass_balance * mass_loss
             + cfg.weights.sparse * model.sparse_last_layer_l1()
         )

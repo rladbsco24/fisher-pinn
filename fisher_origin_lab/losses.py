@@ -510,6 +510,52 @@ def front_area_contrast_loss(
     return torch.mean((torch.log(pred_ratio) - torch.log(target_ratio.detach())).pow(2))
 
 
+def front_profile_alignment_loss(
+    model: OriginPINN,
+    n: int,
+    device: torch.device,
+    *,
+    level: float = 0.10,
+    width: float = 0.06,
+    target_low: float = 0.025,
+    target_high: float = 0.30,
+    t_low: float = 0.0,
+    t_high: float | None = None,
+) -> torch.Tensor:
+    """Fit the front-normal profile near the analytic Fisher-KPP leading edge.
+
+    Area losses can hide a radial phase error: the predicted and reference
+    contours can have similar area but be shifted, creating paired absolute-error
+    bands. This loss samples short normal profiles around the expected low-level
+    front and matches the linearized KPP profile only in the leading-edge range.
+    """
+
+    if n <= 0:
+        return torch.zeros((), device=device)
+    dtype = next(model.parameters()).dtype
+    low = max(0.0, min(float(t_low), model.domain.t_end))
+    high = model.domain.t_end if t_high is None else max(0.0, min(float(t_high), model.domain.t_end))
+    if high < low:
+        low, high = high, low
+    t = low + torch.rand(n, 1, dtype=dtype, device=device) * max(high - low, 1.0e-8)
+    level_tensor = torch.full((n, 1), float(level), dtype=dtype, device=device)
+    radius = _linearized_kpp_level_radius(model, t, level_tensor)
+    angle = 2.0 * math.pi * torch.rand(n, 1, dtype=dtype, device=device)
+    normal = torch.cat([torch.cos(angle), torch.sin(angle)], dim=1)
+    offset = (2.0 * torch.rand(n, 1, dtype=dtype, device=device) - 1.0) * max(float(width), 1.0e-4)
+    center = model.seed_center.to(dtype=dtype, device=device).view(1, 2)
+    if model.pde.include_advection:
+        center = center + model.pde.velocity.detach().view(1, 2).to(dtype=dtype, device=device) * t
+    xy = (center + (radius + offset).clamp_min(0.0) * normal).clamp(0.0, model.domain.box)
+    target = linearized_kpp_gaussian(model, xy, t).detach()
+    valid = ((target >= float(target_low)) & (target <= float(target_high)) & (radius > 1.0e-6)).float()
+    if torch.sum(valid) <= 0:
+        return torch.zeros((), dtype=dtype, device=device)
+    pred = model(xy, t)
+    weight = (target * (1.0 - target)).clamp_min(0.02)
+    return torch.sum(valid * weight * (pred - target).pow(2)) / torch.sum(valid * weight).clamp_min(1.0e-8)
+
+
 def gradient_residual_loss(
     model: OriginPINN,
     xy: torch.Tensor,

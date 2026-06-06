@@ -273,15 +273,17 @@ weaker on this setup (`final_time_relative_l2 = 0.5401`,
 `mass_mae = 0.0040`), so it remains an explicit ablation until multi-seed tuning supports
 promoting it.
 
-The current 60-epoch weak-RK4-teacher sanity check (`geo_rk4_teacher_front_area`,
-`rk4_teacher=0.005`, 4096 teacher points, batch 512) gives
-`final_time_relative_l2 = 0.2641`, `pinn_vs_rk4_final_relative_l2 = 0.2650`,
-`validation_observation_mse = 5.57e-4`, `front_area_005_mae = 0.0195`,
-`front_area_010_mae = 0.0120`, and `mass_mae = 0.0026`. The main improvement comes from
-the tighter linearized KPP front envelope plus the low/high front-contrast loss, which
-removes the broad low-amplitude haze while preserving the active-front trend. RK4 itself
-remains the much more accurate same-problem numerical baseline
-(`rk4_final_time_relative_l2 = 0.00465`).
+The current 60-epoch weak-RK4-teacher/front-profile sanity check
+(`geo_spectral_forward().quick()`, `rk4_teacher=0.005`, 2048 teacher points,
+batch 256) gives `final_time_relative_l2 = 0.2682`,
+`pinn_vs_rk4_final_relative_l2 = 0.2693`,
+`validation_observation_mse = 5.49e-4`, `front_area_005_mae = 0.0185`,
+`front_area_010_mae = 0.0119`, and `mass_mae = 0.0025`. The new
+front-normal profile loss targets the leading-edge profile around the expected
+low-level front, which improves front-area and mass diagnostics relative to the
+previous no-profile check (`5.57e-4`, `0.0195`, `0.0120`, `0.0026`) while leaving
+final-field L2 in the same range. RK4 itself remains the much more accurate
+same-problem numerical baseline (`rk4_final_time_relative_l2 = 0.00465`).
 
 The first 60-epoch check of the cumulative `geo_levelset_time_slab` ablation
 (`level_set_alignment=0.03`, 50% time-window collocation focus, 50% global replay,
@@ -314,11 +316,12 @@ Outputs:
   front area over time.
 - `residual_front_diagnostics.png`: final-time residual, front indicator, adaptive
   weighting maps, gradient-filtered normal front speed, and front-speed error.
-- `pinn_vs_rk4_comparison.png`: final-time truth/PINN/RK4 fields, absolute-error maps,
-  and a compact accuracy summary.
+- `pinn_vs_rk4_comparison.png`: final-time truth/PINN/RK4 fields, signed and
+  absolute PINN error, RK4 absolute error, truth/PINN front contours, and a compact
+  accuracy summary.
 - `training_diagnostics.png`: loss components including known IC, moving-front speed,
   parabolic mass balance, learned `D/r`, residual curriculum, adaptive loss multipliers,
-  and front/sparsity diagnostics.
+  front-profile alignment, and front/sparsity diagnostics.
 
 ## Why This Is Better Than The Original Demo
 

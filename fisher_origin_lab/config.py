@@ -94,6 +94,7 @@ class LossWeights:
     leading_edge: float = 0.0
     leading_edge_area: float = 0.0
     front_contrast: float = 0.0
+    front_profile: float = 0.0
     level_set_alignment: float = 0.0
     rk4_teacher: float = 0.0
     sparse: float = 0.0
@@ -150,6 +151,8 @@ class TrainConfig:
     leading_edge_area_temperature: float = 0.015
     front_contrast_times: int = 5
     front_contrast_grid: int = 32
+    front_profile_points: int = 256
+    front_profile_width: float = 0.06
     mass_balance_times: int = 4
     mass_balance_grid: int = 18
     rk4_teacher_pool: int = 0
@@ -250,6 +253,7 @@ class ExperimentConfig:
                 leading_edge=self.weights.leading_edge,
                 leading_edge_area=self.weights.leading_edge_area,
                 front_contrast=self.weights.front_contrast,
+                front_profile=self.weights.front_profile,
                 level_set_alignment=self.weights.level_set_alignment,
                 rk4_teacher=self.weights.rk4_teacher,
                 sparse=self.weights.sparse,
@@ -302,6 +306,8 @@ class ExperimentConfig:
                 leading_edge_area_temperature=self.train.leading_edge_area_temperature,
                 front_contrast_times=min(self.train.front_contrast_times, 4),
                 front_contrast_grid=min(self.train.front_contrast_grid, 24),
+                front_profile_points=min(self.train.front_profile_points, 128),
+                front_profile_width=self.train.front_profile_width,
                 mass_balance_times=min(self.train.mass_balance_times, 4),
                 mass_balance_grid=min(self.train.mass_balance_grid, 18),
                 rk4_teacher_pool=min(self.train.rk4_teacher_pool, 2048) if self.train.rk4_teacher_pool > 0 else 0,
@@ -400,6 +406,7 @@ class ExperimentConfig:
                 leading_edge=0.0,
                 leading_edge_area=0.0,
                 front_contrast=0.0,
+                front_profile=0.0,
                 level_set_alignment=0.0,
                 rk4_teacher=0.0,
                 sparse=0.0,
@@ -466,6 +473,7 @@ class ExperimentConfig:
                 leading_edge=0.0,
                 leading_edge_area=1.0,
                 front_contrast=0.10,
+                front_profile=0.20,
                 level_set_alignment=0.0,
                 rk4_teacher=0.0,
                 sparse=1.0e-5,
@@ -490,6 +498,8 @@ class ExperimentConfig:
                 leading_edge_area_temperature=0.015,
                 front_contrast_times=5,
                 front_contrast_grid=32,
+                front_profile_points=256,
+                front_profile_width=0.06,
             ),
             ensemble=base.ensemble,
             base_seed=base.base_seed,
