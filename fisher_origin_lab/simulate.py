@@ -191,6 +191,21 @@ def truth_field_at(truth: TruthData, time: float, n: int | None = None) -> tuple
     ti = int(np.argmin(np.abs(truth.times - time)))
     if n is None or n == len(truth.xs):
         return truth.xs, truth.fields[ti]
-    idx = np.linspace(0, len(truth.xs) - 1, n).astype(int)
     xs = np.linspace(0.0, truth.xs[-1], n)
-    return xs, truth.fields[ti][np.ix_(idx, idx)]
+    src = truth.xs
+    scale = (len(src) - 1) / max(float(src[-1]), 1.0e-12)
+    gx = np.clip(xs * scale, 0.0, len(src) - 1)
+    gy = gx
+    i0 = np.floor(gx).astype(int)
+    j0 = np.floor(gy).astype(int)
+    i1 = np.minimum(i0 + 1, len(src) - 1)
+    j1 = np.minimum(j0 + 1, len(src) - 1)
+    wx = (gx - i0)[:, None]
+    wy = (gy - j0)[None, :]
+    field = truth.fields[ti]
+    f00 = field[np.ix_(i0, j0)]
+    f10 = field[np.ix_(i1, j0)]
+    f01 = field[np.ix_(i0, j1)]
+    f11 = field[np.ix_(i1, j1)]
+    resampled = (1.0 - wx) * (1.0 - wy) * f00 + wx * (1.0 - wy) * f10 + (1.0 - wx) * wy * f01 + wx * wy * f11
+    return xs, resampled

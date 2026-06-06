@@ -35,7 +35,7 @@ from fisher_origin_lab.plotting import (
 from fisher_origin_lab.rk4 import forward_fisher_kpp_rk4
 from fisher_origin_lab.samplers import SobolCollocation
 from fisher_origin_lab.shooting import source_shooting_loss
-from fisher_origin_lab.simulate import forward_fisher_kpp, sample_observations, split_observations
+from fisher_origin_lab.simulate import gaussian_seed_numpy, forward_fisher_kpp, sample_observations, split_observations, truth_field_at
 from fisher_origin_lab.train import _masked_batch_indices, _time_window, _warm_start_center_from_observations
 
 
@@ -51,6 +51,19 @@ def test_forward_solver_shape_and_bounds() -> None:
     assert np.isfinite(truth.fields).all()
     assert truth.fields.min() >= 0.0
     assert truth.fields.max() <= 1.0
+
+
+def test_truth_field_at_uses_interpolation_for_resampling() -> None:
+    domain = DomainConfig(grid=51, truth_steps=160)
+    seed = SeedConfig()
+    truth = forward_fisher_kpp(domain, PDEConfig(), seed, snapshots=8)
+    xs, field = truth_field_at(truth, 0.0, n=96)
+    x, y = np.meshgrid(xs, xs, indexing="ij")
+    analytic = gaussian_seed_numpy(x, y, seed)
+
+    denom = np.sqrt(np.mean(analytic**2)) + 1.0e-12
+    rel = np.sqrt(np.mean((field - analytic) ** 2)) / denom
+    assert rel < 3.0e-2
 
 
 def test_rk4_solver_matches_current_problem_shape_and_bounds() -> None:
