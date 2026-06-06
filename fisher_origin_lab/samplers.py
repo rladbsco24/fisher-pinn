@@ -15,14 +15,29 @@ class SobolCollocation:
         self.engine = torch.quasirandom.SobolEngine(dimension=3, scramble=True, seed=seed)
         self.anchors: torch.Tensor | None = None
 
-    def sample(self, n: int) -> tuple[torch.Tensor, torch.Tensor]:
-        random_part = self._draw_valid(n)
+    def sample(
+        self,
+        n: int,
+        *,
+        t_low: float | None = None,
+        t_high: float | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        random_part = self._draw_valid(n, t_low=t_low, t_high=t_high)
         if self.anchors is None or len(self.anchors) == 0:
             points = random_part
         else:
-            anchor_n = min(len(self.anchors), max(1, n // 4))
-            idx = torch.randint(0, len(self.anchors), (anchor_n,), device=self.device)
-            points = torch.cat([random_part[: n - anchor_n], self.anchors[idx]], dim=0)
+            anchors = self.anchors
+            if t_low is not None or t_high is not None:
+                low = 0.0 if t_low is None else float(t_low)
+                high = self.t_end if t_high is None else float(t_high)
+                keep_mask = (anchors[:, 2] >= low) & (anchors[:, 2] <= high)
+                anchors = anchors[keep_mask]
+            if len(anchors) == 0:
+                points = random_part
+                return points[:, :2], points[:, 2:3]
+            anchor_n = min(len(anchors), max(1, n // 4))
+            idx = torch.randint(0, len(anchors), (anchor_n,), device=self.device)
+            points = torch.cat([random_part[: n - anchor_n], anchors[idx]], dim=0)
         return points[:, :2], points[:, 2:3]
 
     def refresh(
@@ -36,8 +51,10 @@ class SobolCollocation:
         residual_weight: float = 1.0,
         gradient_weight: float = 0.25,
         activity_weight: float = 0.25,
+        t_low: float | None = None,
+        t_high: float | None = None,
     ) -> None:
-        candidates = self._draw_valid(candidate_n)
+        candidates = self._draw_valid(candidate_n, t_low=t_low, t_high=t_high)
         scores = []
         for start in range(0, candidate_n, chunk):
             part = candidates[start : start + chunk]
@@ -59,11 +76,22 @@ class SobolCollocation:
         idx = torch.topk(score, k=topk).indices
         self.anchors = candidates[idx].detach()
 
-    def _draw_valid(self, n: int) -> torch.Tensor:
+    def _draw_valid(
+        self,
+        n: int,
+        *,
+        t_low: float | None = None,
+        t_high: float | None = None,
+    ) -> torch.Tensor:
+        low = 0.0 if t_low is None else max(0.0, min(float(t_low), self.t_end))
+        high = self.t_end if t_high is None else max(0.0, min(float(t_high), self.t_end))
+        if high < low:
+            low, high = high, low
+        span = max(high - low, 1.0e-8)
         if self.mask_kind == "box":
             points = self.engine.draw(n).to(self.device)
             points[:, :2] *= self.box
-            points[:, 2:3] *= self.t_end
+            points[:, 2:3] = low + span * points[:, 2:3]
             return points
 
         chunks = []
@@ -71,7 +99,7 @@ class SobolCollocation:
         while remaining > 0:
             candidate = self.engine.draw(max(remaining * 2, 32)).to(self.device)
             candidate[:, :2] *= self.box
-            candidate[:, 2:3] *= self.t_end
+            candidate[:, 2:3] = low + span * candidate[:, 2:3]
             valid = self._valid_mask(candidate[:, :2])
             chosen = candidate[valid][:remaining]
             if len(chosen) == 0:

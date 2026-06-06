@@ -319,6 +319,7 @@ def save_training_diagnostics_figure(
         ("expected_front_pde", COLORS["gold"]),
         ("leading_edge", COLORS["pink"]),
         ("leading_edge_area", COLORS["teal"]),
+        ("level_set", COLORS["gold"]),
         ("front_speed", COLORS["blue_light"]),
         ("front_grad", COLORS["pink"]),
         ("grad", COLORS["neutral"]),
@@ -350,6 +351,7 @@ def save_training_diagnostics_figure(
         ("front_weight_mean", COLORS["blue"]),
         ("residual_exponent", COLORS["gold"]),
         ("sparse", COLORS["orange"]),
+        ("time_window_high", COLORS["pink"]),
         ("origin_error", COLORS["olive"]),
     ]:
         epochs, values = _as_history_arrays(history, key)
@@ -369,6 +371,7 @@ def save_training_diagnostics_figure(
         ("aw_mass", COLORS["teal"]),
         ("aw_expected_front_pde", COLORS["gold"]),
         ("aw_leading_edge", COLORS["pink"]),
+        ("aw_level_set", COLORS["gold"]),
         ("aw_front_speed", COLORS["blue_light"]),
         ("aw_front_grad", COLORS["pink"]),
     ]

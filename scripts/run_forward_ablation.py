@@ -101,6 +101,29 @@ def make_forward_cases(base: ExperimentConfig) -> list[dict[str, Any]]:
     )
     geo_front_area = base
     geo_area_strong = replace(base, weights=replace(base.weights, leading_edge_area=3.0))
+    geo_levelset_time_slab = replace(
+        base,
+        weights=replace(
+            base.weights,
+            level_set_alignment=0.05,
+            rk4_teacher=max(base.weights.rk4_teacher, 0.005),
+        ),
+        train=replace(
+            base.train,
+            level_set_points=max(base.train.level_set_points, 256),
+            level_set_width=0.02,
+            time_marching=True,
+            time_marching_start_fraction=0.30,
+            time_marching_epochs=max(base.train.time_marching_epochs, base.train.epochs // 2),
+            time_slabs=4,
+            time_slab_overlap=0.08,
+            time_slab_curriculum=True,
+            time_window_focus_fraction=0.5,
+            time_window_teacher=False,
+            rk4_teacher_pool=max(base.train.rk4_teacher_pool, 4096),
+            rk4_teacher_batch=max(base.train.rk4_teacher_batch, 512),
+        ),
+    )
     geo_rk4_teacher_front_area = replace(
         base,
         weights=replace(base.weights, rk4_teacher=0.005),
@@ -155,6 +178,7 @@ def make_forward_cases(base: ExperimentConfig) -> list[dict[str, Any]]:
         _case("geo_speed_mass", geo_speed_mass, "Adds gradient-filtered front-speed and parabolic mass-balance losses."),
         _case("geo_front_area", geo_front_area, "Default PirateNet/RWF profile with scaled traveling-wave features."),
         _case("geo_front_area_strong", geo_area_strong, "Stronger front-area ablation; useful for checking metric tradeoffs."),
+        _case("geo_levelset_time_slab", geo_levelset_time_slab, "Front level-set alignment plus causal time-slab windowing."),
         _case("geo_rk4_teacher_front_area", geo_rk4_teacher_front_area, "Weak RK4 pseudo-label regularizer for solver-assisted PINN training."),
         _case("geo_rk4_late_teacher_front_area", geo_rk4_late_teacher_front_area, "RK4 teacher profile biased toward late moving-front snapshots."),
         _case("geo_rk4_pretrain_front_area", geo_rk4_pretrain_front_area, "RK4 teacher pretraining followed by PINN fine-tuning."),

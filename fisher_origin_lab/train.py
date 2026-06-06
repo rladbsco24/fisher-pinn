@@ -23,6 +23,7 @@ from .losses import (
     expected_front_pde_loss,
     front_indicator_weights,
     front_local_gradient_residual_loss,
+    front_level_set_alignment_loss,
     front_speed_consistency_loss,
     gradient_residual_loss,
     known_initial_condition_loss,
@@ -131,11 +132,16 @@ def _rk4_teacher_batch_loss(
     batch_size: int,
     density_gain: float,
     device: torch.device,
+    *,
+    t_low: float = 0.0,
+    t_high: float | None = None,
 ) -> torch.Tensor:
     if teacher_xyt is None or teacher_values is None or len(teacher_xyt) == 0 or batch_size <= 0:
         return torch.zeros((), device=device)
     teacher_batch = min(max(1, int(batch_size)), len(teacher_xyt))
-    teacher_idx = torch.randint(0, len(teacher_xyt), (teacher_batch,), device=device)
+    teacher_idx = _masked_batch_indices(teacher_xyt, teacher_batch, device, t_low=t_low, t_high=t_high)
+    if teacher_idx is None:
+        return torch.zeros((), device=device)
     teacher_pred = model(teacher_xyt[teacher_idx, :2], teacher_xyt[teacher_idx, 2:3])
     return _weighted_data_mse(teacher_pred, teacher_values[teacher_idx], density_gain)
 
@@ -235,6 +241,85 @@ def _residual_weight_exponent(cfg: ExperimentConfig, epoch: int) -> float:
     return start + progress * (end - start)
 
 
+def _time_window(cfg: ExperimentConfig, epoch: int) -> tuple[float, float]:
+    t_end = float(cfg.domain.t_end)
+    if t_end <= 0.0:
+        return 0.0, 0.0
+    high = t_end
+    if cfg.train.time_marching:
+        ramp_epochs = cfg.train.time_marching_epochs or cfg.train.epochs
+        progress = min(1.0, max(0.0, epoch / float(max(1, ramp_epochs))))
+        start = min(max(float(cfg.train.time_marching_start_fraction), 0.0), 1.0) * t_end
+        high = start + progress * (t_end - start)
+    low = 0.0
+    if cfg.train.time_slabs > 1:
+        slabs = max(1, int(cfg.train.time_slabs))
+        if cfg.train.time_slab_curriculum:
+            progress = min(1.0, max(0.0, (epoch - 1) / float(max(1, cfg.train.epochs - 1))))
+            slab = min(slabs - 1, int(progress * slabs))
+            edge1 = t_end * (slab + 1) / slabs
+            overlap = max(0.0, float(cfg.train.time_slab_overlap)) * t_end
+            high = min(high, min(t_end, edge1 + overlap))
+        else:
+            slab = (epoch - 1) % slabs
+            edge0 = t_end * slab / slabs
+            edge1 = t_end * (slab + 1) / slabs
+            overlap = max(0.0, float(cfg.train.time_slab_overlap)) * t_end
+            low = max(0.0, edge0 - overlap)
+            high = min(high, min(t_end, edge1 + overlap))
+            if high <= low:
+                high = min(t_end, edge1 + overlap)
+    return low, max(low + 1.0e-8, min(high, t_end))
+
+
+def _masked_batch_indices(
+    xyt: torch.Tensor,
+    n: int,
+    device: torch.device,
+    *,
+    t_low: float = 0.0,
+    t_high: float | None = None,
+    fallback_all: bool = True,
+) -> torch.Tensor | None:
+    if t_high is None:
+        candidates = torch.arange(len(xyt), device=device)
+    else:
+        mask = (xyt[:, 2] >= float(t_low) - 1.0e-8) & (xyt[:, 2] <= float(t_high) + 1.0e-8)
+        candidates = torch.where(mask)[0]
+        if len(candidates) == 0:
+            if not fallback_all:
+                return None
+            candidates = torch.arange(len(xyt), device=device)
+    if len(candidates) == 0:
+        return None
+    return candidates[torch.randint(0, len(candidates), (n,), device=device)]
+
+
+def _sample_curriculum_collocation(
+    sampler: SobolCollocation,
+    n: int,
+    *,
+    t_low: float,
+    t_high: float,
+    focus_fraction: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    if n <= 0:
+        return sampler.sample(0)
+    focus_fraction = float(np.clip(focus_fraction, 0.0, 1.0))
+    if focus_fraction >= 1.0 - 1.0e-8:
+        return sampler.sample(n, t_low=t_low, t_high=t_high)
+    if focus_fraction <= 1.0e-8:
+        return sampler.sample(n)
+
+    focus_n = min(n, max(1, int(round(n * focus_fraction))))
+    global_n = n - focus_n
+    focus_xy, focus_t = sampler.sample(focus_n, t_low=t_low, t_high=t_high)
+    if global_n <= 0:
+        return focus_xy, focus_t
+    global_xy, global_t = sampler.sample(global_n)
+    return torch.cat([focus_xy, global_xy], dim=0), torch.cat([focus_t, global_t], dim=0)
+
+
 def _combine_loss_terms(
     terms: list[tuple[str, float, torch.Tensor]],
     balancer: _AdaptiveLossBalancer | None,
@@ -253,6 +338,7 @@ def _combine_loss_terms(
         "mass",
         "expected_front_pde",
         "leading_edge",
+        "level_set",
     }
     active = [(name, weight, loss) for name, weight, loss in terms if weight > 0.0]
     if not active:
@@ -360,6 +446,7 @@ def train_single(
     start = time.time()
 
     for epoch in range(1, cfg.train.epochs + 1):
+        window_t_low, window_t_high = _time_window(cfg, epoch)
         optimizer.zero_grad()
         pred = model(observations_xyt[:, :2], observations_xyt[:, 2:3])
         data_loss = _weighted_data_mse(pred, observations_values, cfg.weights.data_density_gain)
@@ -371,11 +458,26 @@ def train_single(
                 cfg.train.rk4_teacher_batch,
                 cfg.weights.data_density_gain,
                 device,
+                t_low=window_t_low,
+                t_high=(
+                    window_t_high
+                    if cfg.train.time_window_teacher and (cfg.train.time_marching or cfg.train.time_slabs > 1)
+                    else None
+                ),
             )
         else:
             rk4_teacher_loss = torch.zeros((), device=device)
 
-        xy_col, t_col = sampler.sample(cfg.train.collocation_points)
+        if cfg.train.time_marching or cfg.train.time_slabs > 1:
+            xy_col, t_col = _sample_curriculum_collocation(
+                sampler,
+                cfg.train.collocation_points,
+                t_low=window_t_low,
+                t_high=window_t_high,
+                focus_fraction=cfg.train.time_window_focus_fraction,
+            )
+        else:
+            xy_col, t_col = sampler.sample(cfg.train.collocation_points)
         residual, u_col, u_xy_col, _, _ = pde_residual_terms(model, xy_col, t_col)
         residual_sq = residual.pow(2).flatten()
         residual_exponent = _residual_weight_exponent(cfg, epoch)
@@ -475,6 +577,17 @@ def train_single(
             )
         else:
             leading_edge_area = torch.zeros((), device=device)
+        if cfg.weights.level_set_alignment > 0.0 and cfg.train.level_set_points > 0:
+            level_set_loss = front_level_set_alignment_loss(
+                model,
+                cfg.train.level_set_points,
+                device,
+                width=cfg.train.level_set_width,
+                t_low=window_t_low,
+                t_high=window_t_high,
+            )
+        else:
+            level_set_loss = torch.zeros((), device=device)
         if cfg.weights.mass_balance > 0.0:
             mass_loss = parabolic_mass_balance_loss(
                 model,
@@ -503,6 +616,7 @@ def train_single(
                 ("expected_front_pde", cfg.weights.expected_front_pde, expected_front_loss),
                 ("leading_edge", cfg.weights.leading_edge, leading_edge_loss),
                 ("leading_edge_area", cfg.weights.leading_edge_area, leading_edge_area),
+                ("level_set", cfg.weights.level_set_alignment, level_set_loss),
                 ("mass", cfg.weights.mass_balance, mass_loss),
                 ("sparse", cfg.weights.sparse, sparse_loss),
             ],
@@ -522,6 +636,8 @@ def train_single(
                 residual_weight=cfg.train.rar_residual_weight,
                 gradient_weight=cfg.train.rar_gradient_weight,
                 activity_weight=cfg.train.rar_activity_weight,
+                t_low=window_t_low,
+                t_high=window_t_high,
             )
 
         if epoch == 1 or epoch % cfg.train.print_every == 0 or epoch == cfg.train.epochs:
@@ -567,9 +683,12 @@ def train_single(
                 "expected_front_pde": float(expected_front_loss.detach().cpu()),
                 "leading_edge": float(leading_edge_loss.detach().cpu()),
                 "leading_edge_area": float(leading_edge_area.detach().cpu()),
+                "level_set": float(level_set_loss.detach().cpu()),
                 "mass": float(mass_loss.detach().cpu()),
                 "sparse": float(sparse_loss.detach().cpu()),
                 "residual_exponent": float(residual_exponent),
+                "time_window_low": float(window_t_low),
+                "time_window_high": float(window_t_high),
                 "front_weight_mean": float(front_weights.detach().mean().cpu()),
                 "diffusion": float(model.pde.diffusion().detach().cpu()),
                 "reaction": float(model.pde.reaction().detach().cpu()),

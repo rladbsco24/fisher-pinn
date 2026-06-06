@@ -367,6 +367,78 @@ def linearized_kpp_area_targets(
     return torch.cat(targets, dim=1)
 
 
+def _linearized_kpp_level_radius(
+    model: OriginPINN,
+    times: torch.Tensor,
+    levels: torch.Tensor,
+) -> torch.Tensor:
+    diffusion = torch.as_tensor(model.reference_diffusion, dtype=times.dtype, device=times.device).clamp_min(1.0e-10)
+    reaction = torch.as_tensor(model.reference_reaction, dtype=times.dtype, device=times.device).clamp_min(1.0e-10)
+    sigma2 = torch.as_tensor(model.seed_sigma**2, dtype=times.dtype, device=times.device)
+    amplitude = torch.as_tensor(model.seed_amplitude, dtype=times.dtype, device=times.device)
+    spread = sigma2 + 2.0 * diffusion * times
+    leading_amplitude = amplitude * sigma2 / spread.clamp_min(1.0e-8) * torch.exp(reaction * times)
+    log_ratio = torch.log(leading_amplitude.clamp_min(1.0e-12) / levels.clamp_min(1.0e-12))
+    radius_sq = torch.where(log_ratio > 0.0, 2.0 * spread * log_ratio, torch.zeros_like(spread))
+    return torch.sqrt(radius_sq.clamp_min(0.0))
+
+
+def front_level_set_alignment_loss(
+    model: OriginPINN,
+    n: int,
+    device: torch.device,
+    *,
+    levels: tuple[float, ...] = (0.05, 0.10),
+    width: float = 0.025,
+    sign_margin_fraction: float = 0.15,
+    t_low: float = 0.0,
+    t_high: float | None = None,
+) -> torch.Tensor:
+    """Align predicted Fisher-KPP level sets with the leading-edge front.
+
+    The existing soft area loss matches integrated front coverage. This loss is
+    more local: on the expected KPP level-set ring it drives u toward the target
+    level, and it adds weak inside/outside hinge terms so a broad low-amplitude
+    haze cannot satisfy the area metric by itself.
+    """
+
+    if n <= 0 or not levels:
+        return torch.zeros((), device=device)
+    dtype = next(model.parameters()).dtype
+    levels_t = torch.tensor(levels, dtype=dtype, device=device)
+    level_idx = torch.randint(0, len(levels), (n, 1), device=device)
+    level = levels_t[level_idx]
+    low = max(0.0, min(float(t_low), model.domain.t_end))
+    high = model.domain.t_end if t_high is None else max(0.0, min(float(t_high), model.domain.t_end))
+    if high < low:
+        low, high = high, low
+    t = low + torch.rand(n, 1, dtype=dtype, device=device) * max(high - low, 1.0e-8)
+    radius = _linearized_kpp_level_radius(model, t, level)
+    angle = 2.0 * math.pi * torch.rand(n, 1, dtype=dtype, device=device)
+    normal = torch.cat([torch.cos(angle), torch.sin(angle)], dim=1)
+    center = model.seed_center.to(dtype=dtype, device=device).view(1, 2)
+    if model.pde.include_advection:
+        center = center + model.pde.velocity.detach().view(1, 2).to(dtype=dtype, device=device) * t
+    ring = center + radius * normal
+    offset = max(float(width), 1.0e-4) * model.domain.box
+    xy_on = ring.clamp(0.0, model.domain.box)
+    xy_in = (ring - offset * normal).clamp(0.0, model.domain.box)
+    xy_out = (ring + offset * normal).clamp(0.0, model.domain.box)
+
+    pred_on = model(xy_on, t)
+    pred_in = model(xy_in, t)
+    pred_out = model(xy_out, t)
+    valid = (radius > 1.0e-6).detach().float()
+    on_loss = valid * (pred_on - level).pow(2)
+    margin = (float(sign_margin_fraction) * level).clamp_min(1.0e-4)
+    order_loss = valid * (
+        torch.relu(level + margin - pred_in).pow(2)
+        + torch.relu(pred_out - (level - margin).clamp_min(0.0)).pow(2)
+    )
+    denom = valid.mean().clamp_min(1.0e-6)
+    return (on_loss.mean() + 0.5 * order_loss.mean()) / denom
+
+
 def leading_edge_area_loss(
     model: OriginPINN,
     n_times: int,

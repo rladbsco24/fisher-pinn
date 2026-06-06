@@ -36,7 +36,7 @@ from fisher_origin_lab.rk4 import forward_fisher_kpp_rk4
 from fisher_origin_lab.samplers import SobolCollocation
 from fisher_origin_lab.shooting import source_shooting_loss
 from fisher_origin_lab.simulate import forward_fisher_kpp, sample_observations, split_observations
-from fisher_origin_lab.train import _warm_start_center_from_observations
+from fisher_origin_lab.train import _masked_batch_indices, _time_window, _warm_start_center_from_observations
 
 
 def test_forward_solver_shape_and_bounds() -> None:
@@ -313,6 +313,7 @@ def test_forward_ablation_cases_report_front_metrics() -> None:
     names = [case["name"] for case in cases]
     assert "korea_style_forward" in names
     assert "geo_front_area" in names
+    assert "geo_levelset_time_slab" in names
     assert "geo_no_tw_front_area" in names
     assert "geo_rk4_teacher_front_area" in names
     assert "geo_rk4_late_teacher_front_area" in names
@@ -320,6 +321,7 @@ def test_forward_ablation_cases_report_front_metrics() -> None:
     assert "geo_nif_front_area" in names
     assert "geo_gated_front_area" in names
     assert any(case["cfg"].weights.leading_edge_area > 0.0 for case in cases)
+    assert any(case["cfg"].weights.level_set_alignment > 0.0 for case in cases)
     assert any(case["cfg"].model.architecture == "nif_pirate" for case in cases)
     assert any(case["cfg"].model.architecture == "pirate" for case in cases)
     assert any(case["cfg"].model.architecture == "gated_mlp" for case in cases)
@@ -327,6 +329,9 @@ def test_forward_ablation_cases_report_front_metrics() -> None:
     assert any(case["cfg"].weights.rk4_teacher > 0.0 for case in cases)
     assert any(case["cfg"].train.rk4_teacher_late_fraction > 0.0 for case in cases)
     assert any(case["cfg"].train.rk4_pretrain_steps > 0 for case in cases)
+    assert any(case["cfg"].train.time_marching for case in cases)
+    assert any(case["cfg"].train.time_slabs > 1 for case in cases)
+    assert any(case["cfg"].train.time_window_focus_fraction < 1.0 for case in cases)
     summary = aggregate_forward_ablation(
         [
             {
@@ -344,6 +349,38 @@ def test_forward_ablation_cases_report_front_metrics() -> None:
     )
     assert summary["cases"][0]["final_time_relative_l2_mean"] == 0.4
     assert summary["cases"][0]["front_area_010_mae_mean"] == 0.02
+
+
+def test_time_slab_curriculum_uses_cumulative_windows() -> None:
+    cfg = replace(
+        ExperimentConfig(domain=DomainConfig(t_end=0.5)),
+        train=replace(
+            ExperimentConfig().train,
+            epochs=40,
+            time_marching=True,
+            time_marching_start_fraction=0.25,
+            time_marching_epochs=20,
+            time_slabs=4,
+            time_slab_overlap=0.05,
+            time_slab_curriculum=True,
+        ),
+    )
+
+    early = _time_window(cfg, 1)
+    late = _time_window(cfg, 40)
+    assert early[0] == 0.0
+    assert late[0] == 0.0
+    assert early[1] < late[1]
+    assert np.isclose(late[1], cfg.domain.t_end)
+
+
+def test_masked_batch_indices_can_skip_empty_time_window() -> None:
+    xyt = torch.tensor([[0.1, 0.2, 0.35], [0.2, 0.2, 0.5]], dtype=torch.float32)
+    assert _masked_batch_indices(xyt, 4, torch.device("cpu"), t_low=0.0, t_high=0.2, fallback_all=False) is None
+
+    idx = _masked_batch_indices(xyt, 4, torch.device("cpu"), t_low=0.0, t_high=0.2)
+    assert idx is not None
+    assert idx.shape == (4,)
 
 
 def test_warm_start_modes() -> None:

@@ -151,6 +151,18 @@ What changes:
   linearized Fisher-KPP heat-kernel approximation to set analytic targets for low-level
   front areas (`u>0.05`, `u>0.10`). It combines soft area matching with a quantile hinge,
   so the metric is not satisfied merely by spreading tiny values everywhere.
+- A front-level-set alignment loss is implemented as an ablation. It samples expected
+  low-level Fisher-KPP rings from the linearized Gaussian leading-edge approximation,
+  drives the network to match `u ~= 0.05/0.10` on the ring, and adds weak inside/outside
+  ordering hinges. This is closer to moving-interface PINN losses than plain area
+  matching, but it remains an ablation because the analytic low-level approximation can
+  over-expand the `u>0.05` front in short runs.
+- Causal time marching and XPINN/FBPINN-inspired time-slab training are implemented for
+  the forward ablation suite. For a single shared network, `time_slab_curriculum=True`
+  expands the training window cumulatively from early to late times rather than training
+  only on the current slab. The collocation sampler also supports global replay through
+  `time_window_focus_fraction`, so the model gets local front focus without losing
+  full-domain PDE coverage.
 - Expected-front PDE sampling and one-sided leading-edge floor losses are implemented as
   optional ablation knobs. Quick experiments showed they can improve apparent active
   area while degrading held-out MSE/mass, so they are not enabled in the default profile.
@@ -267,6 +279,15 @@ and a short RK4 pretraining stage are kept as ablations because they were weaker
 one-seed quick checks. RK4 itself remains the much more accurate same-problem numerical
 baseline (`rk4_final_time_relative_l2 = 0.00464`).
 
+The first 60-epoch check of the cumulative `geo_levelset_time_slab` ablation
+(`level_set_alignment=0.05`, 50% time-window collocation focus, 50% global replay,
+weak RK4 teacher) gives `final_time_relative_l2 = 0.4022`,
+`validation_observation_mse = 6.60e-4`, `front_area_005_mae = 0.0344`,
+`front_area_010_mae = 0.0111`, and `mass_mae = 0.0055`. This improves the
+`u>0.10` active-front area metric relative to the weak-RK4 quick check, but gives worse
+field L2, `u>0.05` leading-edge area, and mass. Treat it as a front-geometry ablation,
+not as the current best all-purpose baseline.
+
 ## Colab Notebook
 
 Upload `fisher_kpp_origin_lab.ipynb` to Google Colab and run from the first cell.
@@ -344,6 +365,13 @@ Outputs:
   physics-informed neural networks", Journal of Computational Physics 2023.
 - Mullins, Kamil, Fahsi, Soulaïmani, "Physics-informed neural networks for solving
   moving interface flow problems using the level set approach", arXiv:2502.02440.
+- Jagtap, Karniadakis, "Extended Physics-Informed Neural Networks (XPINNs): A
+  Generalized Space-Time Domain Decomposition Based Deep Learning Framework for
+  Nonlinear Partial Differential Equations", Communications in Computational Physics
+  2020.
+- Moseley, Markham, Nissen-Meyer, "Finite basis physics-informed neural networks
+  (FBPINNs): a scalable domain decomposition approach for solving differential
+  equations", Advances in Computational Mathematics 2023.
 - Chen, Howard, Stinis, "Self-adaptive weights based on balanced residual decay rate for
   physics-informed neural networks and deep operator networks", arXiv:2407.01613.
 - Bischof, Kraus, "Multi-Objective Loss Balancing for Physics-Informed Deep Learning",

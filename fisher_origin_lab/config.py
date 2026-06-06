@@ -92,6 +92,7 @@ class LossWeights:
     expected_front_pde: float = 0.0
     leading_edge: float = 0.0
     leading_edge_area: float = 0.0
+    level_set_alignment: float = 0.0
     rk4_teacher: float = 0.0
     sparse: float = 0.0
 
@@ -140,6 +141,8 @@ class TrainConfig:
     expected_front_width: float = 0.08
     expected_front_speed_factor: float = 0.45
     expected_front_level: float = 0.1
+    level_set_points: int = 256
+    level_set_width: float = 0.025
     leading_edge_area_times: int = 5
     leading_edge_area_grid: int = 32
     leading_edge_area_temperature: float = 0.015
@@ -151,6 +154,14 @@ class TrainConfig:
     rk4_pretrain_steps: int = 0
     rk4_pretrain_batch: int = 0
     rk4_pretrain_lr: float = 1.0e-3
+    time_marching: bool = False
+    time_marching_start_fraction: float = 0.35
+    time_marching_epochs: int = 0
+    time_slabs: int = 1
+    time_slab_overlap: float = 0.05
+    time_slab_curriculum: bool = False
+    time_window_focus_fraction: float = 1.0
+    time_window_teacher: bool = False
     print_every: int = 100
     adam_to_lbfgs: bool = False
     lbfgs_steps: int = 100
@@ -233,6 +244,7 @@ class ExperimentConfig:
                 expected_front_pde=self.weights.expected_front_pde,
                 leading_edge=self.weights.leading_edge,
                 leading_edge_area=self.weights.leading_edge_area,
+                level_set_alignment=self.weights.level_set_alignment,
                 rk4_teacher=self.weights.rk4_teacher,
                 sparse=self.weights.sparse,
             ),
@@ -277,6 +289,8 @@ class ExperimentConfig:
                 expected_front_width=self.train.expected_front_width,
                 expected_front_speed_factor=self.train.expected_front_speed_factor,
                 expected_front_level=self.train.expected_front_level,
+                level_set_points=min(self.train.level_set_points, 128),
+                level_set_width=self.train.level_set_width,
                 leading_edge_area_times=min(self.train.leading_edge_area_times, 4),
                 leading_edge_area_grid=min(self.train.leading_edge_area_grid, 24),
                 leading_edge_area_temperature=self.train.leading_edge_area_temperature,
@@ -292,6 +306,18 @@ class ExperimentConfig:
                 if self.train.rk4_pretrain_batch > 0
                 else 0,
                 rk4_pretrain_lr=self.train.rk4_pretrain_lr,
+                time_marching=self.train.time_marching,
+                time_marching_start_fraction=self.train.time_marching_start_fraction,
+                time_marching_epochs=(
+                    min(self.train.time_marching_epochs, 60)
+                    if self.train.time_marching_epochs > 0
+                    else 0
+                ),
+                time_slabs=min(max(1, self.train.time_slabs), 4),
+                time_slab_overlap=self.train.time_slab_overlap,
+                time_slab_curriculum=self.train.time_slab_curriculum,
+                time_window_focus_fraction=self.train.time_window_focus_fraction,
+                time_window_teacher=self.train.time_window_teacher,
                 print_every=30,
                 adam_to_lbfgs=False,
             ),
@@ -364,6 +390,7 @@ class ExperimentConfig:
                 expected_front_pde=0.0,
                 leading_edge=0.0,
                 leading_edge_area=0.0,
+                level_set_alignment=0.0,
                 rk4_teacher=0.0,
                 sparse=0.0,
             ),
@@ -427,6 +454,7 @@ class ExperimentConfig:
                 expected_front_pde=0.0,
                 leading_edge=0.0,
                 leading_edge_area=1.0,
+                level_set_alignment=0.0,
                 rk4_teacher=0.0,
                 sparse=1.0e-5,
             ),
