@@ -298,6 +298,9 @@ accuracy. Treat it as a domain-decomposition/front-geometry ablation.
 Upload `fisher_kpp_origin_lab.ipynb` to Google Colab and run from the first cell.
 The notebook is self-contained: if `fisher_origin_lab/` is not present, it rebuilds the
 project package from an embedded source archive under `/content/fisher-kpp-origin-lab`.
+In Colab, the bootstrap cell refreshes that embedded project directory on every run so
+old `/content/fisher-kpp-origin-lab` files from a previous notebook cannot silently shadow
+the updated front-profile and signed-error plotting code.
 
 No Drive mount or repository clone is required for the quick experiment.
 
