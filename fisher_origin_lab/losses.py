@@ -479,6 +479,37 @@ def leading_edge_area_loss(
     return area_loss + 4.0 * quantile_hinge
 
 
+def front_area_contrast_loss(
+    model: OriginPINN,
+    n_times: int,
+    grid: int,
+    device: torch.device,
+    *,
+    levels: tuple[float, float] = (0.05, 0.10),
+    temperature: float = 0.015,
+) -> torch.Tensor:
+    """Match low/high front-area ratio to discourage diffuse halos."""
+
+    if n_times <= 0 or grid <= 1 or len(levels) != 2:
+        return torch.zeros((), device=device)
+    dtype = next(model.parameters()).dtype
+    xs = torch.linspace(0.0, model.domain.box, grid, dtype=dtype, device=device)
+    x, y = torch.meshgrid(xs, xs, indexing="ij")
+    xy_one = torch.stack([x.reshape(-1), y.reshape(-1)], dim=1)
+    times = torch.linspace(0.0, model.domain.t_end, n_times, dtype=dtype, device=device).reshape(-1, 1)
+    xy = xy_one.repeat(n_times, 1)
+    t = times.repeat_interleave(grid * grid, dim=0)
+    pred = model(xy, t).reshape(n_times, grid * grid, 1)
+    temp = max(float(temperature), 1.0e-4)
+    low_level, high_level = float(levels[0]), float(levels[1])
+    soft_low = torch.sigmoid((pred - low_level) / temp).mean(dim=1).clamp_min(1.0e-6)
+    soft_high = torch.sigmoid((pred - high_level) / temp).mean(dim=1).clamp_min(1.0e-6)
+    targets = linearized_kpp_area_targets(model, times, levels).clamp_min(1.0e-6)
+    pred_ratio = (soft_high / soft_low).clamp(1.0e-6, 1.0)
+    target_ratio = (targets[:, 1:2] / targets[:, 0:1]).clamp(1.0e-6, 1.0)
+    return torch.mean((torch.log(pred_ratio) - torch.log(target_ratio.detach())).pow(2))
+
+
 def gradient_residual_loss(
     model: OriginPINN,
     xy: torch.Tensor,

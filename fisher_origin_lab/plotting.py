@@ -30,6 +30,7 @@ COLORS = {
     "orange": "#CC6F47",
     "olive": "#71B436",
     "pink": "#BD569B",
+    "rose": "#D95F5F",
     "teal": "#2A9D8F",
     "neutral": "#7A828F",
 }
@@ -319,6 +320,7 @@ def save_training_diagnostics_figure(
         ("expected_front_pde", COLORS["gold"]),
         ("leading_edge", COLORS["pink"]),
         ("leading_edge_area", COLORS["teal"]),
+        ("front_contrast", COLORS["rose"]),
         ("level_set", COLORS["gold"]),
         ("front_speed", COLORS["blue_light"]),
         ("front_grad", COLORS["pink"]),
@@ -371,6 +373,7 @@ def save_training_diagnostics_figure(
         ("aw_mass", COLORS["teal"]),
         ("aw_expected_front_pde", COLORS["gold"]),
         ("aw_leading_edge", COLORS["pink"]),
+        ("aw_front_contrast", COLORS["rose"]),
         ("aw_level_set", COLORS["gold"]),
         ("aw_front_speed", COLORS["blue_light"]),
         ("aw_front_grad", COLORS["pink"]),

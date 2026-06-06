@@ -319,6 +319,7 @@ class OriginPINN(nn.Module):
         self.hard_initial_condition = bool(model.hard_initial_condition)
         self.initial_envelope_tau = float(model.initial_envelope_tau)
         self.use_kpp_front_envelope = bool(model.use_kpp_front_envelope)
+        self.front_envelope_level = float(model.front_envelope_level)
         self.front_envelope_margin = float(model.front_envelope_margin)
         self.front_envelope_width = float(model.front_envelope_width)
         self.seed_sigma = float(seed.sigma)
@@ -454,10 +455,19 @@ class OriginPINN(nn.Module):
 
     def _front_envelope(self, xy: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         center = self.seed_center.to(device=xy.device, dtype=xy.dtype).view(1, 2)
+        if self.pde.include_advection:
+            center = center + self.pde.velocity.detach().view(1, 2).to(device=xy.device, dtype=xy.dtype) * t
         radius = torch.linalg.norm(xy - center, dim=-1, keepdim=True)
-        speed = torch.as_tensor(self.reference_front_speed, dtype=xy.dtype, device=xy.device)
-        base_radius = 3.0 * self.seed_sigma + self.front_envelope_margin
-        support_radius = base_radius + speed * t
+        diffusion = torch.as_tensor(self.reference_diffusion, dtype=xy.dtype, device=xy.device).clamp_min(1.0e-10)
+        reaction = torch.as_tensor(self.reference_reaction, dtype=xy.dtype, device=xy.device).clamp_min(1.0e-10)
+        sigma2 = torch.as_tensor(self.seed_sigma**2, dtype=xy.dtype, device=xy.device)
+        amplitude = torch.as_tensor(self.seed_amplitude, dtype=xy.dtype, device=xy.device)
+        spread = sigma2 + 2.0 * diffusion * t
+        leading_amplitude = amplitude * sigma2 / spread.clamp_min(1.0e-8) * torch.exp(reaction * t)
+        level = torch.as_tensor(max(self.front_envelope_level, 1.0e-5), dtype=xy.dtype, device=xy.device)
+        log_ratio = torch.log(leading_amplitude.clamp_min(1.0e-12) / level)
+        radius_sq = torch.where(log_ratio > 0.0, 2.0 * spread * log_ratio, torch.zeros_like(spread))
+        support_radius = torch.sqrt(radius_sq.clamp_min(0.0)) + self.front_envelope_margin
         width = max(self.front_envelope_width, 1.0e-4)
         return torch.sigmoid((support_radius - radius) / width)
 

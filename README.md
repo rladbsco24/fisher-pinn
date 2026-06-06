@@ -124,8 +124,10 @@ What changes:
   `xi = (||x-x0|| - (3 sigma + 2 sqrt(D r) t)) / sqrt(D/r)`. This follows recent
   TW-PINN work and gives the network an explicit coordinate for translating Fisher-KPP
   fronts instead of requiring a generic MLP to rediscover that frame.
-- A KPP front-speed envelope suppresses nonphysical low-amplitude background far outside
-  the reachable front region.
+- A KPP front envelope suppresses nonphysical low-amplitude background outside the
+  linearized Fisher-KPP low-level radius. Earlier versions used a loose `c*t` support
+  and produced a broad low-amplitude haze; the current envelope is tied to the
+  heat-kernel leading edge and is much tighter.
 - A Neumann boundary loss is enabled.
 - PDE residuals are weighted toward infection-front regions using `u(1-u)` and
   `|grad u|`.
@@ -151,6 +153,9 @@ What changes:
   linearized Fisher-KPP heat-kernel approximation to set analytic targets for low-level
   front areas (`u>0.05`, `u>0.10`). It combines soft area matching with a quantile hinge,
   so the metric is not satisfied merely by spreading tiny values everywhere.
+- A low/high front-contrast loss matches the ratio of soft `u>0.10` to `u>0.05` areas.
+  This directly targets the failure mode where the network creates a wide `u~0.05`
+  haze but under-resolves the active front core.
 - A front-level-set alignment loss is implemented as an ablation. It samples expected
   low-level Fisher-KPP rings from the linearized Gaussian leading-edge approximation,
   drives the network to match `u ~= 0.05/0.10` on the ring, and adds weak inside/outside
@@ -270,23 +275,21 @@ promoting it.
 
 The current 60-epoch weak-RK4-teacher sanity check (`geo_rk4_teacher_front_area`,
 `rk4_teacher=0.005`, 4096 teacher points, batch 512) gives
-`final_time_relative_l2 = 0.3588`, `pinn_vs_rk4_final_relative_l2 = 0.3582`,
-`validation_observation_mse = 6.30e-4`, `front_area_005_mae = 0.0203`,
-`front_area_010_mae = 0.0120`, and `mass_mae = 0.0042`. Relative to the pure
-60-epoch default, this improves final L2, validation MSE, low-threshold front area, and
-mass, while slightly trading off the `u>0.10` front-area metric. Stronger teacher weights
-and a short RK4 pretraining stage are kept as ablations because they were weaker in the
-one-seed quick checks. RK4 itself remains the much more accurate same-problem numerical
-baseline (`rk4_final_time_relative_l2 = 0.00464`).
+`final_time_relative_l2 = 0.2641`, `pinn_vs_rk4_final_relative_l2 = 0.2650`,
+`validation_observation_mse = 5.57e-4`, `front_area_005_mae = 0.0195`,
+`front_area_010_mae = 0.0120`, and `mass_mae = 0.0026`. The main improvement comes from
+the tighter linearized KPP front envelope plus the low/high front-contrast loss, which
+removes the broad low-amplitude haze while preserving the active-front trend. RK4 itself
+remains the much more accurate same-problem numerical baseline
+(`rk4_final_time_relative_l2 = 0.00465`).
 
 The first 60-epoch check of the cumulative `geo_levelset_time_slab` ablation
-(`level_set_alignment=0.05`, 50% time-window collocation focus, 50% global replay,
-weak RK4 teacher) gives `final_time_relative_l2 = 0.4022`,
-`validation_observation_mse = 6.60e-4`, `front_area_005_mae = 0.0344`,
-`front_area_010_mae = 0.0111`, and `mass_mae = 0.0055`. This improves the
-`u>0.10` active-front area metric relative to the weak-RK4 quick check, but gives worse
-field L2, `u>0.05` leading-edge area, and mass. Treat it as a front-geometry ablation,
-not as the current best all-purpose baseline.
+(`level_set_alignment=0.03`, 50% time-window collocation focus, 50% global replay,
+weak RK4 teacher) gives `final_time_relative_l2 = 0.2830`,
+`validation_observation_mse = 6.00e-4`, `front_area_005_mae = 0.0435`,
+`front_area_010_mae = 0.0121`, and `mass_mae = 0.0037`. It is now stable, but it still
+does not beat the tighter-envelope weak-RK4 case on all-purpose field/front/mass
+accuracy. Treat it as a domain-decomposition/front-geometry ablation.
 
 ## Colab Notebook
 

@@ -68,6 +68,7 @@ class ModelConfig:
     hard_initial_condition: bool = False
     initial_envelope_tau: float = 0.06
     use_kpp_front_envelope: bool = False
+    front_envelope_level: float = 0.03
     front_envelope_margin: float = 0.08
     front_envelope_width: float = 0.04
 
@@ -92,6 +93,7 @@ class LossWeights:
     expected_front_pde: float = 0.0
     leading_edge: float = 0.0
     leading_edge_area: float = 0.0
+    front_contrast: float = 0.0
     level_set_alignment: float = 0.0
     rk4_teacher: float = 0.0
     sparse: float = 0.0
@@ -146,6 +148,8 @@ class TrainConfig:
     leading_edge_area_times: int = 5
     leading_edge_area_grid: int = 32
     leading_edge_area_temperature: float = 0.015
+    front_contrast_times: int = 5
+    front_contrast_grid: int = 32
     mass_balance_times: int = 4
     mass_balance_grid: int = 18
     rk4_teacher_pool: int = 0
@@ -222,6 +226,7 @@ class ExperimentConfig:
                 hard_initial_condition=self.model.hard_initial_condition,
                 initial_envelope_tau=self.model.initial_envelope_tau,
                 use_kpp_front_envelope=self.model.use_kpp_front_envelope,
+                front_envelope_level=self.model.front_envelope_level,
                 front_envelope_margin=self.model.front_envelope_margin,
                 front_envelope_width=self.model.front_envelope_width,
             ),
@@ -244,6 +249,7 @@ class ExperimentConfig:
                 expected_front_pde=self.weights.expected_front_pde,
                 leading_edge=self.weights.leading_edge,
                 leading_edge_area=self.weights.leading_edge_area,
+                front_contrast=self.weights.front_contrast,
                 level_set_alignment=self.weights.level_set_alignment,
                 rk4_teacher=self.weights.rk4_teacher,
                 sparse=self.weights.sparse,
@@ -294,6 +300,8 @@ class ExperimentConfig:
                 leading_edge_area_times=min(self.train.leading_edge_area_times, 4),
                 leading_edge_area_grid=min(self.train.leading_edge_area_grid, 24),
                 leading_edge_area_temperature=self.train.leading_edge_area_temperature,
+                front_contrast_times=min(self.train.front_contrast_times, 4),
+                front_contrast_grid=min(self.train.front_contrast_grid, 24),
                 mass_balance_times=min(self.train.mass_balance_times, 4),
                 mass_balance_grid=min(self.train.mass_balance_grid, 18),
                 rk4_teacher_pool=min(self.train.rk4_teacher_pool, 2048) if self.train.rk4_teacher_pool > 0 else 0,
@@ -368,6 +376,7 @@ class ExperimentConfig:
                 hard_initial_condition=False,
                 initial_envelope_tau=self.model.initial_envelope_tau,
                 use_kpp_front_envelope=False,
+                front_envelope_level=self.model.front_envelope_level,
                 front_envelope_margin=self.model.front_envelope_margin,
                 front_envelope_width=self.model.front_envelope_width,
             ),
@@ -390,6 +399,7 @@ class ExperimentConfig:
                 expected_front_pde=0.0,
                 leading_edge=0.0,
                 leading_edge_area=0.0,
+                front_contrast=0.0,
                 level_set_alignment=0.0,
                 rk4_teacher=0.0,
                 sparse=0.0,
@@ -432,8 +442,9 @@ class ExperimentConfig:
                 hard_initial_condition=True,
                 initial_envelope_tau=0.06,
                 use_kpp_front_envelope=True,
-                front_envelope_margin=0.08,
-                front_envelope_width=0.04,
+                front_envelope_level=0.03,
+                front_envelope_margin=0.05,
+                front_envelope_width=0.025,
             ),
             weights=LossWeights(
                 data=1.0,
@@ -448,12 +459,13 @@ class ExperimentConfig:
                 data_density_gain=4.0,
                 front_pde_alpha=2.0,
                 front_pde_gradient=0.5,
-                front_gradient=0.02,
+                front_gradient=0.005,
                 front_speed=0.01,
-                mass_balance=0.10,
+                mass_balance=0.20,
                 expected_front_pde=0.0,
                 leading_edge=0.0,
                 leading_edge_area=1.0,
+                front_contrast=0.10,
                 level_set_alignment=0.0,
                 rk4_teacher=0.0,
                 sparse=1.0e-5,
@@ -476,6 +488,8 @@ class ExperimentConfig:
                 leading_edge_area_times=5,
                 leading_edge_area_grid=32,
                 leading_edge_area_temperature=0.015,
+                front_contrast_times=5,
+                front_contrast_grid=32,
             ),
             ensemble=base.ensemble,
             base_seed=base.base_seed,

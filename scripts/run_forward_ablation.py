@@ -85,6 +85,7 @@ def make_forward_cases(base: ExperimentConfig) -> list[dict[str, Any]]:
             front_speed=0.0,
             mass_balance=0.0,
             leading_edge_area=0.0,
+            front_contrast=0.0,
             expected_front_pde=0.0,
             leading_edge=0.0,
             front_gradient=0.0,
@@ -95,6 +96,7 @@ def make_forward_cases(base: ExperimentConfig) -> list[dict[str, Any]]:
         weights=replace(
             base.weights,
             leading_edge_area=0.0,
+            front_contrast=0.0,
             expected_front_pde=0.0,
             leading_edge=0.0,
         ),
@@ -105,7 +107,7 @@ def make_forward_cases(base: ExperimentConfig) -> list[dict[str, Any]]:
         base,
         weights=replace(
             base.weights,
-            level_set_alignment=0.05,
+            level_set_alignment=0.03,
             rk4_teacher=max(base.weights.rk4_teacher, 0.005),
         ),
         train=replace(
