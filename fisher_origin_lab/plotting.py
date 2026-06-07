@@ -576,6 +576,7 @@ def save_pinn_evolution_gif(
     n: int = 72,
     max_frames: int = 24,
     fps: int = 5,
+    caption: str | None = None,
 ) -> None:
     """Save a compact animated view of truth, PINN prediction, and error over time."""
 
@@ -633,7 +634,7 @@ def save_pinn_evolution_gif(
     fig.text(
         0.01,
         0.915,
-        "Animated PINN reconstruction across the Fisher-KPP time horizon.",
+        caption or "Animated PINN reconstruction across the Fisher-KPP time horizon.",
         ha="left",
         va="top",
         fontsize=9,

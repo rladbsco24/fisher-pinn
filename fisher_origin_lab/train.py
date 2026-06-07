@@ -1120,6 +1120,12 @@ def run_experiment(cfg: ExperimentConfig) -> dict[str, object]:
         best.model,
         cfg.domain,
         device,
+        caption=(
+            f"epochs={cfg.train.epochs}, final relative L2={pinn_final_time_relative_l2:.3e}, "
+            f"validation MSE={validation_observation_mse:.3e}"
+            if validation_observation_mse is not None
+            else f"epochs={cfg.train.epochs}, final relative L2={pinn_final_time_relative_l2:.3e}"
+        ),
     )
 
     centers = np.array(ensemble_centers, dtype=np.float64)

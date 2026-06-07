@@ -371,7 +371,8 @@ Outputs:
   absolute PINN error, RK4 absolute error, truth/PINN front contours, and a compact
   accuracy summary.
 - `pinn_evolution.gif`: animated truth/PINN/absolute-error panels across the time
-  horizon, useful for diagnosing moving-front lag, haze, and late-time drift.
+  horizon with epoch/error caption, useful for diagnosing moving-front lag, haze, and
+  late-time drift.
 - `training_diagnostics.png`: loss components including known IC, moving-front speed,
   parabolic mass balance, learned `D/r`, residual curriculum, adaptive loss multipliers,
   front-profile alignment, and front/sparsity diagnostics.
