@@ -17,10 +17,18 @@ from fisher_kpp_rk4 import (
     check_rk4_stability,
     relative_l2,
     solve_1d_method,
+    solve_long_time_curve,
     solve_rk4,
     solve_rk4_2d,
 )
 from fisher_kpp_rk4.config import (
+    CURVE_ALPHA,
+    CURVE_DT,
+    CURVE_NT,
+    CURVE_OMEGA_D,
+    CURVE_RHO0,
+    CURVE_RHO_INF,
+    CURVE_V0,
     LONG_TIME_D,
     LONG_TIME_DT,
     LONG_TIME_DX,
@@ -117,6 +125,52 @@ def test_1d_method_comparison_runs_all_methods() -> None:
         assert result["snapshots"].min() >= 0.0
         assert result["snapshots"].max() <= 1.0
     assert relative_l2(results["trapezoidal"]["u_final"], rk4_final) < 1.0e-3
+
+
+def test_long_time_curve_trend_matches_reference_shape() -> None:
+    result = solve_long_time_curve(
+        "rk4",
+        dt=CURVE_DT,
+        Nt=CURVE_NT,
+        rho_inf=CURVE_RHO_INF,
+        alpha=CURVE_ALPHA,
+        omega_d=CURVE_OMEGA_D,
+        rho0=CURVE_RHO0,
+        v0=CURVE_V0,
+    )
+    times = result["times"]
+    rho = result["rho"]
+    first_window = times <= 8.0
+    peak_idx = int(np.argmax(rho[first_window]))
+    trough_idx = int(np.argmin(rho[(times >= 3.0) & (times <= 7.0)]))
+    trough_rho = rho[(times >= 3.0) & (times <= 7.0)][trough_idx]
+
+    assert 0.68 <= rho[peak_idx] <= 0.76
+    assert 1.5 <= times[peak_idx] <= 2.3
+    assert 0.13 <= trough_rho <= 0.22
+    assert 0.32 <= rho[-1] <= 0.36
+    assert float(np.max(result["abs_error"])) < 1.0e-6
+
+
+def test_long_time_curve_all_methods_stay_close_to_exact() -> None:
+    for method, max_error in {
+        "forward_euler": 3.5e-2,
+        "backward_euler": 3.5e-2,
+        "trapezoidal": 1.0e-3,
+        "rk4": 1.0e-6,
+    }.items():
+        result = solve_long_time_curve(
+            method,
+            dt=CURVE_DT,
+            Nt=CURVE_NT,
+            rho_inf=CURVE_RHO_INF,
+            alpha=CURVE_ALPHA,
+            omega_d=CURVE_OMEGA_D,
+            rho0=CURVE_RHO0,
+            v0=CURVE_V0,
+        )
+        assert np.isfinite(result["rho"]).all()
+        assert float(np.max(result["abs_error"])) < max_error
 
 
 def test_notebook_code_cells_are_parseable() -> None:

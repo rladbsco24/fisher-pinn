@@ -76,3 +76,19 @@ LONG_TIME_DT = LONG_TIME_T / LONG_TIME_NT
 
 def long_time_initial_condition(x: np.ndarray) -> np.ndarray:
     return 1.0 / (1.0 + np.exp((x - LONG_TIME_X0) / LONG_TIME_WIDTH))
+
+
+# Long-time curve-trend benchmark ---------------------------------------------
+#
+# The right panel in the reference image is a damped oscillatory scalar trend,
+# not a scalar Fisher-KPP probe trajectory. These parameters define a separate
+# fair ODE benchmark for matching that visual trend with FE/BE/trapezoidal/RK4.
+CURVE_T = 30.0
+CURVE_DT = 0.05
+CURVE_NT = int(round(CURVE_T / CURVE_DT))
+CURVE_DT = CURVE_T / CURVE_NT
+CURVE_RHO_INF = 0.34
+CURVE_ALPHA = 0.24
+CURVE_OMEGA_D = 1.0
+CURVE_RHO0 = 0.0
+CURVE_V0 = 0.60

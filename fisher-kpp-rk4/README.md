@@ -30,6 +30,7 @@ u_t = D (u_xx + u_yy) + r u(1-u)
 - `scripts/run_convergence.py`: compact 1D and 2D convergence sanity check.
 - `scripts/run_long_time_methods.py`: fair long-time 1D comparison of forward Euler, backward Euler, trapezoidal, and RK4.
 - `scripts/run_long_time_rk4_adjusted.py`: adjusted RK4-only long-time run using the same fair parameter set.
+- `scripts/run_long_time_curve_trend.py`: reference-style damped `rho(t)` curve trend comparison for forward Euler, backward Euler, trapezoidal, and RK4.
 - `notebooks/fisher_kpp_rk4_demo.ipynb`: notebook version of the 1D/2D demo.
 - `notebooks/fisher_kpp_long_time_methods.ipynb`: Colab-aware long-time method-comparison notebook.
 - `tests/test_solver.py`: smoke tests for solver shape, bounds, stability, and notebook integrity.
@@ -101,6 +102,26 @@ Long-time outputs include:
 The companion notebook is `notebooks/fisher_kpp_long_time_methods.ipynb`.
 It is Colab-aware and will clone the GitHub repository under `/content` if it
 is not already running from a local checkout.
+
+## Reference-Style Long-Time Curve Trend
+
+If the goal is the right-panel-style `rho(t)` curve rather than a Fisher-KPP
+front probe, use the separate damped-oscillator benchmark:
+
+```bash
+python scripts/run_long_time_curve_trend.py
+```
+
+It uses:
+
+```text
+rho_inf=0.34, alpha=0.24, omega_d=1.0, rho(0)=0, rho_t(0)=0.60, T=30, dt=0.05
+```
+
+The exact curve rises sharply, overshoots, then decays toward the long-time
+level with damped oscillations. The script overlays the exact curve and the
+forward Euler, backward Euler, trapezoidal, and RK4 results in
+`outputs/long_time_curve_trend/long_time_curve_trend.png`.
 
 ## Tests
 

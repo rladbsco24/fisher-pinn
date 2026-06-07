@@ -268,6 +268,143 @@ def relative_l2(u_num: np.ndarray, u_ref: np.ndarray) -> float:
     return float(np.linalg.norm(u_num - u_ref) / denom)
 
 
+def long_time_curve_exact(
+    times: np.ndarray,
+    rho_inf: float,
+    alpha: float,
+    omega_d: float,
+    rho0: float,
+    v0: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Exact underdamped trend used to match the reference long-time curve."""
+    times = np.asarray(times, dtype=np.float64)
+    c = rho0 - rho_inf
+    d = (v0 + alpha * c) / omega_d
+    phase = omega_d * times
+    envelope = np.exp(-alpha * times)
+    q = c * np.cos(phase) + d * np.sin(phase)
+    q_prime = -c * omega_d * np.sin(phase) + d * omega_d * np.cos(phase)
+    rho = rho_inf + envelope * q
+    velocity = envelope * (q_prime - alpha * q)
+    return rho, velocity
+
+
+def _curve_linear_system(alpha: float, omega_d: float, rho_inf: float) -> tuple[np.ndarray, np.ndarray]:
+    omega0_sq = alpha**2 + omega_d**2
+    a = np.array([[0.0, 1.0], [-omega0_sq, -2.0 * alpha]], dtype=np.float64)
+    b = np.array([0.0, omega0_sq * rho_inf], dtype=np.float64)
+    return a, b
+
+
+def _curve_rhs(
+    state: np.ndarray,
+    alpha: float,
+    omega_d: float,
+    rho_inf: float,
+) -> np.ndarray:
+    a, b = _curve_linear_system(alpha, omega_d, rho_inf)
+    return a @ np.asarray(state, dtype=np.float64) + b
+
+
+def _curve_forward_euler_step(
+    state: np.ndarray,
+    dt: float,
+    alpha: float,
+    omega_d: float,
+    rho_inf: float,
+) -> np.ndarray:
+    return np.asarray(state, dtype=np.float64) + dt * _curve_rhs(state, alpha, omega_d, rho_inf)
+
+
+def _curve_rk4_step(
+    state: np.ndarray,
+    dt: float,
+    alpha: float,
+    omega_d: float,
+    rho_inf: float,
+) -> np.ndarray:
+    state = np.asarray(state, dtype=np.float64)
+    k1 = _curve_rhs(state, alpha, omega_d, rho_inf)
+    k2 = _curve_rhs(state + 0.5 * dt * k1, alpha, omega_d, rho_inf)
+    k3 = _curve_rhs(state + 0.5 * dt * k2, alpha, omega_d, rho_inf)
+    k4 = _curve_rhs(state + dt * k3, alpha, omega_d, rho_inf)
+    return state + (dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
+
+
+def _curve_theta_step(
+    state: np.ndarray,
+    dt: float,
+    alpha: float,
+    omega_d: float,
+    rho_inf: float,
+    theta: float,
+) -> np.ndarray:
+    if not 0.0 < theta <= 1.0:
+        raise ValueError("theta must satisfy 0 < theta <= 1.")
+    a, b = _curve_linear_system(alpha, omega_d, rho_inf)
+    state = np.asarray(state, dtype=np.float64)
+    lhs = np.eye(2, dtype=np.float64) - theta * dt * a
+    rhs = state + dt * ((1.0 - theta) * (a @ state) + b)
+    return np.linalg.solve(lhs, rhs)
+
+
+def solve_long_time_curve(
+    method: str,
+    dt: float,
+    Nt: int,
+    rho_inf: float,
+    alpha: float,
+    omega_d: float,
+    rho0: float,
+    v0: float,
+) -> dict[str, np.ndarray]:
+    """Integrate the damped long-time curve benchmark with FE/BE/trapezoidal/RK4."""
+    normalized = method.lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "fe": "forward_euler",
+        "forward": "forward_euler",
+        "forward_euler": "forward_euler",
+        "be": "backward_euler",
+        "backward": "backward_euler",
+        "backward_euler": "backward_euler",
+        "tr": "trapezoidal",
+        "trap": "trapezoidal",
+        "trapezoid": "trapezoidal",
+        "trapezoidal": "trapezoidal",
+        "cn": "trapezoidal",
+        "crank_nicolson": "trapezoidal",
+        "rk4": "rk4",
+    }
+    if normalized not in aliases:
+        raise ValueError(f"Unsupported method {method!r}.")
+    method_name = aliases[normalized]
+
+    times = np.linspace(0.0, Nt * dt, Nt + 1)
+    states = np.empty((Nt + 1, 2), dtype=np.float64)
+    states[0] = np.array([rho0, v0], dtype=np.float64)
+
+    for n in range(Nt):
+        if method_name == "forward_euler":
+            states[n + 1] = _curve_forward_euler_step(states[n], dt, alpha, omega_d, rho_inf)
+        elif method_name == "backward_euler":
+            states[n + 1] = _curve_theta_step(states[n], dt, alpha, omega_d, rho_inf, theta=1.0)
+        elif method_name == "trapezoidal":
+            states[n + 1] = _curve_theta_step(states[n], dt, alpha, omega_d, rho_inf, theta=0.5)
+        else:
+            states[n + 1] = _curve_rk4_step(states[n], dt, alpha, omega_d, rho_inf)
+
+    exact_rho, exact_velocity = long_time_curve_exact(times, rho_inf, alpha, omega_d, rho0, v0)
+    return {
+        "method": np.array(method_name),
+        "times": times,
+        "rho": states[:, 0],
+        "velocity": states[:, 1],
+        "exact_rho": exact_rho,
+        "exact_velocity": exact_velocity,
+        "abs_error": np.abs(states[:, 0] - exact_rho),
+    }
+
+
 def solve_rk4(
     x: np.ndarray,
     dt: float,
