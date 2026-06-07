@@ -131,6 +131,10 @@ Outputs:
 - `baseline_metric_comparison.png`: RK4 versus PINN observed-year relative L2 and
   correlation.
 - `observed_vs_simulated_metrics.png`: observed-year metric trajectories.
+- `korea_map_baselines.gif`: animated Korea province-map view of observed density,
+  RK4, and the repository PINN baseline from 2016 through the configured forecast year.
+- `korea_map_baselines_preview.png`: first-frame preview for environments that do not
+  render GIFs inline.
 - `korea_pine_wilt_summary.json`: run configuration and aggregate metrics.
 
 The PINN baseline reuses this repository's PirateNet/Fourier/geo-feature PINN backbone

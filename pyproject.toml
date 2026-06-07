@@ -8,6 +8,7 @@ dependencies = [
   "torch>=2.2",
   "matplotlib>=3.8",
   "pillow>=10",
+  "pyproj>=3.5",
 ]
 
 [tool.pytest.ini_options]

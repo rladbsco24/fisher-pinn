@@ -16,6 +16,7 @@ import torch
 from scripts.run_inverse_origin import build_config
 from scripts.run_forward_ablation import aggregate as aggregate_forward_ablation
 from scripts.run_forward_ablation import make_forward_cases
+from scripts.run_korea_pine_wilt_simulation import _save_korea_map_baseline_gif
 
 from fisher_origin_lab.config import DomainConfig, ExperimentConfig, ModelConfig, PDEConfig, SeedConfig, WarmStartConfig
 from fisher_origin_lab.korea_data import (
@@ -295,7 +296,7 @@ def test_korea_pine_style_matches_forward_pinn_setup() -> None:
     assert cfg.weights.data_density_gain == 4.0
 
 
-def test_korea_pine_wilt_compact_dataset_and_rk4_smoke() -> None:
+def test_korea_pine_wilt_compact_dataset_and_rk4_smoke(tmp_path) -> None:
     manifest = load_manifest()
     compact = manifest["compact_files"]
     processed_dir = REPO_ROOT / "data" / "korea_pine_wilt" / "processed"
@@ -349,6 +350,20 @@ def test_korea_pine_wilt_compact_dataset_and_rk4_smoke() -> None:
     assert len(pinn.metrics) == 2
     assert pinn.status == "diagnostic_only_low_epoch"
     assert np.isfinite(pinn.fields).all()
+
+    gif_info = _save_korea_map_baseline_gif(
+        tmp_path / "korea_map_baselines.gif",
+        grid,
+        years,
+        fields,
+        pinn_years=pinn.years,
+        pinn_fields=pinn.fields,
+        fps=2.0,
+    )
+    assert (tmp_path / "korea_map_baselines.gif").read_bytes()[:6] in {b"GIF87a", b"GIF89a"}
+    assert (tmp_path / "korea_map_baselines_preview.png").exists()
+    assert gif_info["frames"] == 2
+    assert gif_info["panels"] == ["observed", "rk4", "pinn"]
 
 
 def test_geo_spectral_forward_profile_extends_korea_setup() -> None:
