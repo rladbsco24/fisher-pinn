@@ -12,8 +12,22 @@ SRC_DIR = REPO_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from fisher_kpp_rk4 import check_rk4_stability, solve_rk4, solve_rk4_2d
-from fisher_kpp_rk4.config import initial_condition, initial_condition_2d
+from fisher_kpp_rk4 import (
+    check_forward_euler_stability,
+    check_rk4_stability,
+    relative_l2,
+    solve_1d_method,
+    solve_rk4,
+    solve_rk4_2d,
+)
+from fisher_kpp_rk4.config import (
+    LONG_TIME_D,
+    LONG_TIME_DT,
+    LONG_TIME_DX,
+    LONG_TIME_R,
+    initial_condition,
+    initial_condition_2d,
+)
 
 
 def test_1d_rk4_shapes_bounds_and_fronts() -> None:
@@ -66,16 +80,58 @@ def test_stability_check_accepts_1d_and_2d() -> None:
     assert check_rk4_stability(dx=0.02, dt=0.003125, D=0.02, r=3.0, dim=2)["is_practically_safe"]
 
 
-def test_notebook_code_cells_are_parseable() -> None:
-    notebook = REPO_ROOT / "notebooks" / "fisher_kpp_rk4_demo.ipynb"
-    nb = json.loads(notebook.read_text(encoding="utf-8"))
-    for idx, cell in enumerate(nb["cells"]):
-        if cell.get("cell_type") != "code":
-            continue
-        source = "\n".join(
-            line
-            for line in "".join(cell.get("source", [])).splitlines()
-            if not line.lstrip().startswith(("%", "!"))
-        )
-        ast.parse(source, filename=f"{notebook.name}:cell{idx}")
+def test_long_time_fair_parameters_are_safe_for_explicit_methods() -> None:
+    assert check_forward_euler_stability(LONG_TIME_DX, LONG_TIME_DT, LONG_TIME_D, LONG_TIME_R, dim=1)["is_practically_safe"]
+    assert check_rk4_stability(LONG_TIME_DX, LONG_TIME_DT, LONG_TIME_D, LONG_TIME_R, dim=1)["is_practically_safe"]
 
+
+def test_1d_method_comparison_runs_all_methods() -> None:
+    x = np.linspace(0.0, 8.0, 81)
+
+    def init(grid: np.ndarray) -> np.ndarray:
+        return 1.0 / (1.0 + np.exp((grid - 2.0) / 0.35))
+
+    results = {
+        method: solve_1d_method(
+            method,
+            x=x,
+            dt=0.005,
+            Nt=40,
+            D=0.05,
+            r=0.2,
+            initial_condition=init,
+            left_bc=1.0,
+            right_bc=0.0,
+            save_interval=0.05,
+            probe_x=3.0,
+        )
+        for method in ("forward_euler", "backward_euler", "trapezoidal", "rk4")
+    }
+
+    rk4_final = results["rk4"]["u_final"]
+    for result in results.values():
+        assert result["snapshots"].shape[1] == len(x)
+        assert result["fronts"].shape == result["times"].shape
+        assert result["rho"].shape == result["times"].shape
+        assert np.isfinite(result["snapshots"]).all()
+        assert result["snapshots"].min() >= 0.0
+        assert result["snapshots"].max() <= 1.0
+    assert relative_l2(results["trapezoidal"]["u_final"], rk4_final) < 1.0e-3
+
+
+def test_notebook_code_cells_are_parseable() -> None:
+    notebooks = [
+        REPO_ROOT / "notebooks" / "fisher_kpp_rk4_demo.ipynb",
+        REPO_ROOT / "notebooks" / "fisher_kpp_long_time_methods.ipynb",
+    ]
+    for notebook in notebooks:
+        nb = json.loads(notebook.read_text(encoding="utf-8"))
+        for idx, cell in enumerate(nb["cells"]):
+            if cell.get("cell_type") != "code":
+                continue
+            source = "\n".join(
+                line
+                for line in "".join(cell.get("source", [])).splitlines()
+                if not line.lstrip().startswith(("%", "!"))
+            )
+            ast.parse(source, filename=f"{notebook.name}:cell{idx}")

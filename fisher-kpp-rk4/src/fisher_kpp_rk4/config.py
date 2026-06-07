@@ -49,3 +49,30 @@ def initial_condition_2d(x: np.ndarray, y: np.ndarray) -> np.ndarray:
 tol = 1.0e-10
 max_iter = 30
 
+
+# Long-time, fair-method setup --------------------------------------------------
+#
+# These values are chosen so forward Euler, backward Euler, trapezoidal, and RK4
+# can all use the same grid and time step through t=30 without boundary-front
+# interaction. Fisher-KPP is not oscillatory under this setup; the long-time
+# diagnostics are front position, mean density, and a probe trace rho(t).
+LONG_TIME_D = 0.06
+LONG_TIME_R = 0.25
+LONG_TIME_L = 30.0
+LONG_TIME_T = 30.0
+LONG_TIME_NX = 181
+LONG_TIME_X0 = 7.0
+LONG_TIME_WIDTH = 0.9
+LONG_TIME_PROBE_X = 12.0
+LONG_TIME_SAVE_INTERVAL = 0.5
+LONG_TIME_LEFT_BC = 1.0
+LONG_TIME_RIGHT_BC = 0.0
+LONG_TIME_X = np.linspace(0.0, LONG_TIME_L, LONG_TIME_NX)
+LONG_TIME_DX = LONG_TIME_L / (LONG_TIME_NX - 1)
+LONG_TIME_DT = 0.05
+LONG_TIME_NT = int(round(LONG_TIME_T / LONG_TIME_DT))
+LONG_TIME_DT = LONG_TIME_T / LONG_TIME_NT
+
+
+def long_time_initial_condition(x: np.ndarray) -> np.ndarray:
+    return 1.0 / (1.0 + np.exp((x - LONG_TIME_X0) / LONG_TIME_WIDTH))

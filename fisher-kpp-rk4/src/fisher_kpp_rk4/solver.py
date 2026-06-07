@@ -75,6 +75,115 @@ def rk4_step(u: np.ndarray, dt: float, dx: float, D: float, r: float, left_bc: f
     return np.clip(apply_dirichlet_bc(u_next, left_bc, right_bc), 0.0, 1.0)
 
 
+def forward_euler_step(
+    u: np.ndarray,
+    dt: float,
+    dx: float,
+    D: float,
+    r: float,
+    left_bc: float,
+    right_bc: float,
+) -> np.ndarray:
+    """One forward-Euler step for the 1D MOL-FDM Fisher-KPP system."""
+    u0 = apply_dirichlet_bc(u, left_bc, right_bc)
+    u_next = u0 + dt * fisher_kpp_rhs(u0, dx, D, r)
+    return np.clip(apply_dirichlet_bc(u_next, left_bc, right_bc), 0.0, 1.0)
+
+
+def _solve_tridiagonal(lower: np.ndarray, diag: np.ndarray, upper: np.ndarray, rhs: np.ndarray) -> np.ndarray:
+    """Thomas algorithm for a tridiagonal linear system."""
+    n = len(diag)
+    if n == 0:
+        return np.asarray([], dtype=np.float64)
+    a = np.asarray(lower, dtype=np.float64).copy()
+    b = np.asarray(diag, dtype=np.float64).copy()
+    c = np.asarray(upper, dtype=np.float64).copy()
+    d = np.asarray(rhs, dtype=np.float64).copy()
+    for i in range(1, n):
+        factor = a[i - 1] / b[i - 1]
+        b[i] -= factor * c[i - 1]
+        d[i] -= factor * d[i - 1]
+    x = np.empty(n, dtype=np.float64)
+    x[-1] = d[-1] / b[-1]
+    for i in range(n - 2, -1, -1):
+        x[i] = (d[i] - c[i] * x[i + 1]) / b[i]
+    return x
+
+
+def _theta_implicit_step(
+    u: np.ndarray,
+    dt: float,
+    dx: float,
+    D: float,
+    r: float,
+    left_bc: float,
+    right_bc: float,
+    theta: float,
+    tol: float = 1.0e-10,
+    max_iter: int = 30,
+) -> tuple[np.ndarray, int, float]:
+    """One theta-method step with Newton solves for the nonlinear logistic term."""
+    if not 0.0 < theta <= 1.0:
+        raise ValueError("theta must satisfy 0 < theta <= 1.")
+    u_old = apply_dirichlet_bc(u, left_bc, right_bc)
+    f_old = fisher_kpp_rhs(u_old, dx, D, r)
+    v = apply_dirichlet_bc(u_old + dt * f_old, left_bc, right_bc)
+    alpha = theta * dt * D / dx**2
+    explicit_part = (1.0 - theta) * f_old[1:-1]
+    residual_norm = np.inf
+    iterations = 0
+
+    for iterations in range(1, max_iter + 1):
+        v = apply_dirichlet_bc(v, left_bc, right_bc)
+        f_v = fisher_kpp_rhs(v, dx, D, r)
+        g = v[1:-1] - u_old[1:-1] - dt * (explicit_part + theta * f_v[1:-1])
+        residual_norm = float(np.linalg.norm(g, ord=np.inf))
+        if residual_norm <= tol:
+            break
+        diag = 1.0 + 2.0 * alpha - theta * dt * r * (1.0 - 2.0 * v[1:-1])
+        off = -alpha * np.ones(max(len(diag) - 1, 0), dtype=np.float64)
+        delta = _solve_tridiagonal(off, diag, off, -g)
+        v[1:-1] += delta
+        if float(np.linalg.norm(delta, ord=np.inf)) <= tol:
+            v = apply_dirichlet_bc(v, left_bc, right_bc)
+            f_v = fisher_kpp_rhs(v, dx, D, r)
+            g = v[1:-1] - u_old[1:-1] - dt * (explicit_part + theta * f_v[1:-1])
+            residual_norm = float(np.linalg.norm(g, ord=np.inf))
+            break
+
+    return np.clip(apply_dirichlet_bc(v, left_bc, right_bc), 0.0, 1.0), int(iterations), residual_norm
+
+
+def backward_euler_step(
+    u: np.ndarray,
+    dt: float,
+    dx: float,
+    D: float,
+    r: float,
+    left_bc: float,
+    right_bc: float,
+    tol: float = 1.0e-10,
+    max_iter: int = 30,
+) -> tuple[np.ndarray, int, float]:
+    """One backward-Euler step for the nonlinear 1D Fisher-KPP system."""
+    return _theta_implicit_step(u, dt, dx, D, r, left_bc, right_bc, theta=1.0, tol=tol, max_iter=max_iter)
+
+
+def trapezoidal_step(
+    u: np.ndarray,
+    dt: float,
+    dx: float,
+    D: float,
+    r: float,
+    left_bc: float,
+    right_bc: float,
+    tol: float = 1.0e-10,
+    max_iter: int = 30,
+) -> tuple[np.ndarray, int, float]:
+    """One Crank-Nicolson/trapezoidal step for the nonlinear 1D Fisher-KPP system."""
+    return _theta_implicit_step(u, dt, dx, D, r, left_bc, right_bc, theta=0.5, tol=tol, max_iter=max_iter)
+
+
 def rk4_step_2d(u: np.ndarray, dt: float, dx: float, D: float, r: float) -> np.ndarray:
     """One classical RK4 step for the 2D no-flux MOL-FDM Fisher-KPP system."""
     u0 = apply_neumann_bc_2d(u)
@@ -102,6 +211,31 @@ def check_rk4_stability(dx: float, dt: float, D: float, r: float, dim: int = 1, 
         dt_practical=dt_practical,
         is_practically_safe=dt <= dt_practical,
     ).as_dict()
+
+
+def check_forward_euler_stability(
+    dx: float,
+    dt: float,
+    D: float,
+    r: float,
+    dim: int = 1,
+    safety: float = 0.95,
+) -> dict[str, float | bool]:
+    """Practical forward-Euler stability estimate for diffusion plus logistic growth."""
+    if D <= 0.0 or r <= 0.0:
+        raise ValueError("D and r must be positive.")
+    if dim not in (1, 2):
+        raise ValueError("Only dim=1 or dim=2 is supported.")
+    dt_diff_limit = dx**2 / (2.0 * dim * D)
+    dt_reaction_scale = 1.0 / r
+    dt_practical = safety * min(dt_diff_limit, dt_reaction_scale)
+    return {
+        "dt": float(dt),
+        "dt_diff_limit": float(dt_diff_limit),
+        "dt_reaction_scale": float(dt_reaction_scale),
+        "dt_practical": float(dt_practical),
+        "is_practically_safe": bool(dt <= dt_practical),
+    }
 
 
 def front_position(x: np.ndarray, u: np.ndarray, level: float = 0.5) -> float:
@@ -179,6 +313,100 @@ def solve_rk4(
     }
 
 
+def solve_1d_method(
+    method: str,
+    x: np.ndarray,
+    dt: float,
+    Nt: int,
+    D: float,
+    r: float,
+    initial_condition,
+    left_bc: float,
+    right_bc: float,
+    save_interval: float = 1.0,
+    probe_x: float | None = None,
+    tol: float = 1.0e-10,
+    max_iter: int = 30,
+) -> dict[str, np.ndarray]:
+    """Solve the same 1D Fisher-KPP problem with FE, BE, trapezoidal, or RK4."""
+    normalized = method.lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "fe": "forward_euler",
+        "forward": "forward_euler",
+        "forward_euler": "forward_euler",
+        "be": "backward_euler",
+        "backward": "backward_euler",
+        "backward_euler": "backward_euler",
+        "tr": "trapezoidal",
+        "trap": "trapezoidal",
+        "trapezoid": "trapezoidal",
+        "trapezoidal": "trapezoidal",
+        "cn": "trapezoidal",
+        "crank_nicolson": "trapezoidal",
+        "rk4": "rk4",
+    }
+    if normalized not in aliases:
+        raise ValueError(f"Unsupported method {method!r}.")
+    method_name = aliases[normalized]
+    x = np.asarray(x, dtype=np.float64)
+    dx = float(x[1] - x[0])
+    u = np.clip(apply_dirichlet_bc(initial_condition(x), left_bc, right_bc), 0.0, 1.0)
+    if probe_x is None:
+        probe_x = float(0.5 * (x[0] + x[-1]))
+
+    snapshots: list[np.ndarray] = []
+    times: list[float] = []
+    fronts: list[float] = []
+    masses: list[float] = []
+    probes: list[float] = []
+    newton_iters: list[int] = []
+    newton_residuals: list[float] = []
+    next_save_t = 0.0
+
+    for n in range(Nt + 1):
+        t = n * dt
+        if t >= next_save_t - 1.0e-12 or n == Nt:
+            snapshots.append(u.copy())
+            times.append(t)
+            fronts.append(front_position(x, u, level=0.5))
+            masses.append(mean_mass(u))
+            probes.append(float(np.interp(probe_x, x, u)))
+            next_save_t += save_interval
+        if n == Nt:
+            break
+        if method_name == "forward_euler":
+            u = forward_euler_step(u, dt, dx, D, r, left_bc, right_bc)
+            newton_iters.append(0)
+            newton_residuals.append(0.0)
+        elif method_name == "backward_euler":
+            u, iters, residual = backward_euler_step(u, dt, dx, D, r, left_bc, right_bc, tol=tol, max_iter=max_iter)
+            newton_iters.append(iters)
+            newton_residuals.append(residual)
+        elif method_name == "trapezoidal":
+            u, iters, residual = trapezoidal_step(u, dt, dx, D, r, left_bc, right_bc, tol=tol, max_iter=max_iter)
+            newton_iters.append(iters)
+            newton_residuals.append(residual)
+        else:
+            u = rk4_step(u, dt, dx, D, r, left_bc, right_bc)
+            newton_iters.append(0)
+            newton_residuals.append(0.0)
+
+    return {
+        "dimension": np.array(1),
+        "method": np.array(method_name),
+        "x": x,
+        "times": np.asarray(times),
+        "snapshots": np.asarray(snapshots),
+        "fronts": np.asarray(fronts),
+        "mass": np.asarray(masses),
+        "rho": np.asarray(probes),
+        "probe_x": np.array(float(probe_x)),
+        "newton_iterations": np.asarray(newton_iters, dtype=np.int16),
+        "newton_residual": np.asarray(newton_residuals, dtype=np.float64),
+        "u_final": u,
+    }
+
+
 def solve_rk4_2d(
     x: np.ndarray,
     y: np.ndarray,
@@ -247,4 +475,3 @@ def estimate_front_speed(times: np.ndarray, fronts: np.ndarray, t_min: float | N
         return np.nan
     slope, _ = np.polyfit(times[mask], fronts[mask], deg=1)
     return float(slope)
-
