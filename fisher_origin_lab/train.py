@@ -42,6 +42,7 @@ from .plotting import (
     generated_figure_names,
     predict_field,
     save_observation_coverage_figure,
+    save_pinn_evolution_gif,
     save_pinn_rk4_comparison_figure,
     save_reconstruction_figure,
     save_residual_front_diagnostics_figure,
@@ -1112,6 +1113,13 @@ def run_experiment(cfg: ExperimentConfig) -> dict[str, object]:
         best.history,
         true_diffusion=cfg.pde.diffusion,
         true_reaction=cfg.pde.reaction,
+    )
+    save_pinn_evolution_gif(
+        cfg.out_dir / "pinn_evolution.gif",
+        truth,
+        best.model,
+        cfg.domain,
+        device,
     )
 
     centers = np.array(ensemble_centers, dtype=np.float64)

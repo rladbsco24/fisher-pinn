@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Iterable
 
+from matplotlib.animation import FuncAnimation, PillowWriter
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
@@ -565,6 +566,93 @@ def save_pinn_rk4_comparison_figure(
     plt.close(fig)
 
 
+def save_pinn_evolution_gif(
+    path: Path,
+    truth: TruthData,
+    model: OriginPINN,
+    domain: DomainConfig,
+    device: torch.device,
+    *,
+    n: int = 72,
+    max_frames: int = 24,
+    fps: int = 5,
+) -> None:
+    """Save a compact animated view of truth, PINN prediction, and error over time."""
+
+    _apply_chart_theme()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if len(truth.times) <= max_frames:
+        times = truth.times
+    else:
+        idx = np.unique(np.linspace(0, len(truth.times) - 1, max_frames).astype(int))
+        times = truth.times[idx]
+
+    frames: list[tuple[float, np.ndarray, np.ndarray, np.ndarray]] = []
+    error_vmax = 1.0e-12
+    for time_value in times:
+        _, true_field = truth_field_at(truth, float(time_value), n=n)
+        _, pred = predict_field(model, float(time_value), n=n, device=device)
+        err = np.abs(pred - true_field)
+        error_vmax = max(error_vmax, float(np.nanmax(err)))
+        frames.append((float(time_value), true_field, pred, err))
+
+    fig, axes = plt.subplots(1, 3, figsize=(10.5, 3.8), constrained_layout=False)
+    fig.subplots_adjust(left=0.035, right=0.97, bottom=0.08, top=0.78, wspace=0.18)
+    panels = [
+        ("reference", frames[0][1], "magma", 0.0, 1.0),
+        ("PINN", frames[0][2], "magma", 0.0, 1.0),
+        ("absolute error", frames[0][3], "viridis", 0.0, error_vmax),
+    ]
+    images = []
+    for ax, (title, field, cmap, vmin, vmax) in zip(axes, panels):
+        im = ax.imshow(
+            field.T,
+            origin="lower",
+            extent=[0, domain.box, 0, domain.box],
+            cmap=cmap,
+            vmin=vmin,
+            vmax=vmax,
+            interpolation="nearest",
+            animated=True,
+        )
+        ax.set_title(title, fontsize=9, color=TOKENS["ink"])
+        ax.set_xticks([])
+        ax.set_yticks([])
+        images.append(im)
+    fig.colorbar(images[2], ax=axes[2], fraction=0.046, pad=0.02)
+    title = fig.text(
+        0.01,
+        0.965,
+        "",
+        ha="left",
+        va="top",
+        fontsize=13,
+        fontweight="semibold",
+        color=TOKENS["ink"],
+    )
+    fig.text(
+        0.01,
+        0.915,
+        "Animated PINN reconstruction across the Fisher-KPP time horizon.",
+        ha="left",
+        va="top",
+        fontsize=9,
+        color=TOKENS["muted"],
+    )
+
+    def _update(frame_idx: int) -> list[object]:
+        time_value, true_field, pred, err = frames[frame_idx]
+        images[0].set_data(true_field.T)
+        images[1].set_data(pred.T)
+        images[2].set_data(err.T)
+        title.set_text(f"PINN field evolution t={time_value:.3f}")
+        return [*images, title]
+
+    animation = FuncAnimation(fig, _update, frames=len(frames), interval=1000 / max(fps, 1), blit=True)
+    animation.save(path, writer=PillowWriter(fps=fps))
+    plt.close(fig)
+
+
 def save_observation_coverage_figure(
     path: Path,
     train_observations: ObservationData,
@@ -641,6 +729,7 @@ def generated_figure_names() -> list[str]:
         "spacetime_error.png",
         "residual_front_diagnostics.png",
         "pinn_vs_rk4_comparison.png",
+        "pinn_evolution.gif",
         "training_diagnostics.png",
     ]
 

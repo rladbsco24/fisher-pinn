@@ -41,6 +41,7 @@ from fisher_origin_lab.losses import (
 from fisher_origin_lab.models import OriginPINN
 from fisher_origin_lab.plotting import (
     save_observation_coverage_figure,
+    save_pinn_evolution_gif,
     save_pinn_rk4_comparison_figure,
     save_residual_front_diagnostics_figure,
     save_spacetime_error_figure,
@@ -641,7 +642,9 @@ def test_visualization_exports_are_created(tmp_path) -> None:
         n=16,
     )
     save_training_diagnostics_figure(tmp_path / "training.png", history, true_diffusion=0.02, true_reaction=3.0)
+    save_pinn_evolution_gif(tmp_path / "pinn_evolution.gif", truth, model, cfg.domain, torch.device("cpu"), n=12, max_frames=3, fps=2)
 
-    for name in ["coverage.png", "spacetime.png", "residual.png", "pinn_vs_rk4.png", "training.png"]:
+    for name in ["coverage.png", "spacetime.png", "residual.png", "pinn_vs_rk4.png", "training.png", "pinn_evolution.gif"]:
         assert (tmp_path / name).exists()
         assert (tmp_path / name).stat().st_size > 1000
+    assert (tmp_path / "pinn_evolution.gif").read_bytes()[:6] in {b"GIF87a", b"GIF89a"}
