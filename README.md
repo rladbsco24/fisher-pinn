@@ -112,6 +112,12 @@ If the raw annual CSV files are available locally, rebuild the compact data with
 python scripts\build_korea_pine_wilt_compact_data.py --raw-dir C:\path\to\korea-pine-wilt-pinn-main\Data
 ```
 
+The Korea forward baseline now enforces the committed province GeoJSON as a land mask.
+Observation grids are zeroed outside land, RK4 uses masked no-flux diffusion at the
+land/sea interface, metrics are evaluated on land cells, and the PINN baseline adds a
+sea-exclusion penalty plus land-only PDE collocation. This prevents either baseline from
+spreading pine-wilt density through the ocean cells of the rectangular computational grid.
+
 Run the Korea pine-wilt 2D Fisher-KPP RK4 baseline:
 
 ```bash

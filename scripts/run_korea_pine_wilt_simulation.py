@@ -473,6 +473,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         diffusion=args.diffusion,
         reaction=args.reaction,
         steps_per_year=args.steps_per_year,
+        land_mask=grid.land_mask,
     )
     rows = compare_observed_and_simulated(grid, sim_years, sim_fields)
     baseline_rows: list[dict[str, float | int | str]] = [dict(method="rk4", **row) for row in rows]
@@ -490,6 +491,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             data_weight=getattr(args, "pinn_data_weight", 8.0),
             pde_weight=getattr(args, "pinn_pde_weight", 0.05),
             boundary_weight=getattr(args, "pinn_boundary_weight", 0.01),
+            sea_weight=getattr(args, "pinn_sea_weight", 2.0),
             diffusion=args.diffusion,
             reaction=getattr(args, "pinn_initial_reaction", 0.20),
             seed=getattr(args, "seed", 7),
@@ -522,6 +524,11 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         "year_max": int(points.year.max()),
         "grid_size": int(args.grid_size),
         "capacity": float(grid.capacity),
+        "land_mask": {
+            "enabled": grid.land_mask is not None,
+            "land_cells": int(np.sum(grid.land_mask)) if grid.land_mask is not None else int(grid.density.shape[-1] * grid.density.shape[-2]),
+            "sea_cells": int(grid.land_mask.size - np.sum(grid.land_mask)) if grid.land_mask is not None else 0,
+        },
         "diffusion": float(args.diffusion),
         "reaction": float(args.reaction),
         "steps_per_year": int(args.steps_per_year),
@@ -551,6 +558,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             "status": pinn_result.status,
             "epochs": int(getattr(args, "pinn_epochs", 120)),
             "physics": pinn_result.physics,
+            "sea_weight": float(getattr(args, "pinn_sea_weight", 2.0)),
             "mean_relative_l2_observed_years": float(np.nanmean([row["relative_l2"] for row in pinn_result.metrics])),
             "mean_correlation_observed_years": float(np.nanmean([row["correlation"] for row in pinn_result.metrics])),
             "history": pinn_result.history,
@@ -583,6 +591,7 @@ def main() -> None:
     parser.add_argument("--pinn-data-weight", type=float, default=8.0)
     parser.add_argument("--pinn-pde-weight", type=float, default=0.05)
     parser.add_argument("--pinn-boundary-weight", type=float, default=0.01)
+    parser.add_argument("--pinn-sea-weight", type=float, default=2.0)
     parser.add_argument("--pinn-initial-reaction", type=float, default=0.20)
     parser.add_argument("--map-gif-fps", type=float, default=1.2)
     parser.add_argument("--map-gif-max-frames", type=int, default=15)

@@ -321,6 +321,11 @@ def test_korea_pine_wilt_compact_dataset_and_rk4_smoke(tmp_path) -> None:
     assert grid.density.shape == (2, 24, 24)
     assert grid.density.min() >= 0.0
     assert grid.density.max() <= 1.0
+    assert grid.land_mask is not None
+    assert grid.land_mask.shape == (24, 24)
+    assert grid.land_mask.any()
+    assert (~grid.land_mask).any()
+    assert np.all(grid.density[:, ~grid.land_mask] == 0.0)
 
     years, fields = simulate_density_rk4(
         grid.density[0],
@@ -329,12 +334,14 @@ def test_korea_pine_wilt_compact_dataset_and_rk4_smoke(tmp_path) -> None:
         diffusion=1.0e-4,
         reaction=0.10,
         steps_per_year=4,
+        land_mask=grid.land_mask,
     )
     assert years.tolist() == [2016, 2017]
     assert fields.shape == (2, 24, 24)
     assert np.isfinite(fields).all()
     assert fields.min() >= 0.0
     assert fields.max() <= 1.0
+    assert np.all(fields[:, ~grid.land_mask] == 0.0)
 
     pinn = fit_korea_pine_wilt_pinn(
         grid,
@@ -350,6 +357,7 @@ def test_korea_pine_wilt_compact_dataset_and_rk4_smoke(tmp_path) -> None:
     assert len(pinn.metrics) == 2
     assert pinn.status == "diagnostic_only_low_epoch"
     assert np.isfinite(pinn.fields).all()
+    assert np.all(pinn.fields[:, ~grid.land_mask] == 0.0)
 
     gif_info = _save_korea_map_baseline_gif(
         tmp_path / "korea_map_baselines.gif",

@@ -26,6 +26,8 @@ u_t = D * Laplacian(u) + r * u * (1 - u)
 
 공간 domain은 산림청 관측 좌표의 bounding box를 정규화한 2D grid로 사용합니다. RK4 baseline은 2016년 관측 density grid를 초기조건으로 두고 no-flux에 가까운 Neumann boundary 처리를 적용하여 2030년까지 전진 적분합니다. PINN baseline은 같은 grid observation을 사용하되, 관측 연도 density에 대한 data loss와 Fisher-KPP PDE residual, 약한 Neumann boundary loss를 함께 사용합니다.
 
+추가로 현재 버전에서는 한국 시도 경계 GeoJSON을 이용해 land mask를 만들고, 바다 셀을 계산 영역에서 제외합니다. 관측 density grid는 land mask 밖을 0으로 고정하고, RK4는 land/sea interface에서 masked no-flux diffusion을 사용합니다. PINN baseline도 바다 셀에 대한 sea-exclusion penalty를 추가하고 PDE collocation은 land cell에서만 샘플링합니다. 따라서 직사각형 grid를 쓰더라도 소나무재선충병 density가 바다로 퍼지는 해석은 허용하지 않습니다.
+
 기존 inverse-origin PINN 실험과 산림청 forward baseline은 목적이 다릅니다. inverse-origin 실험은 synthetic truth가 있고 origin recovery를 평가합니다. 산림청 baseline은 raw surveillance count에서 만든 yearly density grid를 대상으로 RK4와 PINN이 같은 관측 연도에 얼마나 맞는지 비교하는 진단용 forward baseline입니다.
 
 ## 2. 왜 RK4와 PINN을 모두 baseline에 넣었는가
@@ -86,6 +88,8 @@ synthetic Fisher-KPP forward profile에는 다음 구성요소가 반영되어 �
 - `data/korea_pine_wilt/processed/manifest.json`
 - `data/korea_pine_wilt/assets/skorea_provinces_2018.geojson`
 
+이 GeoJSON은 단순 시각화 배경뿐 아니라 land mask 생성에도 사용됩니다. compact observation grid의 바다 셀은 smoothing 이후 다시 0으로 고정되며, metrics 역시 land cell 기준으로 계산됩니다.
+
 compact file에는 `x_5179`, `y_5179`, `year`가 들어 있으며 총 record 수는 `3,183,376`입니다. `manifest.json`에는 원본 CSV의 연도, 파일 크기, sha256 checksum이 들어 있어 원자료 검증이 가능합니다. 또한 `scripts/build_korea_pine_wilt_compact_data.py`를 통해 원본 CSV가 있는 환경에서는 compact data를 다시 생성할 수 있습니다.
 
 Colab 노트북 `korea_pine_wilt_fisher_kpp_lab.ipynb`는 project files가 없으면 GitHub repository를 clone하고, 이미 `/content/fisher-pinn`이 있으면 `fetch` 후 `FETCH_HEAD`로 강제 checkout하여 오래된 clone을 재사용하지 않도록 수정했습니다.
@@ -130,6 +134,8 @@ PINN status               = diagnostic_high_error
 ```
 
 PINN은 RK4보다 observed-year relative L2를 낮췄습니다. 하지만 `diagnostic_high_error` 상태이므로, 이 결과는 최종 예측 모델의 성능이 아니라 baseline diagnostic으로 해석해야 합니다. 특히 2016년 관측 density를 초기조건으로 한 fixed-parameter RK4는 후반부에 감염 density가 과성장하고, PINN은 관측 연도 supervised fitting으로 L2를 낮추지만 spatial correlation 개선 폭은 제한적입니다.
+
+현재 버전부터는 land/sea mask 제약이 반영되었으므로, 이후 metric 값은 바다 셀을 제외한 land cell 기준으로 다시 비교해야 합니다. 이전의 직사각형-domain 결과와 새 결과를 같은 수치로 직접 비교하면 안 됩니다.
 
 이 현상은 Fisher-KPP 하나로 raw surveillance count를 설명하기 어렵기 때문입니다. 실제 산림청 데이터에는 감염 확산 외에도 탐지 강도, 신고 체계, 방제 intervention, 지역별 sampling bias, 행정 정책 변화, 지형·산림 mask, 숙주 분포가 섞여 있습니다. 따라서 다음 단계에서는 spatially varying reaction/diffusion, observation model, intervention covariate, land/forest mask를 모델에 넣어야 합니다.
 

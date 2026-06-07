@@ -8,6 +8,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from matplotlib.path import Path as MplPath
 
 from .config import DomainConfig, ModelConfig, PDEConfig, SeedConfig
 from .losses import boundary_neumann_loss, pde_residual
@@ -20,6 +21,7 @@ DEFAULT_PROCESSED_DIR = DEFAULT_DATA_DIR / "processed"
 DEFAULT_POINTS_NPZ = DEFAULT_PROCESSED_DIR / "infected_points_2016_2023.npz"
 DEFAULT_POINTS_CSV_GZ = DEFAULT_PROCESSED_DIR / "infected_points_2016_2023.csv.gz"
 DEFAULT_MANIFEST = DEFAULT_PROCESSED_DIR / "manifest.json"
+DEFAULT_PROVINCE_GEOJSON = DEFAULT_DATA_DIR / "assets" / "skorea_provinces_2018.geojson"
 
 
 @dataclass(frozen=True)
@@ -40,6 +42,7 @@ class KoreaPineWiltGrid:
     density: np.ndarray
     raw_counts: np.ndarray
     capacity: float
+    land_mask: np.ndarray | None = None
 
 
 @dataclass(frozen=True)
@@ -90,6 +93,62 @@ def load_korea_pine_wilt_points(path: Path | None = None) -> KoreaPineWiltPoints
     raise ValueError(f"Unsupported Korea pine-wilt point file: {data_path}")
 
 
+def _geojson_polygons(path: Path = DEFAULT_PROVINCE_GEOJSON) -> list[list[np.ndarray]]:
+    """Load province GeoJSON polygons as lon/lat rings."""
+
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    polygons: list[list[np.ndarray]] = []
+    for feature in data.get("features", []):
+        geometry = feature.get("geometry", {})
+        if geometry.get("type") == "Polygon":
+            raw_polygons = [geometry.get("coordinates", [])]
+        elif geometry.get("type") == "MultiPolygon":
+            raw_polygons = geometry.get("coordinates", [])
+        else:
+            continue
+        for polygon in raw_polygons:
+            rings = []
+            for ring in polygon:
+                arr = np.asarray(ring, dtype=np.float64)
+                if arr.ndim == 2 and arr.shape[0] >= 3 and arr.shape[1] >= 2:
+                    rings.append(arr[:, :2])
+            if rings:
+                polygons.append(rings)
+    if not polygons:
+        raise ValueError(f"No polygon rings found in province GeoJSON: {path}")
+    return polygons
+
+
+def build_land_mask(
+    x_centers: np.ndarray,
+    y_centers: np.ndarray,
+    *,
+    source_crs: str = "EPSG:5179",
+    province_geojson: Path = DEFAULT_PROVINCE_GEOJSON,
+) -> np.ndarray:
+    """Return True for grid cells whose centers fall inside Korean province polygons."""
+
+    try:
+        from pyproj import Transformer
+    except ImportError as exc:  # pragma: no cover - dependency guard for incomplete environments.
+        raise RuntimeError(
+            "pyproj is required to build the Korea land mask because pine-wilt points use EPSG:5179 "
+            "and the committed province boundaries are longitude/latitude."
+        ) from exc
+
+    xx, yy = np.meshgrid(np.asarray(x_centers, dtype=np.float64), np.asarray(y_centers, dtype=np.float64), indexing="xy")
+    transformer = Transformer.from_crs(source_crs, "EPSG:4326", always_xy=True)
+    lon, lat = transformer.transform(xx, yy)
+    lonlat = np.column_stack([np.asarray(lon).ravel(), np.asarray(lat).ravel()])
+    mask = np.zeros(lonlat.shape[0], dtype=bool)
+    for polygon in _geojson_polygons(province_geojson):
+        inside = MplPath(polygon[0]).contains_points(lonlat, radius=1.0e-10)
+        for hole in polygon[1:]:
+            inside &= ~MplPath(hole).contains_points(lonlat, radius=1.0e-10)
+        mask |= inside
+    return mask.reshape(xx.shape)
+
+
 def _smooth_2d(field: np.ndarray, passes: int = 1) -> np.ndarray:
     out = np.asarray(field, dtype=np.float64)
     kernel = np.array([0.25, 0.5, 0.25], dtype=np.float64)
@@ -107,6 +166,7 @@ def build_density_grid(
     pad_m: float = 15_000.0,
     capacity_percentile: float = 99.0,
     smooth_passes: int = 1,
+    enforce_land_mask: bool = True,
 ) -> KoreaPineWiltGrid:
     if grid_size < 8:
         raise ValueError("grid_size must be at least 8.")
@@ -119,13 +179,18 @@ def build_density_grid(
         hist, _, _ = np.histogram2d(points.x[mask], points.y[mask], bins=[x_edges, y_edges])
         raw.append(_smooth_2d(hist.T, passes=smooth_passes))
     raw_counts = np.asarray(raw, dtype=np.float64)
+    x_centers = 0.5 * (x_edges[:-1] + x_edges[1:])
+    y_centers = 0.5 * (y_edges[:-1] + y_edges[1:])
+    land_mask = build_land_mask(x_centers, y_centers, source_crs=points.crs) if enforce_land_mask else None
+    if land_mask is not None:
+        raw_counts = np.where(land_mask[None, :, :], raw_counts, 0.0)
     positive = raw_counts[raw_counts > 0.0]
     if positive.size == 0:
         raise ValueError("No positive infected-tree observations found for the requested years.")
     capacity = float(np.percentile(positive, capacity_percentile))
     density = np.clip(raw_counts / max(capacity, 1.0e-12), 0.0, 1.0)
-    x_centers = 0.5 * (x_edges[:-1] + x_edges[1:])
-    y_centers = 0.5 * (y_edges[:-1] + y_edges[1:])
+    if land_mask is not None:
+        density = np.where(land_mask[None, :, :], density, 0.0)
     return KoreaPineWiltGrid(
         years=years_arr,
         x_edges=x_edges,
@@ -135,6 +200,7 @@ def build_density_grid(
         density=density,
         raw_counts=raw_counts,
         capacity=capacity,
+        land_mask=land_mask,
     )
 
 
@@ -149,15 +215,44 @@ def _laplacian_neumann(u: np.ndarray, dx: float) -> np.ndarray:
     ) / dx**2
 
 
-def _rk4_step_2d(u: np.ndarray, dt: float, dx: float, diffusion: float, reaction: float) -> np.ndarray:
+def _laplacian_masked_neumann(u: np.ndarray, dx: float, land_mask: np.ndarray) -> np.ndarray:
+    mask = np.asarray(land_mask, dtype=bool)
+    u_land = np.where(mask, u, 0.0)
+    padded_u = np.pad(u_land, 1, mode="edge")
+    padded_m = np.pad(mask, 1, mode="edge")
+    center = u_land
+    up = np.where(padded_m[2:, 1:-1], padded_u[2:, 1:-1], center)
+    down = np.where(padded_m[:-2, 1:-1], padded_u[:-2, 1:-1], center)
+    right = np.where(padded_m[1:-1, 2:], padded_u[1:-1, 2:], center)
+    left = np.where(padded_m[1:-1, :-2], padded_u[1:-1, :-2], center)
+    lap = (up + down + right + left - 4.0 * center) / dx**2
+    return np.where(mask, lap, 0.0)
+
+
+def _rk4_step_2d(
+    u: np.ndarray,
+    dt: float,
+    dx: float,
+    diffusion: float,
+    reaction: float,
+    land_mask: np.ndarray | None = None,
+) -> np.ndarray:
+    mask = None if land_mask is None else np.asarray(land_mask, dtype=bool)
+
     def rhs(v: np.ndarray) -> np.ndarray:
-        return diffusion * _laplacian_neumann(v, dx) + reaction * v * (1.0 - v)
+        if mask is None:
+            return diffusion * _laplacian_neumann(v, dx) + reaction * v * (1.0 - v)
+        v_land = np.where(mask, v, 0.0)
+        return np.where(mask, diffusion * _laplacian_masked_neumann(v_land, dx, mask) + reaction * v_land * (1.0 - v_land), 0.0)
 
     k1 = rhs(u)
     k2 = rhs(u + 0.5 * dt * k1)
     k3 = rhs(u + 0.5 * dt * k2)
     k4 = rhs(u + dt * k3)
-    return np.clip(u + (dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4), 0.0, 1.0)
+    next_u = np.clip(u + (dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4), 0.0, 1.0)
+    if mask is not None:
+        next_u = np.where(mask, next_u, 0.0)
+    return next_u
 
 
 def simulate_density_rk4(
@@ -168,6 +263,7 @@ def simulate_density_rk4(
     diffusion: float = 0.0015,
     reaction: float = 0.70,
     steps_per_year: int = 80,
+    land_mask: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Run a normalized 2D Fisher-KPP RK4 simulation on a square grid."""
 
@@ -176,6 +272,12 @@ def simulate_density_rk4(
     u = np.asarray(initial_density, dtype=np.float64).copy()
     if u.ndim != 2 or u.shape[0] != u.shape[1]:
         raise ValueError("initial_density must be a square 2D field.")
+    mask = None
+    if land_mask is not None:
+        mask = np.asarray(land_mask, dtype=bool)
+        if mask.shape != u.shape:
+            raise ValueError(f"land_mask shape {mask.shape} does not match density shape {u.shape}.")
+        u = np.where(mask, u, 0.0)
     dx = 1.0 / max(u.shape[0] - 1, 1)
     dt = 1.0 / float(steps_per_year)
     dt_diff_limit = 0.69 * dx**2 / (2.0 * max(diffusion, 1.0e-12))
@@ -186,10 +288,10 @@ def simulate_density_rk4(
         )
 
     years = np.arange(start_year, end_year + 1, dtype=np.int16)
-    fields = [np.clip(u, 0.0, 1.0)]
+    fields = [np.where(mask, np.clip(u, 0.0, 1.0), 0.0) if mask is not None else np.clip(u, 0.0, 1.0)]
     for _year in years[:-1]:
         for _ in range(steps_per_year):
-            u = _rk4_step_2d(u, dt, dx, diffusion, reaction)
+            u = _rk4_step_2d(u, dt, dx, diffusion, reaction, mask)
         fields.append(u.copy())
     return years, np.asarray(fields)
 
@@ -206,17 +308,24 @@ def compare_observed_and_simulated(
             continue
         obs = observed_grid.density[obs_idx]
         pred = sim_fields[sim_lookup[int(year)]]
-        denom = float(np.linalg.norm(obs)) + 1.0e-12
-        rel_l2 = float(np.linalg.norm(pred - obs) / denom)
-        if np.std(obs) <= 1.0e-12 or np.std(pred) <= 1.0e-12:
+        if observed_grid.land_mask is not None:
+            mask = observed_grid.land_mask
+            obs_eval = obs[mask]
+            pred_eval = pred[mask]
+        else:
+            obs_eval = obs.ravel()
+            pred_eval = pred.ravel()
+        denom = float(np.linalg.norm(obs_eval)) + 1.0e-12
+        rel_l2 = float(np.linalg.norm(pred_eval - obs_eval) / denom)
+        if np.std(obs_eval) <= 1.0e-12 or np.std(pred_eval) <= 1.0e-12:
             corr = np.nan
         else:
-            corr = float(np.corrcoef(obs.ravel(), pred.ravel())[0, 1])
+            corr = float(np.corrcoef(obs_eval, pred_eval)[0, 1])
         rows.append(
             {
                 "year": int(year),
-                "observed_mean": float(obs.mean()),
-                "simulated_mean": float(pred.mean()),
+                "observed_mean": float(obs_eval.mean()),
+                "simulated_mean": float(pred_eval.mean()),
                 "relative_l2": rel_l2,
                 "correlation": corr,
             }
@@ -260,6 +369,7 @@ def predict_korea_pinn_fields(
 ) -> np.ndarray:
     xy = torch.tensor(_normalized_grid_xy(grid), dtype=torch.float32, device=device)
     fields = []
+    land_mask = grid.land_mask
     model.eval()
     with torch.no_grad():
         for year in years.tolist():
@@ -268,6 +378,8 @@ def predict_korea_pinn_fields(
             for start in range(0, len(xy), batch_size):
                 preds.append(model(xy[start : start + batch_size], t[start : start + batch_size]).detach().cpu())
             field = torch.cat(preds, dim=0).numpy().reshape(grid.density.shape[1:])
+            if land_mask is not None:
+                field = np.where(land_mask, field, 0.0)
             fields.append(np.clip(field, 0.0, 1.0))
     return np.asarray(fields, dtype=np.float64)
 
@@ -284,6 +396,7 @@ def fit_korea_pine_wilt_pinn(
     data_weight: float = 8.0,
     pde_weight: float = 0.05,
     boundary_weight: float = 0.01,
+    sea_weight: float = 2.0,
     diffusion: float = 0.0015,
     reaction: float = 0.20,
     seed: int = 7,
@@ -331,6 +444,17 @@ def fit_korea_pine_wilt_pinn(
     )
     model = OriginPINN(domain, pde, seed_cfg, model_cfg).to(device_obj)
     xyt, values = _korea_training_tensors(grid, start_year=start_year, device=device_obj)
+    sea_flags = None
+    land_xy = None
+    if grid.land_mask is not None:
+        flat_land = grid.land_mask.reshape(-1)
+        sea_one_year = (~flat_land).astype(np.float32).reshape(-1, 1)
+        sea_flags = torch.tensor(
+            np.tile(sea_one_year, (len(grid.years), 1)),
+            dtype=torch.float32,
+            device=device_obj,
+        )
+        land_xy = torch.tensor(_normalized_grid_xy(grid)[flat_land], dtype=torch.float32, device=device_obj)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     n_obs = len(xyt)
     history: list[dict[str, float]] = []
@@ -341,8 +465,17 @@ def fit_korea_pine_wilt_pinn(
         pred = model(xyt[idx, :2], xyt[idx, 2:3])
         density_weight = 1.0 + 4.0 * values[idx].detach()
         data_loss = torch.mean(density_weight * (pred - values[idx]) ** 2)
+        if sea_flags is not None:
+            sea_batch = sea_flags[idx]
+            sea_loss = torch.sum(sea_batch * pred**2) / torch.clamp(sea_batch.sum(), min=1.0)
+        else:
+            sea_loss = torch.zeros((), device=device_obj)
 
-        xy_col = torch.rand(collocation_points, 2, device=device_obj)
+        if land_xy is not None and len(land_xy) > 0:
+            col_idx = torch.randint(0, len(land_xy), (collocation_points,), device=device_obj)
+            xy_col = land_xy[col_idx]
+        else:
+            xy_col = torch.rand(collocation_points, 2, device=device_obj)
         t_col = torch.rand(collocation_points, 1, device=device_obj) * domain.t_end
         residual = pde_residual(model, xy_col, t_col)
         pde_loss = torch.mean(residual**2)
@@ -351,7 +484,7 @@ def fit_korea_pine_wilt_pinn(
         else:
             bc_loss = torch.zeros((), device=device_obj)
 
-        loss = data_weight * data_loss + pde_weight * pde_loss + boundary_weight * bc_loss
+        loss = data_weight * data_loss + pde_weight * pde_loss + boundary_weight * bc_loss + sea_weight * sea_loss
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
         optimizer.step()
@@ -364,6 +497,7 @@ def fit_korea_pine_wilt_pinn(
                     "data": float(data_loss.detach().cpu()),
                     "pde": float(pde_loss.detach().cpu()),
                     "boundary": float(bc_loss.detach().cpu()),
+                    "sea": float(sea_loss.detach().cpu()),
                     "diffusion": float(model.pde.diffusion().detach().cpu()),
                     "reaction": float(model.pde.reaction().detach().cpu()),
                 }
