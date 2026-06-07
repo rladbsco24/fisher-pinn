@@ -7,6 +7,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+import torch
+
+from .config import DomainConfig, ModelConfig, PDEConfig, SeedConfig
+from .losses import boundary_neumann_loss, pde_residual
+from .models import OriginPINN
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -35,6 +40,16 @@ class KoreaPineWiltGrid:
     density: np.ndarray
     raw_counts: np.ndarray
     capacity: float
+
+
+@dataclass(frozen=True)
+class KoreaPineWiltPINNResult:
+    years: np.ndarray
+    fields: np.ndarray
+    history: list[dict[str, float]]
+    metrics: list[dict[str, float | int]]
+    physics: dict[str, float]
+    status: str
 
 
 def load_manifest(path: Path | None = None) -> dict:
@@ -208,3 +223,172 @@ def compare_observed_and_simulated(
         )
     return rows
 
+
+def _normalized_grid_xy(grid: KoreaPineWiltGrid) -> np.ndarray:
+    x_norm = (grid.x_centers - grid.x_edges[0]) / max(grid.x_edges[-1] - grid.x_edges[0], 1.0e-12)
+    y_norm = (grid.y_centers - grid.y_edges[0]) / max(grid.y_edges[-1] - grid.y_edges[0], 1.0e-12)
+    x, y = np.meshgrid(x_norm, y_norm, indexing="xy")
+    return np.stack([x.ravel(), y.ravel()], axis=1).astype(np.float32)
+
+
+def _korea_training_tensors(
+    grid: KoreaPineWiltGrid,
+    *,
+    start_year: int,
+    device: torch.device,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    xy = _normalized_grid_xy(grid)
+    xyt_rows = []
+    value_rows = []
+    for idx, year in enumerate(grid.years.tolist()):
+        t = np.full((xy.shape[0], 1), float(int(year) - start_year), dtype=np.float32)
+        xyt_rows.append(np.concatenate([xy, t], axis=1))
+        value_rows.append(grid.density[idx].reshape(-1, 1).astype(np.float32))
+    xyt = torch.tensor(np.concatenate(xyt_rows, axis=0), dtype=torch.float32, device=device)
+    values = torch.tensor(np.concatenate(value_rows, axis=0), dtype=torch.float32, device=device)
+    return xyt, values
+
+
+def predict_korea_pinn_fields(
+    model: OriginPINN,
+    grid: KoreaPineWiltGrid,
+    years: np.ndarray,
+    *,
+    start_year: int,
+    device: torch.device,
+    batch_size: int = 8192,
+) -> np.ndarray:
+    xy = torch.tensor(_normalized_grid_xy(grid), dtype=torch.float32, device=device)
+    fields = []
+    model.eval()
+    with torch.no_grad():
+        for year in years.tolist():
+            t = torch.full((len(xy), 1), float(int(year) - start_year), dtype=torch.float32, device=device)
+            preds = []
+            for start in range(0, len(xy), batch_size):
+                preds.append(model(xy[start : start + batch_size], t[start : start + batch_size]).detach().cpu())
+            field = torch.cat(preds, dim=0).numpy().reshape(grid.density.shape[1:])
+            fields.append(np.clip(field, 0.0, 1.0))
+    return np.asarray(fields, dtype=np.float64)
+
+
+def fit_korea_pine_wilt_pinn(
+    grid: KoreaPineWiltGrid,
+    *,
+    end_year: int = 2030,
+    epochs: int = 120,
+    batch_size: int = 4096,
+    collocation_points: int = 768,
+    boundary_points: int = 128,
+    lr: float = 2.0e-3,
+    data_weight: float = 8.0,
+    pde_weight: float = 0.05,
+    boundary_weight: float = 0.01,
+    diffusion: float = 0.0015,
+    reaction: float = 0.20,
+    seed: int = 7,
+    device: str | torch.device | None = None,
+) -> KoreaPineWiltPINNResult:
+    """Fit the repository's forward PINN architecture to Korea pine-wilt density grids.
+
+    This is a baseline diagnostic, not a calibrated epidemiological model. It uses the
+    same compact gridded observations as the RK4 baseline, adds a weak Fisher-KPP PDE
+    residual, and reports the same observed-year field metrics.
+    """
+
+    start_year = int(grid.years[0])
+    model_end_year = max(int(end_year), int(grid.years[-1]))
+    t_end = float(model_end_year - start_year)
+    if t_end <= 0.0:
+        raise ValueError("end_year must be after the first observed year.")
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    if device is None:
+        device_obj = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    else:
+        device_obj = torch.device(device)
+
+    domain = DomainConfig(box=1.0, t_end=t_end, grid=int(grid.density.shape[-1]), truth_steps=0)
+    pde = PDEConfig(diffusion=diffusion, reaction=reaction, velocity_x=0.0, velocity_y=0.0, include_advection=False)
+    seed_cfg = SeedConfig(center_x=0.5, center_y=0.5, sigma=0.12, amplitude=0.25)
+    model_cfg = ModelConfig(
+        architecture="pirate",
+        fourier_features=16,
+        fourier_sigma=1.0,
+        hidden=48,
+        layers=3,
+        use_random_weight_factorization=True,
+        learn_diffusion=True,
+        learn_reaction=True,
+        learn_drift=False,
+        use_source_envelope=False,
+        use_geo_features=True,
+        spatial_fourier_only=True,
+        use_seed_front_features=False,
+        use_traveling_wave_features=False,
+        hard_initial_condition=False,
+        use_kpp_front_envelope=False,
+    )
+    model = OriginPINN(domain, pde, seed_cfg, model_cfg).to(device_obj)
+    xyt, values = _korea_training_tensors(grid, start_year=start_year, device=device_obj)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    n_obs = len(xyt)
+    history: list[dict[str, float]] = []
+
+    for epoch in range(1, int(epochs) + 1):
+        model.train()
+        idx = torch.randint(0, n_obs, (min(batch_size, n_obs),), device=device_obj)
+        pred = model(xyt[idx, :2], xyt[idx, 2:3])
+        density_weight = 1.0 + 4.0 * values[idx].detach()
+        data_loss = torch.mean(density_weight * (pred - values[idx]) ** 2)
+
+        xy_col = torch.rand(collocation_points, 2, device=device_obj)
+        t_col = torch.rand(collocation_points, 1, device=device_obj) * domain.t_end
+        residual = pde_residual(model, xy_col, t_col)
+        pde_loss = torch.mean(residual**2)
+        if boundary_points > 0:
+            bc_loss = boundary_neumann_loss(model, boundary_points, device_obj)
+        else:
+            bc_loss = torch.zeros((), device=device_obj)
+
+        loss = data_weight * data_loss + pde_weight * pde_loss + boundary_weight * bc_loss
+        optimizer.zero_grad(set_to_none=True)
+        loss.backward()
+        optimizer.step()
+
+        if epoch == 1 or epoch == epochs or epoch % max(1, epochs // 10) == 0:
+            history.append(
+                {
+                    "epoch": float(epoch),
+                    "total": float(loss.detach().cpu()),
+                    "data": float(data_loss.detach().cpu()),
+                    "pde": float(pde_loss.detach().cpu()),
+                    "boundary": float(bc_loss.detach().cpu()),
+                    "diffusion": float(model.pde.diffusion().detach().cpu()),
+                    "reaction": float(model.pde.reaction().detach().cpu()),
+                }
+            )
+
+    pred_years = np.arange(start_year, model_end_year + 1, dtype=np.int16)
+    fields = predict_korea_pinn_fields(
+        model,
+        grid,
+        pred_years,
+        start_year=start_year,
+        device=device_obj,
+    )
+    metrics = compare_observed_and_simulated(grid, pred_years, fields)
+    mean_l2 = float(np.nanmean([row["relative_l2"] for row in metrics]))
+    status = "diagnostic_baseline"
+    if epochs < 50:
+        status = "diagnostic_only_low_epoch"
+    elif mean_l2 > 1.0:
+        status = "diagnostic_high_error"
+    return KoreaPineWiltPINNResult(
+        years=pred_years,
+        fields=fields,
+        history=history,
+        metrics=metrics,
+        physics=model.physics_dict(),
+        status=status,
+    )

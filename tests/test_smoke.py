@@ -20,6 +20,7 @@ from scripts.run_forward_ablation import make_forward_cases
 from fisher_origin_lab.config import DomainConfig, ExperimentConfig, ModelConfig, PDEConfig, SeedConfig, WarmStartConfig
 from fisher_origin_lab.korea_data import (
     build_density_grid,
+    fit_korea_pine_wilt_pinn,
     load_korea_pine_wilt_points,
     load_manifest,
     simulate_density_rk4,
@@ -333,6 +334,21 @@ def test_korea_pine_wilt_compact_dataset_and_rk4_smoke() -> None:
     assert np.isfinite(fields).all()
     assert fields.min() >= 0.0
     assert fields.max() <= 1.0
+
+    pinn = fit_korea_pine_wilt_pinn(
+        grid,
+        end_year=2017,
+        epochs=1,
+        batch_size=128,
+        collocation_points=8,
+        boundary_points=4,
+        device=torch.device("cpu"),
+    )
+    assert pinn.years.tolist() == [2016, 2017]
+    assert pinn.fields.shape == (2, 24, 24)
+    assert len(pinn.metrics) == 2
+    assert pinn.status == "diagnostic_only_low_epoch"
+    assert np.isfinite(pinn.fields).all()
 
 
 def test_geo_spectral_forward_profile_extends_korea_setup() -> None:

@@ -121,11 +121,23 @@ python scripts\run_korea_pine_wilt_simulation.py --output-dir runs\korea_pine_wi
 Outputs:
 
 - `korea_pine_wilt_metrics.csv`: observed-year relative L2, correlation, and mean-density
-  comparison.
+  comparison for the RK4 fixed-solver baseline.
+- `korea_pine_wilt_baseline_metrics.csv`: observed-year comparison for both RK4 and the
+  repository PINN baseline.
 - `observed_density_by_year.png`: compact CSV observations gridded by year.
 - `rk4_forecast_timeline.png`: RK4 forward simulation from the 2016 observed density.
+- `pinn_baseline_observed_years.png`: observed/PINN/error panels for selected observed
+  years.
+- `baseline_metric_comparison.png`: RK4 versus PINN observed-year relative L2 and
+  correlation.
 - `observed_vs_simulated_metrics.png`: observed-year metric trajectories.
 - `korea_pine_wilt_summary.json`: run configuration and aggregate metrics.
+
+The PINN baseline reuses this repository's PirateNet/Fourier/geo-feature PINN backbone
+and fits the yearly gridded Korea observations with a weak Fisher-KPP PDE residual. It is
+a diagnostic baseline, not a calibrated surveillance or intervention model. Use
+`--skip-pinn` to run only the RK4 baseline, or increase `--pinn-epochs` for a stronger
+PINN fit.
 
 For an interactive Colab/Jupyter workflow, open:
 
