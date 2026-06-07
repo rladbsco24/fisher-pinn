@@ -81,6 +81,10 @@ def test_notebooks_and_embedded_archives_are_parseable() -> None:
         nb = json.loads(notebook.read_text(encoding="utf-8"))
         full_source = "\n".join("".join(cell.get("source", [])) for cell in nb["cells"])
         assert not broken_table_pattern.search(notebook.read_text(encoding="utf-8"))
+        if notebook.name == "korea_pine_wilt_fisher_kpp_lab.ipynb":
+            assert "???" not in full_source
+            assert "Korea Forest Service" in full_source
+            assert "_prepare_colab_repo" in full_source
 
         for idx, cell in enumerate(nb["cells"]):
             if cell.get("cell_type") != "code":
