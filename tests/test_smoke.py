@@ -1,6 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import ast
+import base64
+import io
+import json
+import re
+import zipfile
 from dataclasses import replace
 from pathlib import Path
 
@@ -39,6 +45,47 @@ from fisher_origin_lab.samplers import SobolCollocation
 from fisher_origin_lab.shooting import source_shooting_loss
 from fisher_origin_lab.simulate import gaussian_seed_numpy, forward_fisher_kpp, sample_observations, split_observations, truth_field_at
 from fisher_origin_lab.train import _masked_batch_indices, _time_window, _warm_start_center_from_observations
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _notebook_ast_source(source: str) -> str:
+    lines = source.splitlines()
+    if lines and lines[0].lstrip().startswith("%%"):
+        return ""
+    return "\n".join(line for line in lines if not line.lstrip().startswith(("%", "!")))
+
+
+def test_notebooks_and_embedded_archives_are_parseable() -> None:
+    notebooks = [REPO_ROOT / "fisher_kpp_origin_lab.ipynb", REPO_ROOT / "fisher_kpp_origin_lab_colab.ipynb"]
+    archive_pattern = re.compile(r'_EMBEDDED_PROJECT_ZIP_B64 = """\n(.*?)\n"""', re.S)
+    broken_table_pattern = re.compile(r'"md = [^\\n]*\|[^\\]*\n",\n\s+"\|---')
+
+    for notebook in notebooks:
+        nb = json.loads(notebook.read_text(encoding="utf-8"))
+        full_source = "\n".join("".join(cell.get("source", [])) for cell in nb["cells"])
+        assert not broken_table_pattern.search(notebook.read_text(encoding="utf-8"))
+
+        for idx, cell in enumerate(nb["cells"]):
+            if cell.get("cell_type") != "code":
+                continue
+            source = _notebook_ast_source("".join(cell.get("source", [])))
+            ast.parse(source, filename=f"{notebook.name}:cell{idx}")
+
+        match = archive_pattern.search(full_source)
+        assert match is not None
+        raw = base64.b64decode("".join(match.group(1).split()))
+        with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+            assert "fisher_origin_lab/losses.py" in zf.namelist()
+            assert "fisher_origin_lab/plotting.py" in zf.namelist()
+            for name in zf.namelist():
+                data = zf.read(name)
+                if name.endswith(".py"):
+                    ast.parse(data.decode("utf-8"), filename=f"{notebook.name}:embedded:{name}")
+                repo_file = REPO_ROOT / name
+                if repo_file.exists():
+                    assert data == repo_file.read_bytes(), f"{notebook.name} embedded {name} differs from repo"
 
 
 def test_forward_solver_shape_and_bounds() -> None:
