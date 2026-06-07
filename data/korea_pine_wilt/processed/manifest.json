@@ -1,0 +1,80 @@
+{
+  "dataset": "Korea Forest Service pine-wilt infected-tree observations",
+  "source": {
+    "description": "Annual Korea Forest Service pest occurrence CSV files from the provided korea-pine-wilt-pinn bundle.",
+    "source_root_hint": "C:/Users/yoonc/Downloads/korea-pine-wilt-pinn-main/korea-pine-wilt-pinn-main/Data",
+    "encoding": "cp949",
+    "raw_csv_policy": "Several annual source CSV files exceed GitHub's normal 100 MB single-blob limit. This repository commits compact derived infected-point CSV/NPZ files plus raw-file checksums instead of the 1.17 GB raw CSV bundle."
+  },
+  "compact_files": {
+    "csv_gzip": "processed/infected_points_2016_2023.csv.gz",
+    "npz": "processed/infected_points_2016_2023.npz",
+    "columns": [
+      "x_5179",
+      "y_5179",
+      "year"
+    ],
+    "crs": "EPSG:5179",
+    "records": 3183376,
+    "year_counts": {
+      "2016": 507503,
+      "2017": 656294,
+      "2018": 486431,
+      "2019": 388949,
+      "2020": 304734,
+      "2021": 298569,
+      "2022": 377380,
+      "2023": 163516
+    }
+  },
+  "raw_files": [
+    {
+      "year": 2016,
+      "file_name": "병해충발생정보관리_2016.csv",
+      "bytes": 134503277,
+      "sha256": "7e8bd09c807fc91f27c0b978ca1dcdcddb20edfc5de6699793455153e2fc34e2"
+    },
+    {
+      "year": 2017,
+      "file_name": "병해충발생정보관리_2017.csv",
+      "bytes": 239756347,
+      "sha256": "749da8595a99e08fea436a0366b77c93d6282de8e3da6971e875a8e197d59bcc"
+    },
+    {
+      "year": 2018,
+      "file_name": "병해충발생정보관리_2018.csv",
+      "bytes": 220811304,
+      "sha256": "b0949406c83abf5c6e0190b9892feca8bd8d30cc5f5ffae9460b7fae9204aa57"
+    },
+    {
+      "year": 2019,
+      "file_name": "병해충발생정보관리_2019.csv",
+      "bytes": 181254117,
+      "sha256": "ecc2e8234dc9adc7e61379b550e72627e1253d68f1bbc863c12f08ec7c8893ef"
+    },
+    {
+      "year": 2020,
+      "file_name": "병해충발생정보관리_2020.csv",
+      "bytes": 130418453,
+      "sha256": "75dd4475fa532a46e4b7ead476b7ac07f76680733d70c10204b6633366c61525"
+    },
+    {
+      "year": 2021,
+      "file_name": "병해충발생정보관리_2021.csv",
+      "bytes": 105953636,
+      "sha256": "fdd525972db90732c43ab2eaa5faaa6a3cb1156731fdfe8a65fc9b37fd71075b"
+    },
+    {
+      "year": 2022,
+      "file_name": "병해충발생정보관리_2022.csv",
+      "bytes": 107492013,
+      "sha256": "a0b4d70a1aa27d23bc05f5ef9bbbd3d852153a839416344d5fa1f2b01eeb53fc"
+    },
+    {
+      "year": 2023,
+      "file_name": "병해충발생정보관리_2023.csv",
+      "bytes": 49432437,
+      "sha256": "b7865867e8fed114ece16860076fe01b933b9b3868ce6e2ef265a740b9cadf7b"
+    }
+  ]
+}

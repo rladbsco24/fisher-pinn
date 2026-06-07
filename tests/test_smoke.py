@@ -18,6 +18,12 @@ from scripts.run_forward_ablation import aggregate as aggregate_forward_ablation
 from scripts.run_forward_ablation import make_forward_cases
 
 from fisher_origin_lab.config import DomainConfig, ExperimentConfig, ModelConfig, PDEConfig, SeedConfig, WarmStartConfig
+from fisher_origin_lab.korea_data import (
+    build_density_grid,
+    load_korea_pine_wilt_points,
+    load_manifest,
+    simulate_density_rk4,
+)
 from fisher_origin_lab.losses import (
     expected_front_pde_loss,
     expected_front_samples,
@@ -58,7 +64,15 @@ def _notebook_ast_source(source: str) -> str:
 
 
 def test_notebooks_and_embedded_archives_are_parseable() -> None:
-    notebooks = [REPO_ROOT / "fisher_kpp_origin_lab.ipynb", REPO_ROOT / "fisher_kpp_origin_lab_colab.ipynb"]
+    notebooks = [
+        REPO_ROOT / "fisher_kpp_origin_lab.ipynb",
+        REPO_ROOT / "fisher_kpp_origin_lab_colab.ipynb",
+        REPO_ROOT / "korea_pine_wilt_fisher_kpp_lab.ipynb",
+    ]
+    embedded_notebooks = {
+        REPO_ROOT / "fisher_kpp_origin_lab.ipynb",
+        REPO_ROOT / "fisher_kpp_origin_lab_colab.ipynb",
+    }
     archive_pattern = re.compile(r'_EMBEDDED_PROJECT_ZIP_B64 = """\n(.*?)\n"""', re.S)
     broken_table_pattern = re.compile(r'"md = [^\\n]*\|[^\\]*\n",\n\s+"\|---')
 
@@ -74,6 +88,9 @@ def test_notebooks_and_embedded_archives_are_parseable() -> None:
             ast.parse(source, filename=f"{notebook.name}:cell{idx}")
 
         match = archive_pattern.search(full_source)
+        if notebook not in embedded_notebooks:
+            assert match is None
+            continue
         assert match is not None
         raw = base64.b64decode("".join(match.group(1).split()))
         with zipfile.ZipFile(io.BytesIO(raw)) as zf:
@@ -270,6 +287,47 @@ def test_korea_pine_style_matches_forward_pinn_setup() -> None:
     assert cfg.weights.seed_match == 0.0
     assert cfg.weights.shooting == 0.0
     assert cfg.weights.data_density_gain == 4.0
+
+
+def test_korea_pine_wilt_compact_dataset_and_rk4_smoke() -> None:
+    manifest = load_manifest()
+    compact = manifest["compact_files"]
+    processed_dir = REPO_ROOT / "data" / "korea_pine_wilt" / "processed"
+    csv_gz = processed_dir / "infected_points_2016_2023.csv.gz"
+    npz = processed_dir / "infected_points_2016_2023.npz"
+
+    assert len(manifest["raw_files"]) == 8
+    assert compact["records"] == 3_183_376
+    assert csv_gz.exists()
+    assert npz.exists()
+    assert csv_gz.stat().st_size < 100_000_000
+    assert npz.stat().st_size < 100_000_000
+
+    points = load_korea_pine_wilt_points()
+    assert len(points.year) == compact["records"]
+    assert int(points.year.min()) == 2016
+    assert int(points.year.max()) == 2023
+    assert np.isfinite(points.x).all()
+    assert np.isfinite(points.y).all()
+
+    grid = build_density_grid(points, years=(2016, 2017), grid_size=24, pad_m=5_000.0, smooth_passes=0)
+    assert grid.density.shape == (2, 24, 24)
+    assert grid.density.min() >= 0.0
+    assert grid.density.max() <= 1.0
+
+    years, fields = simulate_density_rk4(
+        grid.density[0],
+        start_year=2016,
+        end_year=2017,
+        diffusion=1.0e-4,
+        reaction=0.10,
+        steps_per_year=4,
+    )
+    assert years.tolist() == [2016, 2017]
+    assert fields.shape == (2, 24, 24)
+    assert np.isfinite(fields).all()
+    assert fields.min() >= 0.0
+    assert fields.max() <= 1.0
 
 
 def test_geo_spectral_forward_profile_extends_korea_setup() -> None:

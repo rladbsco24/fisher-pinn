@@ -88,6 +88,54 @@ This profile disables advection, learns `D` and `r`, disables the hard source en
 sets boundary/source/shooting losses to zero, and uses the notebook's density-weighted
 data loss form `1 + 4u_obs`.
 
+## Korea Forest Service CSV Data And Notebook
+
+The repository now includes a compact, GitHub-safe subset of the provided Korea Forest
+Service pine-wilt CSV bundle:
+
+- `data/korea_pine_wilt/processed/infected_points_2016_2023.csv.gz`: compact infected
+  point observations with `x_5179`, `y_5179`, and `year`.
+- `data/korea_pine_wilt/processed/infected_points_2016_2023.npz`: the same observations
+  in faster NumPy form.
+- `data/korea_pine_wilt/processed/manifest.json`: source-file sizes, year counts, and
+  sha256 checksums for the original annual CSV files.
+- `data/korea_pine_wilt/assets/skorea_provinces_2018.geojson`: the province geometry
+  asset from the provided bundle.
+
+The annual raw CSV files total roughly 1.17 GB and several individual files exceed
+GitHub's normal 100 MB single-file limit, so they are not stored as ordinary Git blobs.
+The committed compact files retain the infected-tree coordinates and years used by the
+simulation code while keeping the repository cloneable without Git LFS quota pressure.
+If the raw annual CSV files are available locally, rebuild the compact data with:
+
+```bash
+python scripts\build_korea_pine_wilt_compact_data.py --raw-dir C:\path\to\korea-pine-wilt-pinn-main\Data
+```
+
+Run the Korea pine-wilt 2D Fisher-KPP RK4 baseline:
+
+```bash
+python scripts\run_korea_pine_wilt_simulation.py --output-dir runs\korea_pine_wilt_csv_simulation
+```
+
+Outputs:
+
+- `korea_pine_wilt_metrics.csv`: observed-year relative L2, correlation, and mean-density
+  comparison.
+- `observed_density_by_year.png`: compact CSV observations gridded by year.
+- `rk4_forecast_timeline.png`: RK4 forward simulation from the 2016 observed density.
+- `observed_vs_simulated_metrics.png`: observed-year metric trajectories.
+- `korea_pine_wilt_summary.json`: run configuration and aggregate metrics.
+
+For an interactive Colab/Jupyter workflow, open:
+
+```text
+korea_pine_wilt_fisher_kpp_lab.ipynb
+```
+
+In Colab, the notebook clones this repository when the project files are not already
+present, then reads the committed compact CSV/NPZ data.
+
 ## Geo-Spectral Forward PINN
 
 The improved forward profile keeps the same Fisher-KPP problem setup as the Korea
