@@ -1114,19 +1114,33 @@ def run_experiment(cfg: ExperimentConfig) -> dict[str, object]:
         true_diffusion=cfg.pde.diffusion,
         true_reaction=cfg.pde.reaction,
     )
-    save_pinn_evolution_gif(
+    gif_status = "trained_visualization"
+    gif_warning = None
+    if cfg.train.epochs < 50:
+        gif_status = "diagnostic_only_low_epoch"
+        gif_warning = "DIAGNOSTIC ONLY: low-epoch smoke run; do not interpret as converged PINN accuracy."
+    elif pinn_final_time_relative_l2 > 1.0:
+        gif_status = "diagnostic_high_error"
+        gif_warning = "WARNING: high final relative L2; inspect metrics before interpreting the animation."
+    elif pinn_final_time_relative_l2 > 0.5:
+        gif_status = "diagnostic_moderate_error"
+        gif_warning = "CHECK METRICS: PINN error is still large enough to make the animation qualitative only."
+    gif_caption = (
+        f"status={gif_status}, epochs={cfg.train.epochs}, final relative L2={pinn_final_time_relative_l2:.3e}, "
+        f"validation MSE={validation_observation_mse:.3e}"
+        if validation_observation_mse is not None
+        else f"status={gif_status}, epochs={cfg.train.epochs}, final relative L2={pinn_final_time_relative_l2:.3e}"
+    )
+    gif_diagnostics = save_pinn_evolution_gif(
         cfg.out_dir / "pinn_evolution.gif",
         truth,
         best.model,
         cfg.domain,
         device,
-        caption=(
-            f"epochs={cfg.train.epochs}, final relative L2={pinn_final_time_relative_l2:.3e}, "
-            f"validation MSE={validation_observation_mse:.3e}"
-            if validation_observation_mse is not None
-            else f"epochs={cfg.train.epochs}, final relative L2={pinn_final_time_relative_l2:.3e}"
-        ),
+        caption=gif_caption,
+        warning=gif_warning,
     )
+    gif_diagnostics["status"] = gif_status
 
     centers = np.array(ensemble_centers, dtype=np.float64)
     figure_paths = [str(cfg.out_dir / name) for name in generated_figure_names()]
@@ -1154,6 +1168,7 @@ def run_experiment(cfg: ExperimentConfig) -> dict[str, object]:
         "validation_observation_count": int(len(validation_observations.xyt)),
         "warm_start_mode": cfg.warm_start.mode,
         "front_geometry": front_geometry,
+        "pinn_evolution_gif": gif_diagnostics,
         "figures": figure_paths,
         "runs": [
             {

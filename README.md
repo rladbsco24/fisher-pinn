@@ -370,9 +370,10 @@ Outputs:
 - `pinn_vs_rk4_comparison.png`: final-time truth/PINN/RK4 fields, signed and
   absolute PINN error, RK4 absolute error, truth/PINN front contours, and a compact
   accuracy summary.
-- `pinn_evolution.gif`: animated truth/PINN/absolute-error panels across the time
-  horizon with epoch/error caption, useful for diagnosing moving-front lag, haze, and
-  late-time drift.
+- `pinn_evolution.gif`: animated truth/PINN/signed-error/absolute-error panels across
+  the time horizon with per-frame relative L2 and run-level epoch/error caption. It is a
+  diagnostic artifact, not an accuracy proof; low-epoch smoke runs and high-error runs
+  are labeled directly in the GIF and in `metrics.json`.
 - `training_diagnostics.png`: loss components including known IC, moving-front speed,
   parabolic mass balance, learned `D/r`, residual curriculum, adaptive loss multipliers,
   front-profile alignment, and front/sparsity diagnostics.

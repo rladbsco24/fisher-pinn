@@ -577,7 +577,8 @@ def save_pinn_evolution_gif(
     max_frames: int = 24,
     fps: int = 5,
     caption: str | None = None,
-) -> None:
+    warning: str | None = None,
+) -> dict[str, object]:
     """Save a compact animated view of truth, PINN prediction, and error over time."""
 
     _apply_chart_theme()
@@ -588,21 +589,28 @@ def save_pinn_evolution_gif(
         idx = np.unique(np.linspace(0, len(truth.times) - 1, max_frames).astype(int))
         times = truth.times[idx]
 
-    frames: list[tuple[float, np.ndarray, np.ndarray, np.ndarray]] = []
-    error_vmax = 1.0e-12
+    frames: list[tuple[float, np.ndarray, np.ndarray, np.ndarray, np.ndarray, float]] = []
+    abs_error_vmax = 1.0e-12
+    signed_error_lim = 1.0e-12
+    frame_relative_l2: list[float] = []
     for time_value in times:
         _, true_field = truth_field_at(truth, float(time_value), n=n)
         _, pred = predict_field(model, float(time_value), n=n, device=device)
-        err = np.abs(pred - true_field)
-        error_vmax = max(error_vmax, float(np.nanmax(err)))
-        frames.append((float(time_value), true_field, pred, err))
+        signed = pred - true_field
+        err = np.abs(signed)
+        rel = relative_l2(pred, true_field)
+        abs_error_vmax = max(abs_error_vmax, float(np.nanmax(err)))
+        signed_error_lim = max(signed_error_lim, float(np.nanmax(np.abs(signed))))
+        frame_relative_l2.append(rel)
+        frames.append((float(time_value), true_field, pred, signed, err, rel))
 
-    fig, axes = plt.subplots(1, 3, figsize=(10.5, 3.8), constrained_layout=False)
-    fig.subplots_adjust(left=0.035, right=0.97, bottom=0.08, top=0.78, wspace=0.18)
+    fig, axes = plt.subplots(1, 4, figsize=(14.0, 4.0), constrained_layout=False)
+    fig.subplots_adjust(left=0.030, right=0.985, bottom=0.13, top=0.76, wspace=0.16)
     panels = [
-        ("reference", frames[0][1], "magma", 0.0, 1.0),
-        ("PINN", frames[0][2], "magma", 0.0, 1.0),
-        ("absolute error", frames[0][3], "viridis", 0.0, error_vmax),
+        ("reference truth", frames[0][1], "magma", 0.0, 1.0),
+        ("PINN prediction", frames[0][2], "magma", 0.0, 1.0),
+        ("signed error", frames[0][3], "coolwarm", -signed_error_lim, signed_error_lim),
+        ("absolute error", frames[0][4], "viridis", 0.0, abs_error_vmax),
     ]
     images = []
     for ax, (title, field, cmap, vmin, vmax) in zip(axes, panels):
@@ -621,6 +629,7 @@ def save_pinn_evolution_gif(
         ax.set_yticks([])
         images.append(im)
     fig.colorbar(images[2], ax=axes[2], fraction=0.046, pad=0.02)
+    fig.colorbar(images[3], ax=axes[3], fraction=0.046, pad=0.02)
     title = fig.text(
         0.01,
         0.965,
@@ -640,18 +649,42 @@ def save_pinn_evolution_gif(
         fontsize=9,
         color=TOKENS["muted"],
     )
+    if warning:
+        fig.text(
+            0.01,
+            0.032,
+            warning,
+            ha="left",
+            va="bottom",
+            fontsize=9,
+            fontweight="semibold",
+            color="#9A3412",
+            bbox={"boxstyle": "round,pad=0.25", "facecolor": "#FFF7ED", "edgecolor": "#FDBA74", "linewidth": 0.8},
+        )
 
     def _update(frame_idx: int) -> list[object]:
-        time_value, true_field, pred, err = frames[frame_idx]
+        time_value, true_field, pred, signed, err, rel = frames[frame_idx]
         images[0].set_data(true_field.T)
         images[1].set_data(pred.T)
-        images[2].set_data(err.T)
-        title.set_text(f"PINN field evolution t={time_value:.3f}")
+        images[2].set_data(signed.T)
+        images[3].set_data(err.T)
+        title.set_text(f"PINN field evolution t={time_value:.3f} | frame relative L2={rel:.3e}")
         return [*images, title]
 
     animation = FuncAnimation(fig, _update, frames=len(frames), interval=1000 / max(fps, 1), blit=True)
     animation.save(path, writer=PillowWriter(fps=fps))
     plt.close(fig)
+    return {
+        "path": str(path),
+        "frames": int(len(frames)),
+        "grid": int(n),
+        "fps": int(fps),
+        "max_abs_error": float(abs_error_vmax),
+        "max_signed_error_abs": float(signed_error_lim),
+        "mean_frame_relative_l2": float(np.mean(frame_relative_l2)),
+        "final_frame_relative_l2": float(frame_relative_l2[-1]),
+        "warning": warning,
+    }
 
 
 def save_observation_coverage_figure(
