@@ -9,4 +9,5 @@ __all__ = [
     "train",
     "baselines",
     "rk4",
+    "curve_trend",
 ]

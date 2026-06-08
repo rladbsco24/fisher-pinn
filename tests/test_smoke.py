@@ -19,6 +19,15 @@ from scripts.run_forward_ablation import make_forward_cases
 from scripts.run_korea_pine_wilt_simulation import _save_korea_map_baseline_gif
 
 from fisher_origin_lab.config import DomainConfig, ExperimentConfig, ModelConfig, PDEConfig, SeedConfig, WarmStartConfig
+from fisher_origin_lab.curve_trend import (
+    CurvePINNConfig,
+    CurveTrendConfig,
+    CurveTrendPINN,
+    curve_exact,
+    curve_pinn_residual,
+    integrate_curve,
+    train_curve_pinn,
+)
 from fisher_origin_lab.korea_data import (
     build_density_grid,
     fit_korea_pine_wilt_pinn,
@@ -151,6 +160,52 @@ def test_rk4_solver_matches_current_problem_shape_and_bounds() -> None:
     assert np.isfinite(truth.fields).all()
     assert truth.fields.min() >= 0.0
     assert truth.fields.max() <= 1.0
+
+
+def test_long_time_curve_reference_shape_and_integrators() -> None:
+    cfg = CurveTrendConfig()
+    times = np.linspace(0.0, cfg.t_end, cfg.steps + 1)
+    exact, _ = curve_exact(times, cfg)
+    peak_window = times <= 8.0
+    peak_idx = int(np.argmax(exact[peak_window]))
+    trough_mask = (times >= 3.0) & (times <= 7.0)
+    trough = exact[trough_mask].min()
+
+    assert 0.68 <= exact[peak_window][peak_idx] <= 0.76
+    assert 1.5 <= times[peak_window][peak_idx] <= 2.3
+    assert 0.13 <= trough <= 0.22
+    assert 0.32 <= exact[-1] <= 0.36
+
+    errors = {
+        method: float(integrate_curve(method, cfg)["abs_error"].max())
+        for method in ("forward_euler", "backward_euler", "trapezoidal", "rk4")
+    }
+    assert errors["forward_euler"] < 3.5e-2
+    assert errors["backward_euler"] < 3.5e-2
+    assert errors["trapezoidal"] < 1.0e-3
+    assert errors["rk4"] < 1.0e-6
+
+
+def test_curve_trend_pinn_residual_and_short_training_are_finite() -> None:
+    trend_cfg = CurveTrendConfig()
+    model = CurveTrendPINN(trend_cfg, hidden=16, layers=1)
+    t = torch.linspace(0.0, trend_cfg.t_end, 8).reshape(-1, 1)
+    residual, rho = curve_pinn_residual(model, t)
+    assert residual.shape == (8, 1)
+    assert rho.shape == (8, 1)
+    assert torch.isfinite(residual).all()
+    assert torch.isfinite(rho).all()
+
+    result = train_curve_pinn(
+        trend_cfg,
+        CurvePINNConfig(epochs=2, hidden=16, layers=1, collocation_points=16, observation_points=12, print_every=1),
+        device=torch.device("cpu"),
+        seed=11,
+    )
+    assert np.isfinite(result["rho"]).all()
+    assert np.isfinite(result["abs_error"]).all()
+    assert result["metrics"]["max_abs_error"] >= 0.0
+    assert len(result["history"]) >= 1
 
 
 def test_pde_residual_shape() -> None:

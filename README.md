@@ -281,6 +281,37 @@ Every experiment now computes an RK4 reference run after PINN training and repor
   same observation coordinates.
 - `rk4_runtime_sec`: wall-clock time for the RK4 baseline.
 
+## Long-Time `rho(t)` Curve PINN
+
+The reference image's right panel is a damped scalar trend, not a monotone Fisher-KPP
+front probe. To match that trend without changing the Fisher-KPP PDE interpretation,
+the repository now includes a separate ODE-PINN benchmark:
+
+```bash
+python scripts\run_long_time_curve_pinn.py --quick
+```
+
+The fair long-time curve setting is:
+
+```text
+rho_inf=0.34, alpha=0.24, omega_d=1.0, rho(0)=0, rho_t(0)=0.60, T=30, dt=0.05
+```
+
+Forward Euler, backward Euler, trapezoidal, RK4, and the PINN all use this same target,
+same time horizon, and same `dt`. The exact damped-oscillator solution is retained as
+the reference, so the comparison isolates method/training error rather than mixing
+different equations or time grids. The PINN uses a hard initial-condition ansatz, the
+physics residual
+`rho_tt + 2 alpha rho_t + (alpha^2 + omega_d^2)(rho - rho_inf) = 0`, and sparse exact
+curve anchors to stabilize short Colab runs.
+
+Outputs are written under `runs/long_time_curve_pinn/`:
+
+- `pinn_long_time_curve_trend.png`
+- `pinn_long_time_curve_diagnostics.png`
+- `pinn_long_time_curve_results.npz`
+- `metrics.json`
+
 ## Ablation Experiments
 
 For the original inverse-origin setup, run a source/warm-start matrix before making
