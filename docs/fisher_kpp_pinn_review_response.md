@@ -1,4 +1,4 @@
-# Fisher-KPP PINN 산림청 적용 및 장시간 곡선 검토의견 회신
+# Fisher-KPP PINN 산림청 적용 및 장시간 곡선 기술 검토 보고서
 
 작성: Codex / 연구 기록 업데이트
 
@@ -14,15 +14,15 @@
 
 이 세 가지는 서로 연결되어 있지만 같은 문제는 아닙니다. Fisher-KPP front 문제는 반응-확산 PDE이고, 양의 확산과 logistic reaction을 쓰는 표준 설정에서는 probe density가 본질적으로 감쇠 진동 곡선을 만들지 않습니다. 반면 우측 그림의 `rho(t)`는 장시간에 걸쳐 overshoot와 damping을 보이는 scalar oscillator 형태입니다. 따라서 최근 코드에서는 Fisher-KPP front 실험과 `rho(t)` curve benchmark를 분리했습니다. 이 분리가 현재 결과를 올바르게 해석하는 핵심입니다.
 
-이 문서는 지금까지 반영한 코드 구조, 문제 설정, baseline, 산림청 데이터 처리, 장시간 curve benchmark, 공정한 하이퍼파라미터 설정, 그리고 남은 한계를 검토의견 회신서 형식으로 정리한 설명 파일입니다.
+이 문서는 지금까지 반영한 코드 구조, 문제 설정, baseline, 산림청 데이터 처리, 장시간 curve benchmark, 공정한 하이퍼파라미터 설정, 주요 관찰과 원인 분석, 그리고 남은 한계를 기술 검토 보고서 형식으로 정리한 설명 파일입니다.
 
 ## 1. 문제 설정은 무엇으로 고정했는가
 
-### 말씀하신 내용 요약
+### 기준 요구 사항
 
 문제 구성은 기존 한국 산림청 코드와 동일해야 하며, 모델 자체는 Geo-aware forward PINN 계획을 반영해 개선할 수 있다는 의견이었습니다. boundary condition, initial condition, forward simulation, 관측 데이터와의 관계가 명확해야 결과 비교가 가능합니다.
 
-### 답변
+### 확정 설정
 
 산림청 적용 파트의 기준 문제는 forward Fisher-KPP baseline입니다. 상태 변수 `u(x, y, t)`는 정규화된 감염 density proxy로 해석합니다.
 
@@ -46,11 +46,11 @@ synthetic inverse-origin 실험과 산림청 forward baseline은 목적이 다�
 
 ## 2. 왜 RK4와 PINN을 모두 baseline에 넣었는가
 
-### 말씀하신 내용 요약
+### 비교 필요성
 
 산림청 데이터 실험에서 RK4만 제시하면 우리가 만든 PINN이 실제 baseline 비교에 포함되지 않으므로, PINN도 같은 평가 표에 들어가야 한다는 의견이었습니다.
 
-### 답변
+### baseline 구성
 
 맞습니다. 현재 산림청 baseline에는 RK4와 repository PINN baseline이 모두 포함됩니다.
 
@@ -72,11 +72,11 @@ PINN은 observed-year relative L2를 낮췄지만, 여전히 `diagnostic_high_er
 
 ## 3. Geo-aware forward PINN 구조는 어떻게 반영했는가
 
-### 말씀하신 내용 요약
+### 방법론 반영 범위
 
 Geo-aware forward PINN 계획과 구조를 코드에 반영해야 하며, 단순 MLP가 아니라 최신 PINN 안정화 기법과 moving front 특성을 고려해야 한다는 의견이었습니다.
 
-### 답변
+### 구현 구조
 
 synthetic Fisher-KPP forward profile에는 다음 구성요소를 반영했습니다.
 
@@ -106,11 +106,11 @@ synthetic Fisher-KPP forward profile에는 다음 구성요소를 반영했습�
 
 ## 4. 산림청 데이터는 어떻게 반영했는가
 
-### 말씀하신 내용 요약
+### 데이터 구성
 
 한국 산림청 CSV와 시뮬레이션 코드가 repository와 notebook에 포함되어야 하며, Colab에서도 재현 가능해야 한다는 의견이었습니다.
 
-### 답변
+### 처리 방식
 
 원본 연도별 CSV는 총 약 1.17 GB이고 일부 파일은 GitHub 일반 blob 한도 100 MB를 넘습니다. 따라서 원본 CSV 전체를 일반 Git 파일로 넣지 않고, 다음 compact artifact를 commit했습니다.
 
@@ -125,11 +125,11 @@ GeoJSON은 단순 시각화 배경이 아니라 land mask 생성에도 사용합
 
 ## 5. 산림청 notebook은 무엇을 실행하는가
 
-### 말씀하신 내용 요약
+### 실행 목표
 
 산림청 데이터를 위한 `.ipynb`도 실제 실행 가능해야 하며, 설명과 출력이 깨지지 않아야 한다는 의견이었습니다.
 
-### 답변
+### notebook 구성
 
 `korea_pine_wilt_fisher_kpp_lab.ipynb`는 다음 순서로 실행됩니다.
 
@@ -149,11 +149,11 @@ Colab에서는 project files가 없으면 GitHub repository를 clone하고, 이�
 
 ## 6. 현재 산림청 baseline 결과는 어떻게 해석해야 하는가
 
-### 말씀하신 내용 요약
+### 관찰 결과
 
 실행 결과를 보여주되, 좋은 결과인지 아닌지 명확히 판단해야 한다는 의견이었습니다. 특히 smoke run이나 diagnostic output을 최종 성능처럼 보여주면 안 됩니다.
 
-### 답변
+### 해석 기준
 
 현재 산림청 결과는 "진단용 baseline"입니다. PINN이 RK4보다 observed-year relative L2를 낮췄지만, high-error 상태가 유지됩니다. 이는 다음 이유 때문입니다.
 
@@ -169,11 +169,11 @@ Colab에서는 project files가 없으면 GitHub repository를 clone하고, 이�
 
 ## 7. 주요 관찰과 분석
 
-### 말씀하신 내용 요약
+### 관찰 목록
 
 실험을 계속 개선하면서 여러 현상이 관찰되었고, 단순히 코드 변경 목록만 적는 것이 아니라 그 현상이 왜 나타났는지 분석이 필요하다는 의견이었습니다.
 
-### 답변
+### 원인 분석
 
 아래는 현재까지 반복적으로 관찰된 핵심 현상과 그 해석입니다.
 
@@ -249,11 +249,11 @@ PINN과 RK4를 비교할 때 가장 위험한 오류는 서로 다른 문제를 
 
 ## 8. 장시간 Fisher-KPP 수치적분 비교용 공정 파라미터는 무엇인가
 
-### 말씀하신 내용 요약
+### 비교 조건
 
 forward Euler, backward Euler, trapezoidal, RK4 모두에서 긴 시간 경향성을 볼 수 있는 공정한 파라미터를 만들고, 이를 따르는 RK4 코드와 notebook도 추가해 달라는 의견이었습니다.
 
-### 답변
+### 파라미터와 결과
 
 `fisher-kpp-rk4`에는 1D Fisher-KPP front를 장시간 적분하는 공정 비교 설정을 추가했습니다.
 
@@ -302,11 +302,11 @@ rk4             final_front=15.2623, final_mass=0.5048, rho=0.9299, relL2_to_RK4
 
 ## 9. 우측 그림의 장시간 `rho(t)` 곡선은 어떻게 따로 반영했는가
 
-### 말씀하신 내용 요약
+### curve benchmark 필요성
 
 사용자의 실제 의도는 왼쪽 surface가 아니라 우측의 긴 시간 `rho(t)` 곡선 추이를 맞추는 것이었습니다.
 
-### 답변
+### 구현 및 결과
 
 이 요구는 Fisher-KPP front 문제와 분리했습니다. 표준 Fisher-KPP는 logistic reaction과 positive diffusion 때문에 probe curve가 감쇠 진동하지 않습니다. 따라서 우측 그림의 추이를 맞추기 위해 별도의 damped oscillator benchmark를 만들었습니다.
 
@@ -367,11 +367,11 @@ PINN final_rho             = 0.3395784
 
 ## 10. PINN 시각화와 GIF는 어떻게 해석해야 하는가
 
-### 말씀하신 내용 요약
+### 시각화 목적
 
 PINN GIF가 랜덤한 얼룩처럼 보이는 경우가 있었고, 이런 그림이 확실한 결과인지 의문이 있다는 의견이었습니다.
 
-### 답변
+### 해석 기준
 
 초기 GIF는 `--epochs 2` smoke run에서 생성된 것이어서 학습 결과를 보여주는 그림이 아니었습니다. 이를 방지하기 위해 `pinn_evolution.gif`에는 다음 정보를 직접 포함했습니다.
 
@@ -389,11 +389,11 @@ PINN GIF가 랜덤한 얼룩처럼 보이는 경우가 있었고, 이런 그림�
 
 ## 11. 코드와 문서 산출물은 어디에 있는가
 
-### 말씀하신 내용 요약
+### 산출물 목록
 
 코드와 설명 파일이 계속 업데이트되어야 하며, 어떤 파일을 보면 되는지 명확해야 한다는 의견이었습니다.
 
-### 답변
+### 관리 방식
 
 주요 파일은 다음과 같습니다.
 
@@ -406,15 +406,15 @@ PINN GIF가 랜덤한 얼룩처럼 보이는 경우가 있었고, 이런 그림�
 - 산림청 simulation script: `scripts/run_korea_pine_wilt_simulation.py`
 - 장시간 curve-PINN script: `scripts/run_long_time_curve_pinn.py`
 
-문서 형식은 검토의견별로 `말씀하신 내용 요약`과 `답변`을 나누는 방식을 유지합니다. 이렇게 하면 어떤 요청에 대해 어떤 코드가 바뀌었고, 어떤 결과가 나왔으며, 아직 무엇이 부족한지 추적하기 쉽습니다.
+문서 형식은 기술 항목별 분류 구조로 유지합니다. 각 절은 기준 요구 사항, 구현 구조, 관찰 결과, 원인 분석, 검증 결과, 한계와 다음 단계처럼 독자가 바로 필요한 정보를 찾을 수 있는 범주로 나눕니다.
 
 ## 12. 앞으로 이 설명 파일은 어떻게 업데이트할 것인가
 
-### 말씀하신 내용 요약
+### 갱신 필요성
 
 코드와 실험이 계속 바뀌므로 설명 파일도 함께 업데이트되어야 한다는 의견이었습니다.
 
-### 답변
+### 갱신 기준
 
 앞으로 다음 항목이 바뀌면 이 문서도 함께 갱신합니다.
 
