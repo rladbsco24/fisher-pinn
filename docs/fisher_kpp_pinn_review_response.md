@@ -104,6 +104,25 @@ synthetic Fisher-KPP forward profile에는 다음 구성요소를 반영했습�
 
 즉 synthetic forward PINN은 방법론 검증용이고, 산림청 PINN은 현실 데이터에서의 baseline fitting 진단용입니다. 두 결과를 같은 의미로 해석하면 안 됩니다.
 
+
+### 1-6번 선행 연구 기반 개선의 코드 반영
+
+front 주변 오차를 줄이기 위해 정리했던 1-6번 개선안을 기본 Geo-Spectral forward PINN profile에 모두 반영했습니다. 이 변경은 단순히 옵션을 늘린 것이 아니라 `ExperimentConfig().geo_spectral_forward()`가 기본적으로 해당 장치들을 켜도록 구성한 것입니다.
+
+첫째, front-level-set alignment loss를 기본 loss로 올렸습니다. 기존 area matching은 `u>0.05` 또는 `u>0.10` 면적만 맞추면 넓은 저농도 haze도 통과할 수 있었습니다. 새 loss는 선형화 Fisher-KPP leading edge에서 예상되는 low-level ring을 샘플링하고, ring 위에서는 목표 level을 맞추며, 안쪽과 바깥쪽의 순서 관계를 hinge로 강제합니다. 여기에 약한 normal-slope 항을 추가해 front가 단순히 면적만 맞추는 것이 아니라 front-normal 방향의 기울기도 맞추도록 했습니다.
+
+둘째, front-local gPINN을 강화했습니다. 기존에는 현재 collocation batch에서 `0.05<u<0.95`인 지점만 residual gradient를 봤습니다. 이제는 expected-front corridor에서도 별도 샘플을 뽑아 residual gradient penalty를 적용합니다. 이 항은 초기 random network에서 과도하게 커질 수 있어 robust `log1p` energy로 계산합니다. 목적은 moving front 주변에서 PDE residual 자체보다 residual의 공간/시간 변화가 먼저 흔들리는 failure mode를 줄이는 것입니다.
+
+셋째, causal time-marching curriculum을 기본값으로 켰습니다. 학습 초반에는 이른 시간 구간을 우선 보고, epoch가 진행되면서 late-time window를 누적 확장합니다. observation data도 선택적으로 같은 시간창에서 mini-batch를 뽑되, 비어 있는 창은 전체 observation으로 fallback하게 했습니다. 따라서 sparse late observation만 있는 경우에도 data term이 끊기지 않습니다.
+
+넷째, XPINN/FBPINN식 시간 분할 아이디어를 단일 네트워크에 맞게 축소 구현했습니다. `time_slabs=4`, overlap, cumulative curriculum을 쓰고, 내부 slab boundary에서 양쪽 시간의 field continuity와 중앙 시간 미분 기반 one-step consistency를 맞추는 `time_slab_interface_loss`를 추가했습니다. 완전한 multi-subnetwork XPINN은 아니지만, early/late 구간이 서로 다른 front phase를 학습해 생기는 drift를 줄이는 목적은 같습니다.
+
+다섯째, moving-frame front Fourier feature를 모델 입력에 추가했습니다. 기존 spatial Fourier는 전역 `x,y` 좌표를 기준으로 하므로 이동하는 front의 phase를 표현하려면 네트워크가 translation을 스스로 학습해야 했습니다. 새 feature는 normalized front coordinate와 radial direction을 Fourier encoding으로 넣어 front 주변의 phase shift를 더 직접적으로 표현하게 합니다.
+
+여섯째, loss balancing을 relative-progress 방식에서 gradient-norm 방식까지 확장했습니다. 각 active loss 항이 마지막 표현층과 학습 가능한 PDE parameter에 만드는 gradient norm을 주기적으로 측정하고, 지나치게 큰 gradient를 내는 항은 낮추고 약한 항은 올립니다. 이는 PINN gradient pathology 문헌에서 지적되는 data/PDE/front loss 간 scale 불균형을 줄이기 위한 장치입니다. 계산비용 때문에 매 epoch 모든 parameter에 대해 수행하지 않고, 제한된 reference parameter와 주기적 업데이트를 사용합니다.
+
+이 여섯 가지는 RK4 수준의 정확도를 보장하는 장치가 아닙니다. 목적은 PINN이 반복적으로 보이던 front phase error, active-front area plateau, twin-trap error band, low-amplitude haze를 줄이는 것입니다. 따라서 성능 주장은 `scripts/run_forward_ablation.py`의 동일 조건 ablation과 `front_area_005_mae`, `front_area_010_mae`, `active_front_area_mae`, `mass_mae`, validation MSE를 함께 보고 판단해야 합니다.
+
 ## 4. 산림청 데이터는 어떻게 반영했는가
 
 ### 데이터 구성

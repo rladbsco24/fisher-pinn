@@ -53,6 +53,8 @@ class ModelConfig:
     architecture: str = "gated_mlp"
     fourier_features: int = 32
     fourier_sigma: float = 3.5
+    front_fourier_features: int = 0
+    front_fourier_sigma: float = 2.0
     hidden: int = 96
     layers: int = 5
     nif_rank: int = 16
@@ -65,6 +67,7 @@ class ModelConfig:
     spatial_fourier_only: bool = False
     use_seed_front_features: bool = False
     use_traveling_wave_features: bool = False
+    use_front_fourier_features: bool = False
     hard_initial_condition: bool = False
     initial_envelope_tau: float = 0.06
     use_kpp_front_envelope: bool = False
@@ -96,6 +99,7 @@ class LossWeights:
     front_contrast: float = 0.0
     front_profile: float = 0.0
     level_set_alignment: float = 0.0
+    time_interface: float = 0.0
     rk4_teacher: float = 0.0
     sparse: float = 0.0
 
@@ -132,6 +136,8 @@ class TrainConfig:
     residual_weight_exponent_end: float = 0.5
     residual_curriculum_epochs: int = 0
     adaptive_loss_balancing: bool = False
+    gradient_norm_balancing: bool = False
+    gradient_norm_balance_every: int = 25
     adaptive_loss_momentum: float = 0.9
     adaptive_loss_min: float = 0.25
     adaptive_loss_max: float = 4.0
@@ -153,8 +159,11 @@ class TrainConfig:
     front_contrast_grid: int = 32
     front_profile_points: int = 256
     front_profile_width: float = 0.06
+    front_gradient_expected_points: int = 128
     mass_balance_times: int = 4
     mass_balance_grid: int = 18
+    time_interface_points: int = 256
+    time_interface_width: float = 0.01
     rk4_teacher_pool: int = 0
     rk4_teacher_batch: int = 0
     rk4_teacher_late_fraction: float = 0.0
@@ -169,6 +178,8 @@ class TrainConfig:
     time_slab_curriculum: bool = False
     time_window_focus_fraction: float = 1.0
     time_window_teacher: bool = False
+    time_window_observations: bool = False
+    observation_batch: int = 0
     print_every: int = 100
     adam_to_lbfgs: bool = False
     lbfgs_steps: int = 100
@@ -214,6 +225,10 @@ class ExperimentConfig:
                 architecture=self.model.architecture,
                 fourier_features=16,
                 fourier_sigma=self.model.fourier_sigma,
+                front_fourier_features=min(self.model.front_fourier_features, 8)
+                if self.model.front_fourier_features > 0
+                else 0,
+                front_fourier_sigma=self.model.front_fourier_sigma,
                 hidden=48,
                 layers=3,
                 nif_rank=self.model.nif_rank,
@@ -226,6 +241,7 @@ class ExperimentConfig:
                 spatial_fourier_only=self.model.spatial_fourier_only,
                 use_seed_front_features=self.model.use_seed_front_features,
                 use_traveling_wave_features=self.model.use_traveling_wave_features,
+                use_front_fourier_features=self.model.use_front_fourier_features,
                 hard_initial_condition=self.model.hard_initial_condition,
                 initial_envelope_tau=self.model.initial_envelope_tau,
                 use_kpp_front_envelope=self.model.use_kpp_front_envelope,
@@ -255,6 +271,7 @@ class ExperimentConfig:
                 front_contrast=self.weights.front_contrast,
                 front_profile=self.weights.front_profile,
                 level_set_alignment=self.weights.level_set_alignment,
+                time_interface=self.weights.time_interface,
                 rk4_teacher=self.weights.rk4_teacher,
                 sparse=self.weights.sparse,
             ),
@@ -287,6 +304,8 @@ class ExperimentConfig:
                     else 0
                 ),
                 adaptive_loss_balancing=self.train.adaptive_loss_balancing,
+                gradient_norm_balancing=self.train.gradient_norm_balancing,
+                gradient_norm_balance_every=max(1, self.train.gradient_norm_balance_every),
                 adaptive_loss_momentum=self.train.adaptive_loss_momentum,
                 adaptive_loss_min=self.train.adaptive_loss_min,
                 adaptive_loss_max=self.train.adaptive_loss_max,
@@ -308,8 +327,11 @@ class ExperimentConfig:
                 front_contrast_grid=min(self.train.front_contrast_grid, 24),
                 front_profile_points=min(self.train.front_profile_points, 128),
                 front_profile_width=self.train.front_profile_width,
+                front_gradient_expected_points=min(self.train.front_gradient_expected_points, 96),
                 mass_balance_times=min(self.train.mass_balance_times, 4),
                 mass_balance_grid=min(self.train.mass_balance_grid, 18),
+                time_interface_points=min(self.train.time_interface_points, 128),
+                time_interface_width=self.train.time_interface_width,
                 rk4_teacher_pool=min(self.train.rk4_teacher_pool, 2048) if self.train.rk4_teacher_pool > 0 else 0,
                 rk4_teacher_batch=min(self.train.rk4_teacher_batch, 256) if self.train.rk4_teacher_batch > 0 else 0,
                 rk4_teacher_late_fraction=self.train.rk4_teacher_late_fraction,
@@ -332,6 +354,8 @@ class ExperimentConfig:
                 time_slab_curriculum=self.train.time_slab_curriculum,
                 time_window_focus_fraction=self.train.time_window_focus_fraction,
                 time_window_teacher=self.train.time_window_teacher,
+                time_window_observations=self.train.time_window_observations,
+                observation_batch=min(self.train.observation_batch, 384) if self.train.observation_batch > 0 else 0,
                 print_every=30,
                 adam_to_lbfgs=False,
             ),
@@ -367,6 +391,8 @@ class ExperimentConfig:
                 architecture=self.model.architecture,
                 fourier_features=self.model.fourier_features,
                 fourier_sigma=self.model.fourier_sigma,
+                front_fourier_features=self.model.front_fourier_features,
+                front_fourier_sigma=self.model.front_fourier_sigma,
                 hidden=self.model.hidden,
                 layers=self.model.layers,
                 nif_rank=self.model.nif_rank,
@@ -379,6 +405,7 @@ class ExperimentConfig:
                 spatial_fourier_only=self.model.spatial_fourier_only,
                 use_seed_front_features=self.model.use_seed_front_features,
                 use_traveling_wave_features=self.model.use_traveling_wave_features,
+                use_front_fourier_features=self.model.use_front_fourier_features,
                 hard_initial_condition=False,
                 initial_envelope_tau=self.model.initial_envelope_tau,
                 use_kpp_front_envelope=False,
@@ -408,6 +435,7 @@ class ExperimentConfig:
                 front_contrast=0.0,
                 front_profile=0.0,
                 level_set_alignment=0.0,
+                time_interface=0.0,
                 rk4_teacher=0.0,
                 sparse=0.0,
             ),
@@ -434,6 +462,8 @@ class ExperimentConfig:
                 architecture="pirate",
                 fourier_features=base.model.fourier_features,
                 fourier_sigma=1.0,
+                front_fourier_features=16,
+                front_fourier_sigma=1.5,
                 hidden=base.model.hidden,
                 layers=base.model.layers,
                 nif_rank=24,
@@ -446,6 +476,7 @@ class ExperimentConfig:
                 spatial_fourier_only=True,
                 use_seed_front_features=True,
                 use_traveling_wave_features=True,
+                use_front_fourier_features=True,
                 hard_initial_condition=True,
                 initial_envelope_tau=0.06,
                 use_kpp_front_envelope=True,
@@ -474,7 +505,8 @@ class ExperimentConfig:
                 leading_edge_area=1.0,
                 front_contrast=0.10,
                 front_profile=0.20,
-                level_set_alignment=0.0,
+                level_set_alignment=0.06,
+                time_interface=0.03,
                 rk4_teacher=0.0,
                 sparse=1.0e-5,
             ),
@@ -485,6 +517,8 @@ class ExperimentConfig:
                 residual_weight_exponent_end=0.5,
                 residual_curriculum_epochs=max(1, base.train.epochs // 4),
                 adaptive_loss_balancing=True,
+                gradient_norm_balancing=True,
+                gradient_norm_balance_every=25,
                 adaptive_loss_momentum=0.9,
                 adaptive_loss_min=0.33,
                 adaptive_loss_max=3.0,
@@ -500,6 +534,19 @@ class ExperimentConfig:
                 front_contrast_grid=32,
                 front_profile_points=256,
                 front_profile_width=0.06,
+                front_gradient_expected_points=128,
+                time_marching=True,
+                time_marching_start_fraction=0.30,
+                time_marching_epochs=max(1, base.train.epochs // 2),
+                time_slabs=4,
+                time_slab_overlap=0.08,
+                time_slab_curriculum=True,
+                time_window_focus_fraction=0.65,
+                time_window_teacher=True,
+                time_window_observations=True,
+                observation_batch=512,
+                time_interface_points=256,
+                time_interface_width=0.015,
             ),
             ensemble=base.ensemble,
             base_seed=base.base_seed,

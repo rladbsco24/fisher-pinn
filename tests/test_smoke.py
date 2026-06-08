@@ -36,9 +36,11 @@ from fisher_origin_lab.korea_data import (
     simulate_density_rk4,
 )
 from fisher_origin_lab.losses import (
+    expected_front_gradient_residual_loss,
     expected_front_pde_loss,
     expected_front_samples,
     front_area_contrast_loss,
+    front_level_set_alignment_loss,
     front_local_gradient_residual_loss,
     front_profile_alignment_loss,
     front_speed_consistency_loss,
@@ -48,6 +50,7 @@ from fisher_origin_lab.losses import (
     leading_edge_floor_loss,
     parabolic_mass_balance_loss,
     pde_residual,
+    time_slab_interface_loss,
 )
 from fisher_origin_lab.models import OriginPINN
 from fisher_origin_lab.plotting import (
@@ -324,6 +327,9 @@ def test_expected_front_losses_are_finite() -> None:
     area_loss = leading_edge_area_loss(model, n_times=3, grid=8, device=torch.device("cpu"))
     contrast_loss = front_area_contrast_loss(model, n_times=3, grid=8, device=torch.device("cpu"))
     profile_loss = front_profile_alignment_loss(model, n=24, device=torch.device("cpu"))
+    level_set_loss = front_level_set_alignment_loss(model, n=16, device=torch.device("cpu"))
+    front_gpinn_loss = expected_front_gradient_residual_loss(model, n=16, device=torch.device("cpu"))
+    interface_loss = time_slab_interface_loss(model, n=16, device=torch.device("cpu"), slabs=3)
     assert xy.shape == (16, 2)
     assert t.shape == (16, 1)
     assert torch.isfinite(xy).all()
@@ -333,6 +339,9 @@ def test_expected_front_losses_are_finite() -> None:
     assert torch.isfinite(area_loss)
     assert torch.isfinite(contrast_loss)
     assert torch.isfinite(profile_loss)
+    assert torch.isfinite(level_set_loss)
+    assert torch.isfinite(front_gpinn_loss)
+    assert torch.isfinite(interface_loss)
 
 
 def test_korea_pine_style_matches_forward_pinn_setup() -> None:
@@ -442,6 +451,8 @@ def test_geo_spectral_forward_profile_extends_korea_setup() -> None:
     assert cfg.model.use_source_envelope is False
     assert cfg.model.use_seed_front_features is True
     assert cfg.model.use_traveling_wave_features is True
+    assert cfg.model.use_front_fourier_features is True
+    assert cfg.model.front_fourier_features > 0
     assert cfg.model.hard_initial_condition is True
     assert cfg.model.use_kpp_front_envelope is True
     assert cfg.weights.initial_condition > 0.0
@@ -453,8 +464,12 @@ def test_geo_spectral_forward_profile_extends_korea_setup() -> None:
     assert cfg.weights.expected_front_pde == 0.0
     assert cfg.weights.leading_edge == 0.0
     assert cfg.weights.leading_edge_area > 0.0
+    assert cfg.weights.level_set_alignment > 0.0
+    assert cfg.weights.time_interface > 0.0
     assert cfg.weights.sparse > 0.0
     assert cfg.train.adaptive_loss_balancing is True
+    assert cfg.train.gradient_norm_balancing is True
+    assert cfg.train.gradient_norm_balance_every > 0
     assert cfg.train.mass_balance_times > 0
     assert cfg.train.mass_balance_grid > 1
     assert cfg.train.front_speed_points > 0
@@ -465,6 +480,15 @@ def test_geo_spectral_forward_profile_extends_korea_setup() -> None:
     assert cfg.train.expected_front_speed_factor > 0.0
     assert cfg.train.leading_edge_area_times > 0
     assert cfg.train.leading_edge_area_grid > 1
+    assert cfg.train.front_gradient_expected_points > 0
+    assert cfg.train.time_marching is True
+    assert cfg.train.time_slabs > 1
+    assert cfg.train.time_slab_curriculum is True
+    assert cfg.train.time_window_focus_fraction < 1.0
+    assert cfg.train.time_window_teacher is True
+    assert cfg.train.time_window_observations is True
+    assert cfg.train.observation_batch > 0
+    assert cfg.train.time_interface_points > 0
     assert cfg.train.residual_curriculum_epochs > 0
     assert cfg.train.residual_weight_exponent_start < cfg.train.residual_weight_exponent_end
     assert cfg.train.rar_residual_weight > 0.0
@@ -547,6 +571,9 @@ def test_forward_ablation_cases_report_front_metrics() -> None:
     assert any(case["cfg"].weights.front_contrast > 0.0 for case in cases)
     assert any(case["cfg"].weights.front_profile > 0.0 for case in cases)
     assert any(case["cfg"].weights.level_set_alignment > 0.0 for case in cases)
+    assert any(case["cfg"].weights.time_interface > 0.0 for case in cases)
+    assert any(case["cfg"].model.use_front_fourier_features is True for case in cases)
+    assert any(case["cfg"].train.gradient_norm_balancing is True for case in cases)
     assert any(case["cfg"].model.architecture == "nif_pirate" for case in cases)
     assert any(case["cfg"].model.architecture == "pirate" for case in cases)
     assert any(case["cfg"].model.architecture == "gated_mlp" for case in cases)

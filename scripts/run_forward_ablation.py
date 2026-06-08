@@ -90,6 +90,17 @@ def make_forward_cases(base: ExperimentConfig) -> list[dict[str, Any]]:
             expected_front_pde=0.0,
             leading_edge=0.0,
             front_gradient=0.0,
+            level_set_alignment=0.0,
+            time_interface=0.0,
+        ),
+        train=replace(
+            base.train,
+            time_marching=False,
+            time_slabs=1,
+            time_slab_curriculum=False,
+            time_window_focus_fraction=1.0,
+            time_window_teacher=False,
+            time_window_observations=False,
         ),
     )
     geo_speed_mass = replace(
@@ -101,6 +112,8 @@ def make_forward_cases(base: ExperimentConfig) -> list[dict[str, Any]]:
             front_profile=0.0,
             expected_front_pde=0.0,
             leading_edge=0.0,
+            level_set_alignment=0.0,
+            time_interface=0.0,
         ),
     )
     geo_front_area = base
@@ -109,7 +122,8 @@ def make_forward_cases(base: ExperimentConfig) -> list[dict[str, Any]]:
         base,
         weights=replace(
             base.weights,
-            level_set_alignment=0.03,
+            level_set_alignment=max(base.weights.level_set_alignment, 0.06),
+            time_interface=max(base.weights.time_interface, 0.03),
             rk4_teacher=max(base.weights.rk4_teacher, 0.005),
         ),
         train=replace(
@@ -180,7 +194,7 @@ def make_forward_cases(base: ExperimentConfig) -> list[dict[str, Any]]:
         _case("korea_style_forward", korea, "Korea pine-wilt compatible forward PINN objective."),
         _case("geo_no_front_terms", geo_no_front, "Geo/spectral/hard-IC model without explicit front or mass losses."),
         _case("geo_speed_mass", geo_speed_mass, "Adds gradient-filtered front-speed and parabolic mass-balance losses."),
-        _case("geo_front_area", geo_front_area, "Default PirateNet/RWF profile with scaled traveling-wave features."),
+        _case("geo_front_area", geo_front_area, "Default full front-aware stack: level-set, gPINN, causal slabs, front Fourier, and balancing."),
         _case("geo_front_area_strong", geo_area_strong, "Stronger front-area ablation; useful for checking metric tradeoffs."),
         _case("geo_levelset_time_slab", geo_levelset_time_slab, "Front level-set alignment plus causal time-slab windowing."),
         _case("geo_rk4_teacher_front_area", geo_rk4_teacher_front_area, "Weak RK4 pseudo-label regularizer for solver-assisted PINN training."),

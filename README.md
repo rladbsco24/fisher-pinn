@@ -37,8 +37,9 @@ The main estimator is `CaRA-gPINN-Seed`:
   only on the neural-field PDE residual.
 - Causal time-bin weighting inspired by causal PINNs.
 - Bounded residual-decay weighting inspired by recent adaptive weighting work.
-- Relative-progress adaptive loss balancing for active PINN terms, keeping data, PDE,
-  known-IC, boundary, and front-gradient losses from drifting onto incompatible scales.
+- Relative-progress and gradient-norm adaptive loss balancing for active PINN terms,
+  keeping data, PDE, known-IC, boundary, and front-gradient losses from drifting onto
+  incompatible scales.
 - Residual curriculum weighting that starts flatter and gradually emphasizes harder
   high-residual collocation points.
 - Residual-adaptive collocation points inspired by RAD/RAR-D sampling.
@@ -182,6 +183,9 @@ What changes:
   assumption. The forward preset now uses a lower Fourier scale because the target
   solution is a smooth diffusive Fisher-KPP front; high-frequency features caused
   sparse-observation blob artifacts.
+- Moving-frame front Fourier features are also enabled. They encode the normalized
+  Fisher-KPP front coordinate plus radial direction, so the network can represent
+  phase shifts around the active interface without using only global `x,y,t` features.
 - Square-domain geo features encode boundary distance and simple interior geometry.
   The current synthetic problem treats the whole square as valid land; the sampler has a
   mask interface so a real land mask can replace `box` later.
@@ -226,18 +230,20 @@ What changes:
 - A low/high front-contrast loss matches the ratio of soft `u>0.10` to `u>0.05` areas.
   This directly targets the failure mode where the network creates a wide `u~0.05`
   haze but under-resolves the active front core.
-- A front-level-set alignment loss is implemented as an ablation. It samples expected
+- A front-level-set alignment loss is enabled in the default forward profile. It samples expected
   low-level Fisher-KPP rings from the linearized Gaussian leading-edge approximation,
   drives the network to match `u ~= 0.05/0.10` on the ring, and adds weak inside/outside
-  ordering hinges. This is closer to moving-interface PINN losses than plain area
-  matching, but it remains an ablation because the analytic low-level approximation can
-  over-expand the `u>0.05` front in short runs.
-- Causal time marching and XPINN/FBPINN-inspired time-slab training are implemented for
-  the forward ablation suite. For a single shared network, `time_slab_curriculum=True`
+  ordering hinges plus a weak normal-slope target. This is closer to moving-interface
+  PINN losses than plain area matching.
+- Causal time marching and XPINN/FBPINN-inspired time-slab training are enabled in the
+  default forward profile. For a single shared network, `time_slab_curriculum=True`
   expands the training window cumulatively from early to late times rather than training
   only on the current slab. The collocation sampler also supports global replay through
   `time_window_focus_fraction`, so the model gets local front focus without losing
   full-domain PDE coverage.
+- A time-slab interface loss adds overlap continuity and PDE consistency at internal
+  slab boundaries. This is the single-network counterpart of XPINN/FBPINN interface
+  constraints and reduces early/late slab drift.
 - Expected-front PDE sampling and one-sided leading-edge floor losses are implemented as
   optional ablation knobs. Quick experiments showed they can improve apparent active
   area while degrading held-out MSE/mass, so they are not enabled in the default profile.
@@ -248,8 +254,9 @@ What changes:
 - Residual weighting follows an easy-to-hard curriculum: early epochs avoid overfitting
   residual outliers, then the exponent ramps toward the full adaptive residual weight.
 - Adaptive relative loss balancing updates multipliers from each term's relative training
-  progress. This is a lightweight Colab-friendly alternative to full per-term gradient
-  surgery while targeting the same multi-objective imbalance issue.
+  progress. Gradient-norm balancing additionally equalizes per-term gradients on the
+  final trainable representation layer, following PINN gradient-pathology work while
+  keeping the overhead bounded through periodic updates.
 - Already-satisfied hard constraints and sparse regularization are excluded from adaptive
   balancing so they cannot down-weight the active PDE/front losses.
 - The training loop restores the best validation-observation checkpoint, which prevents

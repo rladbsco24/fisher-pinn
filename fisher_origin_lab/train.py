@@ -21,6 +21,7 @@ from .losses import (
     boundary_neumann_loss,
     causal_weights,
     expected_front_pde_loss,
+    expected_front_gradient_residual_loss,
     front_area_contrast_loss,
     front_indicator_weights,
     front_local_gradient_residual_loss,
@@ -35,6 +36,7 @@ from .losses import (
     pde_residual,
     pde_residual_terms,
     seed_regularization_loss,
+    time_slab_interface_loss,
 )
 from .metrics import origin_error, relative_l2, tensor_center
 from .models import OriginPINN
@@ -235,6 +237,75 @@ class _AdaptiveLossBalancer:
         return dict(self.weights)
 
 
+class _GradientNormLossBalancer:
+    """Per-term gradient-norm balancer following gradient-pathology PINN work."""
+
+    def __init__(
+        self,
+        parameters: list[torch.nn.Parameter],
+        momentum: float,
+        min_weight: float,
+        max_weight: float,
+        update_every: int,
+        eps: float = 1.0e-10,
+    ) -> None:
+        self.parameters = [param for param in parameters if param.requires_grad]
+        self.momentum = float(momentum)
+        self.min_weight = float(min_weight)
+        self.max_weight = float(max_weight)
+        self.update_every = max(1, int(update_every))
+        self.eps = float(eps)
+        self.weights: dict[str, float] = {}
+
+    def update(self, losses: dict[str, torch.Tensor], epoch: int) -> dict[str, float]:
+        if not self.parameters or not losses:
+            return dict(self.weights)
+        if self.weights and epoch % self.update_every != 0:
+            return dict(self.weights)
+        norms: dict[str, float] = {}
+        for name, loss in losses.items():
+            if not loss.requires_grad:
+                continue
+            grads = torch.autograd.grad(
+                loss,
+                self.parameters,
+                retain_graph=True,
+                create_graph=False,
+                allow_unused=True,
+            )
+            sq_norm = torch.zeros((), device=loss.device)
+            for grad in grads:
+                if grad is not None:
+                    sq_norm = sq_norm + grad.detach().pow(2).sum()
+            norms[name] = float(torch.sqrt(sq_norm).detach().cpu())
+        positive = [max(value, self.eps) for value in norms.values() if np.isfinite(value) and value > 0.0]
+        if not positive:
+            return dict(self.weights)
+        mean_norm = max(float(np.mean(positive)), self.eps)
+        next_weights: dict[str, float] = {}
+        for name, norm in norms.items():
+            target = float(np.clip(mean_norm / max(norm, self.eps), self.min_weight, self.max_weight))
+            previous = self.weights.get(name, target)
+            next_weights[name] = self.momentum * previous + (1.0 - self.momentum) * target
+        mean_weight = max(float(np.mean(list(next_weights.values()))), self.eps)
+        self.weights = {
+            name: float(np.clip(weight / mean_weight, self.min_weight, self.max_weight))
+            for name, weight in next_weights.items()
+        }
+        return dict(self.weights)
+
+
+def _gradient_balance_parameters(model: OriginPINN) -> list[torch.nn.Parameter]:
+    params: list[torch.nn.Parameter] = []
+    if hasattr(model.mlp, "out_layer"):
+        params.extend(list(model.mlp.out_layer.parameters()))
+    elif hasattr(model.mlp, "shape_net") and hasattr(model.mlp.shape_net, "out_layer"):
+        params.extend(list(model.mlp.shape_net.out_layer.parameters()))
+        params.extend(list(model.mlp.parameter_net.out_layer.parameters()))
+    params.extend([model.pde.raw_diffusion, model.pde.raw_reaction])
+    return [param for param in params if param.requires_grad]
+
+
 def _residual_weight_exponent(cfg: ExperimentConfig, epoch: int) -> float:
     if cfg.train.residual_curriculum_epochs <= 0:
         return float(cfg.train.residual_weight_exponent_end)
@@ -326,7 +397,10 @@ def _sample_curriculum_collocation(
 def _combine_loss_terms(
     terms: list[tuple[str, float, torch.Tensor]],
     balancer: _AdaptiveLossBalancer | None,
-) -> tuple[torch.Tensor, dict[str, float]]:
+    grad_balancer: _GradientNormLossBalancer | None = None,
+    *,
+    epoch: int = 1,
+) -> tuple[torch.Tensor, dict[str, float], dict[str, float]]:
     balanceable = {
         "data",
         "rk4_teacher",
@@ -338,27 +412,31 @@ def _combine_loss_terms(
         "shooting",
         "grad",
         "front_grad",
+        "front_speed",
         "mass",
         "expected_front_pde",
         "leading_edge",
+        "leading_edge_area",
         "front_contrast",
         "front_profile",
         "level_set",
+        "time_interface",
     }
     active = [(name, weight, loss) for name, weight, loss in terms if weight > 0.0]
     if not active:
         device = terms[0][2].device if terms else torch.device("cpu")
-        return torch.zeros((), device=device), {}
+        return torch.zeros((), device=device), {}, {}
     adaptive_losses = {
         name: loss
         for name, _, loss in active
         if name in balanceable and float(loss.detach().cpu()) > 1.0e-10
     }
     adaptive = balancer.update(adaptive_losses) if balancer is not None else {}
+    grad_adaptive = grad_balancer.update(adaptive_losses, epoch) if grad_balancer is not None else {}
     total = torch.zeros((), dtype=active[0][2].dtype, device=active[0][2].device)
     for name, weight, loss in active:
-        total = total + float(weight) * float(adaptive.get(name, 1.0)) * loss
-    return total, adaptive
+        total = total + float(weight) * float(adaptive.get(name, 1.0)) * float(grad_adaptive.get(name, 1.0)) * loss
+    return total, adaptive, grad_adaptive
 
 
 def _pretrain_on_rk4_teacher(
@@ -444,6 +522,17 @@ def train_single(
         if cfg.train.adaptive_loss_balancing
         else None
     )
+    grad_loss_balancer = (
+        _GradientNormLossBalancer(
+            _gradient_balance_parameters(model),
+            cfg.train.adaptive_loss_momentum,
+            cfg.train.adaptive_loss_min,
+            cfg.train.adaptive_loss_max,
+            cfg.train.gradient_norm_balance_every,
+        )
+        if cfg.train.gradient_norm_balancing
+        else None
+    )
     history: list[dict[str, float]] = []
     best_validation_loss = float("inf")
     best_state: dict[str, torch.Tensor] | None = None
@@ -453,8 +542,26 @@ def train_single(
     for epoch in range(1, cfg.train.epochs + 1):
         window_t_low, window_t_high = _time_window(cfg, epoch)
         optimizer.zero_grad()
-        pred = model(observations_xyt[:, :2], observations_xyt[:, 2:3])
-        data_loss = _weighted_data_mse(pred, observations_values, cfg.weights.data_density_gain)
+        if cfg.train.observation_batch > 0 or cfg.train.time_window_observations:
+            obs_batch = cfg.train.observation_batch if cfg.train.observation_batch > 0 else len(observations_xyt)
+            obs_idx = _masked_batch_indices(
+                observations_xyt,
+                min(obs_batch, len(observations_xyt)),
+                device,
+                t_low=window_t_low,
+                t_high=window_t_high if cfg.train.time_window_observations else None,
+            )
+            if obs_idx is None:
+                obs_xyt_batch = observations_xyt
+                obs_values_batch = observations_values
+            else:
+                obs_xyt_batch = observations_xyt[obs_idx]
+                obs_values_batch = observations_values[obs_idx]
+        else:
+            obs_xyt_batch = observations_xyt
+            obs_values_batch = observations_values
+        pred = model(obs_xyt_batch[:, :2], obs_xyt_batch[:, 2:3])
+        data_loss = _weighted_data_mse(pred, obs_values_batch, cfg.weights.data_density_gain)
         if cfg.weights.rk4_teacher > 0.0:
             rk4_teacher_loss = _rk4_teacher_batch_loss(
                 model,
@@ -528,7 +635,22 @@ def train_single(
             shooting_loss = torch.zeros((), device=device)
         if cfg.weights.front_gradient > 0.0:
             subset = min(128, len(xy_col))
-            front_grad_loss = front_local_gradient_residual_loss(model, xy_col[:subset], t_col[:subset])
+            front_grad_terms = [front_local_gradient_residual_loss(model, xy_col[:subset], t_col[:subset])]
+            if cfg.train.front_gradient_expected_points > 0:
+                front_grad_terms.append(
+                    expected_front_gradient_residual_loss(
+                        model,
+                        cfg.train.front_gradient_expected_points,
+                        device,
+                        width=cfg.train.expected_front_width,
+                        speed_factor=cfg.train.expected_front_speed_factor,
+                        level=cfg.train.expected_front_level,
+                        max_points=min(128, cfg.train.front_gradient_expected_points),
+                        t_low=window_t_low,
+                        t_high=window_t_high,
+                    )
+                )
+            front_grad_loss = torch.stack(front_grad_terms).mean()
             grad_loss = torch.zeros((), device=device)
         elif cfg.weights.gradient > 0.0:
             subset = min(128, len(xy_col))
@@ -623,9 +745,19 @@ def train_single(
             )
         else:
             mass_loss = torch.zeros((), device=device)
+        if cfg.weights.time_interface > 0.0 and cfg.train.time_slabs > 1 and cfg.train.time_interface_points > 0:
+            time_interface_loss = time_slab_interface_loss(
+                model,
+                cfg.train.time_interface_points,
+                device,
+                slabs=cfg.train.time_slabs,
+                width=cfg.train.time_interface_width,
+            )
+        else:
+            time_interface_loss = torch.zeros((), device=device)
         sparse_loss = model.sparse_last_layer_l1() if cfg.weights.sparse > 0.0 else torch.zeros((), device=device)
 
-        total, adaptive_weights = _combine_loss_terms(
+        total, adaptive_weights, grad_adaptive_weights = _combine_loss_terms(
             [
                 ("data", cfg.weights.data, data_loss),
                 ("rk4_teacher", cfg.weights.rk4_teacher, rk4_teacher_loss),
@@ -646,9 +778,12 @@ def train_single(
                 ("front_profile", cfg.weights.front_profile, front_profile),
                 ("level_set", cfg.weights.level_set_alignment, level_set_loss),
                 ("mass", cfg.weights.mass_balance, mass_loss),
+                ("time_interface", cfg.weights.time_interface, time_interface_loss),
                 ("sparse", cfg.weights.sparse, sparse_loss),
             ],
             loss_balancer,
+            grad_loss_balancer,
+            epoch=epoch,
         )
         total.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
@@ -715,6 +850,7 @@ def train_single(
                 "front_profile": float(front_profile.detach().cpu()),
                 "level_set": float(level_set_loss.detach().cpu()),
                 "mass": float(mass_loss.detach().cpu()),
+                "time_interface": float(time_interface_loss.detach().cpu()),
                 "sparse": float(sparse_loss.detach().cpu()),
                 "residual_exponent": float(residual_exponent),
                 "time_window_low": float(window_t_low),
@@ -735,6 +871,8 @@ def train_single(
                 row["rk4_pretrain_final"] = rk4_pretrain_final_loss
             for name, value in adaptive_weights.items():
                 row[f"aw_{name}"] = float(value)
+            for name, value in grad_adaptive_weights.items():
+                row[f"gnw_{name}"] = float(value)
             history.append(row)
             print(
                 f"seed={run_seed} ep={epoch:5d} "
@@ -923,6 +1061,15 @@ def _lbfgs_polish(
             )
         else:
             front_profile = torch.zeros((), device=device)
+        if cfg.weights.level_set_alignment > 0.0 and cfg.train.level_set_points > 0:
+            level_set_loss = front_level_set_alignment_loss(
+                model,
+                min(cfg.train.level_set_points, 256),
+                device,
+                width=cfg.train.level_set_width,
+            )
+        else:
+            level_set_loss = torch.zeros((), device=device)
         if cfg.weights.mass_balance > 0.0:
             mass_loss = parabolic_mass_balance_loss(
                 model,
@@ -932,6 +1079,16 @@ def _lbfgs_polish(
             )
         else:
             mass_loss = torch.zeros((), device=device)
+        if cfg.weights.time_interface > 0.0 and cfg.train.time_slabs > 1 and cfg.train.time_interface_points > 0:
+            time_interface_loss = time_slab_interface_loss(
+                model,
+                min(cfg.train.time_interface_points, 256),
+                device,
+                slabs=cfg.train.time_slabs,
+                width=cfg.train.time_interface_width,
+            )
+        else:
+            time_interface_loss = torch.zeros((), device=device)
         if (cfg.weights.seed_match > 0.0 or cfg.weights.seed_mass > 0.0) and cfg.train.seed_points > 0:
             seed_match, seed_mass = seed_regularization_loss(model, cfg.train.seed_points, device)
         else:
@@ -950,7 +1107,9 @@ def _lbfgs_polish(
             + cfg.weights.leading_edge_area * leading_edge_area
             + cfg.weights.front_contrast * front_contrast
             + cfg.weights.front_profile * front_profile
+            + cfg.weights.level_set_alignment * level_set_loss
             + cfg.weights.mass_balance * mass_loss
+            + cfg.weights.time_interface * time_interface_loss
             + cfg.weights.sparse * model.sparse_last_layer_l1()
         )
         loss.backward()

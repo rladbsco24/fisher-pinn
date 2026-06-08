@@ -425,7 +425,9 @@ def front_level_set_alignment_loss(
     xy_in = (ring - offset * normal).clamp(0.0, model.domain.box)
     xy_out = (ring + offset * normal).clamp(0.0, model.domain.box)
 
-    pred_on = model(xy_on, t)
+    xy_on_req = xy_on.detach().clone().requires_grad_(True)
+    t_req = t.detach().clone()
+    pred_on = model(xy_on_req, t_req)
     pred_in = model(xy_in, t)
     pred_out = model(xy_out, t)
     valid = (radius > 1.0e-6).detach().float()
@@ -435,8 +437,19 @@ def front_level_set_alignment_loss(
         torch.relu(level + margin - pred_in).pow(2)
         + torch.relu(pred_out - (level - margin).clamp_min(0.0)).pow(2)
     )
-    denom = valid.mean().clamp_min(1.0e-6)
-    return (on_loss.mean() + 0.5 * order_loss.mean()) / denom
+    grad_on = torch.autograd.grad(pred_on, xy_on_req, torch.ones_like(pred_on), create_graph=True)[0]
+    normal_grad = torch.sum(grad_on * normal.detach(), dim=-1, keepdim=True)
+    diffusion = torch.as_tensor(model.reference_diffusion, dtype=dtype, device=device).clamp_min(1.0e-10)
+    sigma2 = torch.as_tensor(model.seed_sigma**2, dtype=dtype, device=device)
+    spread = (sigma2 + 2.0 * diffusion * t).clamp_min(1.0e-8)
+    target_normal_grad = -(level * radius / spread).clamp(0.0, 20.0)
+    slope_loss = valid * (normal_grad - target_normal_grad.detach()).pow(2).clamp_max(25.0)
+    denom = valid.sum().clamp_min(1.0)
+    return (
+        on_loss.sum() / denom
+        + 0.5 * order_loss.sum() / denom
+        + 0.05 * slope_loss.sum() / denom
+    )
 
 
 def leading_edge_area_loss(
@@ -619,7 +632,91 @@ def front_local_gradient_residual_loss(
         create_graph=True,
         retain_graph=True,
     )[0]
-    return grad_xy[front_mask].pow(2).mean() + grad_t[front_mask].pow(2).mean()
+    grad_energy = grad_xy[front_mask].pow(2).sum(dim=-1, keepdim=True) + grad_t[front_mask].pow(2)
+    return torch.log1p(grad_energy).mean()
+
+
+def expected_front_gradient_residual_loss(
+    model: OriginPINN,
+    n: int,
+    device: torch.device,
+    *,
+    width: float = 0.08,
+    speed_factor: float = 0.45,
+    level: float = 0.1,
+    max_points: int = 128,
+    t_low: float = 0.0,
+    t_high: float | None = None,
+) -> torch.Tensor:
+    """gPINN residual-gradient penalty sampled in the analytic front corridor."""
+
+    if n <= 0:
+        return torch.zeros((), device=device)
+    xy, t = expected_front_samples(
+        model,
+        n,
+        device,
+        width=width,
+        speed_factor=speed_factor,
+        level=level,
+    )
+    if len(xy) == 0:
+        return torch.zeros((), device=device)
+    low = max(0.0, min(float(t_low), model.domain.t_end))
+    high = model.domain.t_end if t_high is None else max(0.0, min(float(t_high), model.domain.t_end))
+    if high < low:
+        low, high = high, low
+    keep = ((t[:, 0] >= low - 1.0e-8) & (t[:, 0] <= high + 1.0e-8)).flatten()
+    if not torch.any(keep):
+        return torch.zeros((), dtype=xy.dtype, device=device)
+    return front_local_gradient_residual_loss(model, xy[keep], t[keep], low=0.0, high=1.0, max_points=max_points)
+
+
+def time_slab_interface_loss(
+    model: OriginPINN,
+    n: int,
+    device: torch.device,
+    *,
+    slabs: int,
+    width: float = 0.01,
+) -> torch.Tensor:
+    """XPINN/FBPINN-inspired continuity penalty at temporal slab interfaces.
+
+    A single shared network is already continuous, so this targets one-step PDE
+    consistency across both sides of each slab boundary: left and right values
+    must agree with the central time derivative instead of drifting into
+    independently fitted early/late profiles.
+    """
+
+    slabs = int(slabs)
+    if n <= 0 or slabs <= 1 or model.domain.t_end <= 0.0:
+        return torch.zeros((), device=device)
+    dtype = next(model.parameters()).dtype
+    interfaces = torch.linspace(0.0, model.domain.t_end, slabs + 1, dtype=dtype, device=device)[1:-1]
+    if len(interfaces) == 0:
+        return torch.zeros((), device=device)
+    per_interface = max(1, int(math.ceil(n / len(interfaces))))
+    xy_parts = []
+    tc_parts = []
+    for boundary_t in interfaces:
+        xy = torch.rand(per_interface, 2, dtype=dtype, device=device) * model.domain.box
+        tc = torch.full((per_interface, 1), float(boundary_t), dtype=dtype, device=device)
+        xy_parts.append(xy)
+        tc_parts.append(tc)
+    xy = torch.cat(xy_parts, dim=0)[:n]
+    tc = torch.cat(tc_parts, dim=0)[:n]
+    dt = max(float(width), 1.0e-5) * model.domain.t_end
+    t_left = (tc - dt).clamp(0.0, model.domain.t_end)
+    t_right = (tc + dt).clamp(0.0, model.domain.t_end)
+    tc_req = tc.detach().clone().requires_grad_(True)
+    u_center = model(xy, tc_req)
+    u_t = torch.autograd.grad(u_center, tc_req, torch.ones_like(u_center), create_graph=True)[0]
+    u_left = model(xy, t_left)
+    u_right = model(xy, t_right)
+    continuity = (u_right - u_left).pow(2)
+    midpoint = (u_right - u_left - (t_right - t_left) * u_t).pow(2)
+    residual = pde_residual(model, xy, tc)
+    return continuity.mean() + midpoint.mean() + 0.25 * residual.pow(2).mean()
 
 
 def bounded_residual_weights(residual_sq: torch.Tensor, exponent: float = 0.5) -> torch.Tensor:
