@@ -19,39 +19,8 @@ simulation.
 
 ## Method
 
-The main estimator is `CaRA-gPINN-Seed`:
-
-- Fourier-feature neural field for `u(x, y, t)`.
-- Trainable Gaussian source head for an interpretable origin estimate.
-- Hard initial-source envelope: the trainable source dominates at `t=0` and fades before
-  the late observation window, so origin parameters are optimized through the PDE.
-- Observation-only warm start from the late weighted centroid, optionally drift-corrected
-  when advection is known. This same estimate is logged as a baseline.
-- Synthetic observations mix uniform sensors with front-focused sensors so the inverse
-  task is not dominated by near-zero background samples.
-- Train/validation observation split, with held-out late-window MSE reported in
-  `metrics.json`.
-- Coarse differentiable source-shooting consistency: the trainable initial source is
-  pushed through a finite-difference solver and compared directly against training
-  observations. This gives the origin parameters a direct data gradient instead of relying
-  only on the neural-field PDE residual.
-- Causal time-bin weighting inspired by causal PINNs.
-- Bounded residual-decay weighting inspired by recent adaptive weighting work.
-- Relative-progress and gradient-norm adaptive loss balancing for active PINN terms,
-  keeping data, PDE, known-IC, boundary, and front-gradient losses from drifting onto
-  incompatible scales.
-- Residual curriculum weighting that starts flatter and gradually emphasizes harder
-  high-residual collocation points.
-- Residual-adaptive collocation points inspired by RAD/RAR-D sampling.
-- Optional gradient-enhanced residual penalty for sharp fronts.
-- Moving-front validation metrics for mass, active-front area, and low-level front
-  geometry instead of relying on final-time L2 alone.
-- Ensemble mode for epistemic uncertainty over origin estimates.
-
-The novelty here is deliberately scoped: this repository combines modern PINN stabilizers
-with a trainable source head and a differentiable finite-difference inverse baseline for
-late-window Fisher-KPP origin inference. It does not claim that PINNs are the only possible
-method.
+Detailed method explanation, literature rationale, observations, and interpretation are
+maintained in `docs/fisher_kpp_pinn_review_response.docx`.
 
 ## Install
 
@@ -162,110 +131,24 @@ present, then reads the committed compact CSV/NPZ data.
 ## Geo-Spectral Forward PINN
 
 The improved forward profile keeps the same Fisher-KPP problem setup as the Korea
-pine-wilt compatibility mode, but changes the model and training objective:
+pine-wilt compatibility mode, but changes the model and training objective. Detailed
+method rationale and observations are kept in:
+
+```text
+docs/fisher_kpp_pinn_review_response.docx
+```
+
+Run the profile with:
 
 ```bash
 python scripts\run_inverse_origin.py --quick --geo-spectral-forward --out-dir runs\geo_spectral_forward
 ```
 
-What changes:
+For method ablations:
 
-- The default forward backbone is now a PirateNet-style residual architecture with
-  near-identity adaptive skip connections and row-wise random weight factorization. This
-  follows the moving-interface PINN/PirateNet literature, where dynamic fronts benefit
-  more from architecture and training stabilization than from heavy geometric penalties.
-- A NIF-style last-layer parameterized head is implemented as `architecture="nif_pirate"`.
-  It separates a spatial ShapeNet from a time/physics ParameterNet, following Neural
-  Implicit Flow's mesh-agnostic low-rank representation. It is exposed through the
-  `geo_nif_front_area` ablation case rather than used as the default because a 60-epoch
-  wiring check underperformed the current PirateNet/RWF profile on this Fisher-KPP front.
-- Spatial Fourier features are used as positional encoding, not as a periodic boundary
-  assumption. The forward preset now uses a lower Fourier scale because the target
-  solution is a smooth diffusive Fisher-KPP front; high-frequency features caused
-  sparse-observation blob artifacts.
-- Moving-frame front Fourier features are also enabled. They encode the normalized
-  Fisher-KPP front coordinate plus radial direction, so the network can represent
-  phase shifts around the active interface without using only global `x,y,t` features.
-- Square-domain geo features encode boundary distance and simple interior geometry.
-  The current synthetic problem treats the whole square as valid land; the sampler has a
-  mask interface so a real land mask can replace `box` later.
-- A hard known-initial-condition ansatz makes `u(x,y,0)` exactly equal to the Gaussian
-  seed. The known-IC loss remains in the objective and diagnostics, but for this preset it
-  should be near numerical zero because the constraint is structural.
-- Seed-centered radial/front features give the network coordinates aligned with the
-  initial seed and expected Fisher-KPP front radius.
-- Scaled traveling-wave features add a learned moving-frame coordinate based on
-  `xi = (||x-x0|| - (3 sigma + 2 sqrt(D r) t)) / sqrt(D/r)`. This follows recent
-  TW-PINN work and gives the network an explicit coordinate for translating Fisher-KPP
-  fronts instead of requiring a generic MLP to rediscover that frame.
-- A KPP front envelope suppresses nonphysical low-amplitude background outside the
-  linearized Fisher-KPP low-level radius. Earlier versions used a loose `c*t` support
-  and produced a broad low-amplitude haze; the current envelope is tied to the
-  heat-kernel leading edge and is much tighter.
-- A Neumann boundary loss is enabled.
-- PDE residuals are weighted toward infection-front regions using `u(1-u)` and
-  `|grad u|`.
-- RAR anchor refresh now uses a normalized front-aware monitor combining residual
-  magnitude, `|grad u|`, and logistic activity `u(1-u)`. This follows adaptive sampling
-  work for sharp PDE layers where residual-only refinement can miss moving fronts.
-- A solver-assisted `geo_rk4_teacher_front_area` ablation adds weak RK4 pseudo-label
-  regularization sampled across the full space-time domain, with extra probability mass
-  near the low-density leading edge. This follows supervised/pretraining strategies for
-  evolution-PDE PINNs, but the quick checks show that it works best as a weak auxiliary
-  field regularizer, not as a dominant teacher. It is deliberately not the default pure
-  PINN profile because it uses a numerical teacher in addition to the PDE and sparse
-  observations.
-- A moving-front speed loss enforces the Fisher-KPP traveling-front relation
-  `u_t + (2 sqrt(D r) + v.n) grad(u).n = 0` on active level-set bands. This makes the
-  front move like a Fisher-KPP front instead of merely fitting late-time blobs. The
-  implementation now ignores near-flat gradients so the speed diagnostic is not dominated
-  by regions where normal speed is numerically ill-defined.
-- A parabolic mass-balance loss enforces the no-flux Fisher-KPP integral identity
-  `d mean(u)/dt = r mean(u(1-u))`. This adds a global growth check that the pointwise
-  residual and sparse observations can miss.
-- A leading-edge soft area constraint uses the known Gaussian initial condition and the
-  linearized Fisher-KPP heat-kernel approximation to set analytic targets for low-level
-  front areas (`u>0.05`, `u>0.10`). It combines soft area matching with a quantile hinge,
-  so the metric is not satisfied merely by spreading tiny values everywhere.
-- A low/high front-contrast loss matches the ratio of soft `u>0.10` to `u>0.05` areas.
-  This directly targets the failure mode where the network creates a wide `u~0.05`
-  haze but under-resolves the active front core.
-- A front-level-set alignment loss is enabled in the default forward profile. It samples expected
-  low-level Fisher-KPP rings from the linearized Gaussian leading-edge approximation,
-  drives the network to match `u ~= 0.05/0.10` on the ring, and adds weak inside/outside
-  ordering hinges plus a weak normal-slope target. This is closer to moving-interface
-  PINN losses than plain area matching.
-- Causal time marching and XPINN/FBPINN-inspired time-slab training are enabled in the
-  default forward profile. For a single shared network, `time_slab_curriculum=True`
-  expands the training window cumulatively from early to late times rather than training
-  only on the current slab. The collocation sampler also supports global replay through
-  `time_window_focus_fraction`, so the model gets local front focus without losing
-  full-domain PDE coverage.
-- A time-slab interface loss adds overlap continuity and PDE consistency at internal
-  slab boundaries. This is the single-network counterpart of XPINN/FBPINN interface
-  constraints and reduces early/late slab drift.
-- Expected-front PDE sampling and one-sided leading-edge floor losses are implemented as
-  optional ablation knobs. Quick experiments showed they can improve apparent active
-  area while degrading held-out MSE/mass, so they are not enabled in the default profile.
-- Eikonal regularization from level-set moving-interface PINNs is not enabled here because
-  Fisher-KPP `u` is not a signed-distance level-set field. The cited moving-interface
-  paper also shows that Eikonal/mass penalties can hurt when their weights are not chosen
-  carefully, so this lab treats them as diagnostics/ablations rather than default truth.
-- Residual weighting follows an easy-to-hard curriculum: early epochs avoid overfitting
-  residual outliers, then the exponent ramps toward the full adaptive residual weight.
-- Adaptive relative loss balancing updates multipliers from each term's relative training
-  progress. Gradient-norm balancing additionally equalizes per-term gradients on the
-  final trainable representation layer, following PINN gradient-pathology work while
-  keeping the overhead bounded through periodic updates.
-- Already-satisfied hard constraints and sparse regularization are excluded from adaptive
-  balancing so they cannot down-weight the active PDE/front losses.
-- The training loop restores the best validation-observation checkpoint, which prevents
-  longer runs from drifting after residual-adaptive refreshes.
-- Residual-adaptive collocation uses a combined residual/front score.
-- Front-local gPINN loss penalizes residual gradients only near the active front, while
-  the moving-front speed loss checks the front's normal propagation speed.
-- Last-layer L1 regularization discourages overusing the expanded spectral/geo feature
-  basis.
+```bash
+python scripts\run_forward_ablation.py --preset smoke --seeds 7 --out-dir runs\forward_ablation_smoke
+```
 
 ## RK4 Same-Problem Baseline
 
@@ -454,53 +337,5 @@ Outputs:
 
 ## References
 
-- Raissi, Perdikaris, Karniadakis, "Physics-informed neural networks", JCP 2019.
-- Fisher, "The wave of advance of advantageous genes", Annals of Eugenics 1937.
-- Kolmogorov, Petrovskii, Piskunov, "A study of the diffusion equation with increase
-  in the amount of substance, and its application to a biological problem", 1937.
-- Wang, Sankaran, Perdikaris, "Respecting causality is all you need for training
-  physics-informed neural networks", arXiv:2203.07404.
-- Wu, Zhu, Tan, Kartha, Lu, "A comprehensive study of non-adaptive and residual-based
-  adaptive sampling for physics-informed neural networks", arXiv:2207.10289.
-- Mao, Meng, "Physics-informed neural networks with residual/gradient-based adaptive
-  sampling methods for solving partial differential equations with sharp solutions",
-  Applied Mathematics and Mechanics 2023.
-- Hao et al., "PINNacle: A Comprehensive Benchmark of Physics-Informed Neural Networks
-  for Solving PDEs", NeurIPS Datasets and Benchmarks 2024 / arXiv:2306.08827.
-- Jagtap, Kharazmi, Karniadakis, "Conservative physics-informed neural networks on
-  discrete domains for conservation laws", Computer Methods in Applied Mechanics and
-  Engineering 2020.
-- Yu, Lu, Meng, Karniadakis, "Gradient-enhanced physics-informed neural networks for
-  forward and inverse PDE problems", arXiv:2111.02801.
-- Wang, Li, Chen, Perdikaris, "PirateNets: Physics-informed Deep Learning with
-  Residual Adaptive Networks", arXiv:2402.00326.
-- Pan, Brunton, Kutz, "Neural Implicit Flow: a mesh-agnostic dimensionality reduction
-  paradigm of spatio-temporal data", JMLR 2023.
-- Rohrhofer, Posch, Gößnitzer, Geiger, "Approximating families of sharp solutions to
-  Fisher's equation with physics-informed neural networks", Computer Physics
-  Communications 2025.
-- Han, Park, Gu, Jung, "A scaled TW-PINN: A physics-informed neural network for
-  traveling wave solutions of reaction-diffusion equations with general coefficients",
-  arXiv:2603.15331.
-- Guo, Yao, Wang, Gu, "Pre-training strategy for solving evolution equations based on
-  physics-informed neural networks", Journal of Computational Physics 2023.
-- Mullins, Kamil, Fahsi, Soulaïmani, "Physics-informed neural networks for solving
-  moving interface flow problems using the level set approach", arXiv:2502.02440.
-- Jagtap, Karniadakis, "Extended Physics-Informed Neural Networks (XPINNs): A
-  Generalized Space-Time Domain Decomposition Based Deep Learning Framework for
-  Nonlinear Partial Differential Equations", Communications in Computational Physics
-  2020.
-- Moseley, Markham, Nissen-Meyer, "Finite basis physics-informed neural networks
-  (FBPINNs): a scalable domain decomposition approach for solving differential
-  equations", Advances in Computational Mathematics 2023.
-- Chen, Howard, Stinis, "Self-adaptive weights based on balanced residual decay rate for
-  physics-informed neural networks and deep operator networks", arXiv:2407.01613.
-- Bischof, Kraus, "Multi-Objective Loss Balancing for Physics-Informed Deep Learning",
-  SSRN 2024. Introduces ReLoBRaLo-style relative loss balancing for PINNs.
-- Liu, Chu, Thuerey, "ConFIG: Towards Conflict-free Training of Physics Informed Neural
-  Networks", arXiv:2408.11104 / ICLR 2025.
-- Yang, Wang, Li, Cao, Yan, Liu, "From Simple to Complex: Curriculum-Guided
-  Physics-Informed Neural Networks via Gaussian Mixture Models", arXiv:2605.19263.
-- Chuprov, Derkach, Efremenko, Kychkin, "Application of Physics-Informed Neural Networks
-  for Solving the Inverse Advection-Diffusion Problem to Localize Pollution Sources",
-  arXiv:2503.18849.
+References and method rationale are maintained in
+`docs/fisher_kpp_pinn_review_response.docx`.
