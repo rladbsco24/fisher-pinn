@@ -78,6 +78,185 @@ This grid/time step is inside the practical explicit stability limits for both
 forward Euler and RK4, while backward Euler and trapezoidal use Newton solves for
 the same nonlinear semi-discrete system.
 
+### Long-Time Fair-Parameter Rationale
+
+This section explains why the long-time Fisher-KPP parameters were selected for
+the explicit/implicit method comparison. The goal is not to make one integrator
+look best, and it is not to reproduce an oscillatory `rho(t)` curve. The goal is
+to compare forward Euler, backward Euler, trapezoidal, and RK4 on the same
+Fisher-KPP traveling-front regime under the same spatial grid, time step,
+initial condition, boundary condition, output times, and metrics.
+
+The common PDE is:
+
+```text
+u_t = D u_xx + r u(1-u)
+```
+
+The chosen regime is:
+
+```text
+D = 0.06
+r = 0.25
+L = 30
+T = 30
+Nx = 181
+dx = L / (Nx - 1) = 1/6 = 0.166666...
+dt = 0.05
+Nt = 600
+u(x,0) = 1 / (1 + exp((x - 7.0) / 0.9))
+u(0,t) = 1
+u(L,t) = 0
+probe_x = 12
+save_interval = 0.5
+```
+
+The diffusion and reaction values were chosen to keep the solution in a clear
+Fisher-KPP pulled-front regime. The asymptotic minimal front speed is:
+
+```text
+c* = 2 sqrt(D r) = 2 sqrt(0.06 * 0.25) ~= 0.245
+```
+
+Over `T=30`, this speed moves the front by roughly:
+
+```text
+c* T ~= 7.35
+```
+
+The initial sigmoid front is centered at `x0=7`, so the final front is expected
+near `x ~= 14.3`, well inside the domain `[0, 30]`. This is deliberate. If the
+front reaches the right boundary, the method comparison becomes contaminated by
+the Dirichlet boundary condition. With the present setting, the run is long
+enough to show front propagation, mass growth, probe evolution, and numerical
+diffusion, but short enough to avoid boundary-front interaction.
+
+The natural Fisher-KPP front thickness scale is:
+
+```text
+sqrt(D / r) = sqrt(0.06 / 0.25) ~= 0.49
+```
+
+The initial sigmoid width is `0.9`, so the initial front is not a grid-scale
+discontinuity. With `dx=1/6`, the front transition is represented by several grid
+points. This matters because a very sharp initial jump would mostly test spatial
+under-resolution and limiter behavior, not the time integrators. The selected
+grid is therefore fine enough for a clean method-of-lines comparison while still
+small enough for implicit Newton solves to run quickly in notebooks.
+
+The time step `dt=0.05` was selected so that explicit methods can participate
+fairly. For forward Euler, the 1D diffusion stability scale is:
+
+```text
+dt <= dx^2 / (2D)
+   = (1/6)^2 / (2 * 0.06)
+   ~= 0.231
+```
+
+The logistic reaction scale is:
+
+```text
+1 / r = 4.0
+```
+
+Diffusion is therefore the restrictive explicit scale. The actual time step is:
+
+```text
+dt = 0.05
+D dt / dx^2 = 0.06 * 0.05 / (1/6)^2 ~= 0.108
+```
+
+So forward Euler is comfortably inside the diffusion stability limit. RK4 has a
+larger practical stability allowance for the semi-discrete diffusion operator,
+and this code reports that through `check_rk4_stability`. The important point is
+that RK4 is not given a looser time step in the accuracy comparison. All methods
+use the same `dt=0.05`; any difference in front position, profile smoothing, mass,
+or probe value comes from the time-integration method, not from different
+temporal resolution.
+
+Backward Euler and trapezoidal are implicit. They can remain stable at much
+larger time steps than forward Euler, but using a larger `dt` for them would turn
+the experiment into an efficiency comparison rather than an accuracy comparison.
+For this reason, the implicit methods also use `dt=0.05`. Their advantage is then
+visible as different numerical damping and phase behavior, not as permission to
+use a coarser time grid.
+
+The implicit methods solve the nonlinear theta-method system with Newton
+iterations. The tolerance and iteration cap are:
+
+```text
+tol = 1e-10
+max_iter = 30
+```
+
+These values are intentionally tighter than the visual/metric scale of the
+method comparison. The purpose is to keep nonlinear solve error below the
+time-discretization and spatial-discretization errors. If the Newton tolerance
+were loose, backward Euler or trapezoidal could look artificially diffusive or
+inaccurate because the nonlinear solve stopped too early. With this setting, the
+reported differences are dominated by the numerical time integrator itself.
+
+The boundary conditions are fixed as:
+
+```text
+left_bc = 1
+right_bc = 0
+```
+
+This creates a standard traveling-front benchmark: the left side is the invaded
+state and the right side is the uninvaded state. It also makes the front position
+metric well-defined. Since the front stays far from the right boundary during
+`T=30`, the right boundary mostly stabilizes the far-field state rather than
+driving the result.
+
+The probe point is:
+
+```text
+probe_x = 12
+```
+
+This location is chosen ahead of the initial front center but behind the expected
+final front. The probe therefore sees a meaningful transition from low density to
+higher density during the run. A probe too far left would saturate near one; a
+probe too far right would remain near zero. `probe_x=12` gives a useful scalar
+trace for comparing numerical diffusion and front timing.
+
+The comparison metrics are:
+
+- final and time-dependent front position,
+- mean mass,
+- fixed-point probe trace `rho(t)=u(probe_x,t)`,
+- final profile,
+- final relative L2 against the RK4 reference in the all-method summary,
+- Newton iteration diagnostics for the implicit methods.
+
+The RK4 curve is used as the plotted reference in the method summary because it
+is the highest-order method among the four at the same `dx` and `dt`. This does
+not mean RK4 is treated as an exact analytical solution. It is a practical
+same-grid reference for comparing lower-order explicit and implicit schemes.
+For a formal convergence study, reduce `dx` and `dt` together and compare all
+methods against a refined reference.
+
+The fairness rule for this benchmark is:
+
+```text
+same PDE
+same D and r
+same initial condition
+same boundary condition
+same domain
+same dx
+same dt
+same output times
+same front/probe/mass/profile metrics
+```
+
+Changing `dt` independently for implicit methods is valid for a separate
+cost-to-accuracy study, but it is not the experiment encoded here. This benchmark
+answers: under one shared Fisher-KPP discretization, how do forward Euler,
+backward Euler, trapezoidal, and RK4 differ in accuracy, damping, and front
+timing?
+
 Run all four methods:
 
 ```bash
