@@ -135,6 +135,11 @@ class TrainConfig:
     residual_weight_exponent_start: float = 0.5
     residual_weight_exponent_end: float = 0.5
     residual_curriculum_epochs: int = 0
+    pde_loss_warmup_fraction: float = 0.0
+    front_loss_start_fraction: float = 0.0
+    front_loss_warmup_fraction: float = 0.0
+    time_interface_start_fraction: float = 0.0
+    time_interface_warmup_fraction: float = 0.0
     adaptive_loss_balancing: bool = False
     gradient_norm_balancing: bool = False
     gradient_norm_balance_every: int = 25
@@ -303,6 +308,11 @@ class ExperimentConfig:
                     if self.train.residual_curriculum_epochs > 0
                     else 0
                 ),
+                pde_loss_warmup_fraction=self.train.pde_loss_warmup_fraction,
+                front_loss_start_fraction=self.train.front_loss_start_fraction,
+                front_loss_warmup_fraction=self.train.front_loss_warmup_fraction,
+                time_interface_start_fraction=self.train.time_interface_start_fraction,
+                time_interface_warmup_fraction=self.train.time_interface_warmup_fraction,
                 adaptive_loss_balancing=self.train.adaptive_loss_balancing,
                 gradient_norm_balancing=self.train.gradient_norm_balancing,
                 gradient_norm_balance_every=max(1, self.train.gradient_norm_balance_every),
@@ -502,11 +512,11 @@ class ExperimentConfig:
                 mass_balance=0.20,
                 expected_front_pde=0.0,
                 leading_edge=0.0,
-                leading_edge_area=1.0,
+                leading_edge_area=0.50,
                 front_contrast=0.10,
-                front_profile=0.20,
-                level_set_alignment=0.06,
-                time_interface=0.03,
+                front_profile=0.15,
+                level_set_alignment=0.02,
+                time_interface=0.01,
                 rk4_teacher=0.0,
                 sparse=1.0e-5,
             ),
@@ -516,6 +526,11 @@ class ExperimentConfig:
                 residual_weight_exponent_start=0.0,
                 residual_weight_exponent_end=0.5,
                 residual_curriculum_epochs=max(1, base.train.epochs // 4),
+                pde_loss_warmup_fraction=0.10,
+                front_loss_start_fraction=0.25,
+                front_loss_warmup_fraction=0.35,
+                time_interface_start_fraction=0.45,
+                time_interface_warmup_fraction=0.25,
                 adaptive_loss_balancing=True,
                 gradient_norm_balancing=True,
                 gradient_norm_balance_every=25,

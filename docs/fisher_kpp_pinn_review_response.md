@@ -472,22 +472,32 @@ PINN GIF가 랜덤한 얼룩처럼 보이는 경우가 있었고, 이런 그림�
 
 ## 14. 참고문헌
 
-Raissi, M., Perdikaris, P., and Karniadakis, G. E. 2019. Physics-informed neural networks: A deep learning framework for solving forward and inverse problems involving nonlinear partial differential equations. Journal of Computational Physics.
+Fisher, R. A. 1937. "The Wave of Advance of Advantageous Genes." Annals of Eugenics 7 (4): 355-369. https://doi.org/10.1111/j.1469-1809.1937.tb02153.x.
 
-Fisher, R. A. 1937. The wave of advance of advantageous genes. Annals of Eugenics.
+Kolmogorov, A. N., I. G. Petrovskii, and N. S. Piskunov. 1937. "A Study of the Equation of Diffusion with Increase in the Quantity of Matter, and Its Application to a Biological Problem." Moscow University Bulletin of Mathematics 1: 1-25.
 
-Kolmogorov, A., Petrovskii, I., and Piskunov, N. 1937. A study of the diffusion equation with increase in the amount of substance, and its application to a biological problem.
+Raissi, Maziar, Paris Perdikaris, and George Em Karniadakis. 2019. "Physics-Informed Neural Networks: A Deep Learning Framework for Solving Forward and Inverse Problems Involving Nonlinear Partial Differential Equations." Journal of Computational Physics 378: 686-707. https://doi.org/10.1016/j.jcp.2018.10.045.
 
-Wang, S., Sankaran, S., and Perdikaris, P. 2022. Respecting causality is all you need for training physics-informed neural networks.
+Karniadakis, George Em, Ioannis G. Kevrekidis, Lu Lu, Paris Perdikaris, Sifan Wang, and Liu Yang. 2021. "Physics-Informed Machine Learning." Nature Reviews Physics 3: 422-440. https://doi.org/10.1038/s42254-021-00314-5.
 
-Jagtap, A. D., Kharazmi, E., and Karniadakis, G. E. 2020. Extended physics-informed neural networks (XPINNs): A generalized space-time domain decomposition based deep learning framework.
+Wang, Sifan, Yujun Teng, and Paris Perdikaris. 2021. "Understanding and Mitigating Gradient Flow Pathologies in Physics-Informed Neural Networks." SIAM Journal on Scientific Computing 43 (5): A3055-A3081. https://doi.org/10.1137/20M1318043.
 
-Moseley, B., Markham, A., and Nissen-Meyer, T. 2023. Finite basis physics-informed neural networks (FBPINNs): a scalable domain decomposition approach for solving differential equations.
+Wang, Sifan, Xinling Yu, and Paris Perdikaris. 2022. "When and Why PINNs Fail to Train: A Neural Tangent Kernel Perspective." Journal of Computational Physics 449: 110768. https://doi.org/10.1016/j.jcp.2021.110768.
 
-Wang, C., Li, S., Chen, D. Z., and Perdikaris, P. 2024. PirateNets: Physics-informed deep learning with residual adaptive networks.
+Krishnapriyan, Aditi S., Amir Gholami, Shandian Zhe, Robert M. Kirby, and Michael W. Mahoney. 2021. "Characterizing Possible Failure Modes in Physics-Informed Neural Networks." In Advances in Neural Information Processing Systems 34, 26548-26560.
 
-Rohrhofer, F., Posch, S., Goessnitzer, M., and Geiger, B. C. 2025. Approximating families of sharp solutions to Fisher's equation with physics-informed neural networks.
+Yu, Jeremy, Lu Lu, Xuhui Meng, and George Em Karniadakis. 2022. "Gradient-Enhanced Physics-Informed Neural Networks for Forward and Inverse PDE Problems." Computer Methods in Applied Mechanics and Engineering 393: 114823. https://doi.org/10.1016/j.cma.2022.114823.
 
-Guo, H., Yao, H., Wang, Y., and Gu, Y. 2023. Pre-training strategy for solving evolution equations based on physics-informed neural networks.
+Jagtap, Ameya D., and George Em Karniadakis. 2020. "Extended Physics-Informed Neural Networks (XPINNs): A Generalized Space-Time Domain Decomposition Based Deep Learning Framework for Nonlinear Partial Differential Equations." Communications in Computational Physics 28 (5): 2002-2041. https://doi.org/10.4208/cicp.OA-2020-0164.
 
-Mullins, J., Kamil, K., Fahsi, A., and Soulaimani, A. 2025. Physics-informed neural networks for solving moving interface flow problems using the level set approach.
+Moseley, Ben, Andrew Markham, and Tarje Nissen-Meyer. 2023. "Finite Basis Physics-Informed Neural Networks (FBPINNs): A Scalable Domain Decomposition Approach for Solving Differential Equations." Advances in Computational Mathematics 49 (4): 62. https://doi.org/10.1007/s10444-023-10065-9.
+
+Guo, Jiawei, Yanzhong Yao, Han Wang, and Tongxiang Gu. 2023. "Pre-Training Strategy for Solving Evolution Equations Based on Physics-Informed Neural Networks." Journal of Computational Physics 489: 112258. https://doi.org/10.1016/j.jcp.2023.112258.
+
+Wang, Sifan, Bowen Li, Yuhan Chen, and Paris Perdikaris. 2024. "PirateNets: Physics-Informed Deep Learning with Residual Adaptive Networks." Journal of Machine Learning Research 25 (402): 1-51. https://jmlr.org/papers/v25/24-0313.html.
+
+Yang, Yu, Qihong Yang, Yangtao Deng, and Qiaolin He. 2024. "Moving Sampling Physics-Informed Neural Networks Induced by Moving Mesh PDE." Neural Networks 180: 106706. https://doi.org/10.1016/j.neunet.2024.106706.
+
+Rohrhofer, Franz M., Stefan Posch, Clemens Goessnitzer, and Bernhard C. Geiger. 2025. "Approximating Families of Sharp Solutions to Fisher's Equation with Physics-Informed Neural Networks." Computer Physics Communications 307: 109422. https://doi.org/10.1016/j.cpc.2024.109422.
+
+Mullins, Mathieu, Hamza Kamil, Adil Fahsi, and Azzeddine Soulaimani. 2025. "Physics-Informed Neural Networks for Solving Moving Interface Flow Problems Using the Level Set Approach." Physics of Fluids 37 (10): 107124. https://doi.org/10.1063/5.0289386.

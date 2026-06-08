@@ -346,6 +346,46 @@ def _time_window(cfg: ExperimentConfig, epoch: int) -> tuple[float, float]:
     return low, max(low + 1.0e-8, min(high, t_end))
 
 
+def _fractional_warmup_scale(epoch: int, total_epochs: int, start_fraction: float, warmup_fraction: float) -> float:
+    start_fraction = float(np.clip(start_fraction, 0.0, 1.0))
+    warmup_fraction = float(max(0.0, warmup_fraction))
+    start_epoch = max(1, int(round(start_fraction * max(1, total_epochs))))
+    if epoch < start_epoch:
+        return 0.0
+    if warmup_fraction <= 0.0:
+        return 1.0
+    warmup_epochs = max(1, int(round(warmup_fraction * max(1, total_epochs))))
+    return float(np.clip((epoch - start_epoch + 1) / warmup_epochs, 0.0, 1.0))
+
+
+def _scheduled_loss_scales(cfg: ExperimentConfig, epoch: int) -> dict[str, float]:
+    """Curriculum multipliers for stiff parabolic-front PINN losses.
+
+    Data, known IC, and boundary terms stay fully active. PDE, moving-front,
+    level-set, mass-balance, and time-interface terms can be phased in to avoid
+    the early ill-conditioning reported for composite PINN objectives.
+    """
+
+    pde = _fractional_warmup_scale(epoch, cfg.train.epochs, 0.0, cfg.train.pde_loss_warmup_fraction)
+    front = _fractional_warmup_scale(
+        epoch,
+        cfg.train.epochs,
+        cfg.train.front_loss_start_fraction,
+        cfg.train.front_loss_warmup_fraction,
+    )
+    time_interface = _fractional_warmup_scale(
+        epoch,
+        cfg.train.epochs,
+        cfg.train.time_interface_start_fraction,
+        cfg.train.time_interface_warmup_fraction,
+    )
+    return {
+        "pde": pde,
+        "front": front,
+        "time_interface": time_interface,
+    }
+
+
 def _masked_batch_indices(
     xyt: torch.Tensor,
     n: int,
@@ -756,12 +796,16 @@ def train_single(
         else:
             time_interface_loss = torch.zeros((), device=device)
         sparse_loss = model.sparse_last_layer_l1() if cfg.weights.sparse > 0.0 else torch.zeros((), device=device)
+        schedule = _scheduled_loss_scales(cfg, epoch)
+        pde_weight = cfg.weights.pde * schedule["pde"]
+        front_weight = schedule["front"]
+        time_interface_weight = cfg.weights.time_interface * schedule["time_interface"]
 
         total, adaptive_weights, grad_adaptive_weights = _combine_loss_terms(
             [
                 ("data", cfg.weights.data, data_loss),
                 ("rk4_teacher", cfg.weights.rk4_teacher, rk4_teacher_loss),
-                ("pde", cfg.weights.pde, pde_loss_value),
+                ("pde", pde_weight, pde_loss_value),
                 ("ic", cfg.weights.initial_condition, ic_loss),
                 ("bc", cfg.weights.boundary, bc_loss),
                 ("seed_match", cfg.weights.seed_match, seed_match),
@@ -769,16 +813,16 @@ def train_single(
                 ("source_anchor", cfg.weights.source_anchor, source_anchor),
                 ("shooting", cfg.weights.shooting, shooting_loss),
                 ("grad", cfg.weights.gradient, grad_loss),
-                ("front_grad", cfg.weights.front_gradient, front_grad_loss),
-                ("front_speed", cfg.weights.front_speed, front_speed_loss),
-                ("expected_front_pde", cfg.weights.expected_front_pde, expected_front_loss),
-                ("leading_edge", cfg.weights.leading_edge, leading_edge_loss),
-                ("leading_edge_area", cfg.weights.leading_edge_area, leading_edge_area),
-                ("front_contrast", cfg.weights.front_contrast, front_contrast),
-                ("front_profile", cfg.weights.front_profile, front_profile),
-                ("level_set", cfg.weights.level_set_alignment, level_set_loss),
-                ("mass", cfg.weights.mass_balance, mass_loss),
-                ("time_interface", cfg.weights.time_interface, time_interface_loss),
+                ("front_grad", cfg.weights.front_gradient * front_weight, front_grad_loss),
+                ("front_speed", cfg.weights.front_speed * front_weight, front_speed_loss),
+                ("expected_front_pde", cfg.weights.expected_front_pde * front_weight, expected_front_loss),
+                ("leading_edge", cfg.weights.leading_edge * front_weight, leading_edge_loss),
+                ("leading_edge_area", cfg.weights.leading_edge_area * front_weight, leading_edge_area),
+                ("front_contrast", cfg.weights.front_contrast * front_weight, front_contrast),
+                ("front_profile", cfg.weights.front_profile * front_weight, front_profile),
+                ("level_set", cfg.weights.level_set_alignment * front_weight, level_set_loss),
+                ("mass", cfg.weights.mass_balance * front_weight, mass_loss),
+                ("time_interface", time_interface_weight, time_interface_loss),
                 ("sparse", cfg.weights.sparse, sparse_loss),
             ],
             loss_balancer,
@@ -853,6 +897,9 @@ def train_single(
                 "time_interface": float(time_interface_loss.detach().cpu()),
                 "sparse": float(sparse_loss.detach().cpu()),
                 "residual_exponent": float(residual_exponent),
+                "schedule_pde": float(schedule["pde"]),
+                "schedule_front": float(schedule["front"]),
+                "schedule_time_interface": float(schedule["time_interface"]),
                 "time_window_low": float(window_t_low),
                 "time_window_high": float(window_t_high),
                 "front_weight_mean": float(front_weights.detach().mean().cpu()),
@@ -1198,6 +1245,7 @@ def run_experiment(cfg: ExperimentConfig) -> dict[str, object]:
             validation_observation_mse = None
     _, final_truth = truth_field_at(truth, cfg.domain.t_end, n=96)
     _, final_pred = predict_field(best.model, cfg.domain.t_end, n=96, device=device)
+    pinn_final_abs_error = np.abs(final_pred - final_truth)
     pinn_final_time_relative_l2 = relative_l2(final_pred, final_truth)
     front_geometry = _front_geometry_summary(truth, best.model, cfg, device)
     if rk4_truth is None:
@@ -1207,6 +1255,7 @@ def run_experiment(cfg: ExperimentConfig) -> dict[str, object]:
     else:
         rk4_runtime_sec = float(rk4_runtime_sec or 0.0)
     _, final_rk4 = truth_field_at(rk4_truth, cfg.domain.t_end, n=96)
+    rk4_final_abs_error = np.abs(final_rk4 - final_truth)
     rk4_final_time_relative_l2 = relative_l2(final_rk4, final_truth)
     pinn_vs_rk4_final_relative_l2 = relative_l2(final_pred, final_rk4)
     rk4_train_values = interpolate_truth(rk4_truth, train_observations.xyt)[:, None]
@@ -1312,7 +1361,13 @@ def run_experiment(cfg: ExperimentConfig) -> dict[str, object]:
         "best_origin_error": best.origin_error,
         "final_time_relative_l2": pinn_final_time_relative_l2,
         "pinn_final_time_relative_l2": pinn_final_time_relative_l2,
+        "pinn_final_time_max_abs_error": float(np.max(pinn_final_abs_error)),
+        "pinn_final_time_mean_abs_error": float(np.mean(pinn_final_abs_error)),
+        "pinn_final_time_p95_abs_error": float(np.quantile(pinn_final_abs_error, 0.95)),
         "rk4_final_time_relative_l2": rk4_final_time_relative_l2,
+        "rk4_final_time_max_abs_error": float(np.max(rk4_final_abs_error)),
+        "rk4_final_time_mean_abs_error": float(np.mean(rk4_final_abs_error)),
+        "rk4_final_time_p95_abs_error": float(np.quantile(rk4_final_abs_error, 0.95)),
         "pinn_vs_rk4_final_relative_l2": pinn_vs_rk4_final_relative_l2,
         "front_area_005_mae": front_geometry.get("area_above_050_mae"),
         "front_area_010_mae": front_geometry.get("area_above_100_mae"),

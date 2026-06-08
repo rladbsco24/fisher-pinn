@@ -491,6 +491,11 @@ def test_geo_spectral_forward_profile_extends_korea_setup() -> None:
     assert cfg.train.time_interface_points > 0
     assert cfg.train.residual_curriculum_epochs > 0
     assert cfg.train.residual_weight_exponent_start < cfg.train.residual_weight_exponent_end
+    assert cfg.train.pde_loss_warmup_fraction > 0.0
+    assert cfg.train.front_loss_start_fraction > 0.0
+    assert cfg.train.front_loss_warmup_fraction > 0.0
+    assert cfg.train.time_interface_start_fraction > cfg.train.front_loss_start_fraction
+    assert cfg.train.time_interface_warmup_fraction > 0.0
     assert cfg.train.rar_residual_weight > 0.0
     assert cfg.train.rar_gradient_weight > 0.0
     assert cfg.train.rar_activity_weight > 0.0
