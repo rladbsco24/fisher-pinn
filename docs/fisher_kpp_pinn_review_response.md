@@ -167,7 +167,87 @@ Colab에서는 project files가 없으면 GitHub repository를 clone하고, 이�
 
 또 하나의 주의점은 land/sea mask 반영 전후 metric을 직접 같은 숫자로 비교하면 안 된다는 것입니다. 현재 버전은 바다 cell을 계산 및 평가에서 제외하므로, 이전 직사각형-domain 결과와 수치가 달라지는 것이 정상입니다.
 
-## 7. 장시간 Fisher-KPP 수치적분 비교용 공정 파라미터는 무엇인가
+## 7. 주요 관찰과 분석
+
+### 말씀하신 내용 요약
+
+실험을 계속 개선하면서 여러 현상이 관찰되었고, 단순히 코드 변경 목록만 적는 것이 아니라 그 현상이 왜 나타났는지 분석이 필요하다는 의견이었습니다.
+
+### 답변
+
+아래는 현재까지 반복적으로 관찰된 핵심 현상과 그 해석입니다.
+
+#### 관찰 1. synthetic Fisher-KPP에서 RK4는 매우 정확하지만 PINN은 front 주변 오차가 크게 남는다
+
+RK4는 같은 PDE, 같은 초기조건, 같은 boundary condition에서 직접 time marching을 수행합니다. 따라서 grid와 time step이 안정 조건 안에 있으면 synthetic reference에 매우 가깝습니다. 반면 PINN은 같은 방정식을 연속 함수 근사와 optimization으로 풀기 때문에, moving front의 위치가 조금만 어긋나도 error map에서는 큰 band 형태 오차가 나타납니다.
+
+분석하면 이 오차는 대개 amplitude error보다 phase/front-location error에 가깝습니다. Fisher-KPP front는 낮은 값에서 높은 값으로 급격히 변하는 moving interface이므로, front 위치가 한두 grid cell만 밀려도 absolute error map에는 둥근 band 또는 twin-trap처럼 보이는 구조가 생깁니다. 따라서 PINN error가 front 주변에 집중되는 것은 단순 plotting 오류라기보다 moving-front PDE에서 흔한 failure mode입니다. 이를 줄이기 위해 front-aware residual sampling, front-local gPINN, moving-front speed loss, leading-edge area loss, front-profile alignment, time-marching/time-slab curriculum을 추가했습니다.
+
+#### 관찰 2. error map의 최대값이 반복적으로 약 `0.06` 수준에 머무는 현상이 있었다
+
+이 현상은 두 가지를 분리해서 봐야 합니다. 첫째, 동일한 오래된 figure가 갱신되지 않아 반복 표시된 경우가 있었습니다. 이 문제는 출력 파일 재생성, notebook 문자열 파싱 테스트, figure 생성 경로 정리를 통해 확인했습니다. 둘째, 실제 학습 결과에서도 front 위치가 조금 어긋나면 비슷한 최대 오차 수준이 반복될 수 있습니다. sigmoid형 front에서는 front slope가 큰 구간의 phase shift가 거의 일정하면 최대 absolute error도 비슷한 값으로 유지됩니다.
+
+따라서 `0.06`이 반복된다고 해서 항상 코드가 깨졌다는 뜻은 아닙니다. 다만 figure가 최신 run에서 생성된 것인지, metrics의 run id와 figure path가 일치하는지, RK4/PINN/reference가 같은 problem setting에서 나온 것인지는 반드시 확인해야 합니다.
+
+#### 관찰 3. active-front area curve에서 truth는 증가하는데 PINN은 plateau로 멈추는 경우가 있었다
+
+active-front band는 `0.1 < u < 0.9` 같은 구간의 면적입니다. truth에서는 front가 이동하면서 이 band의 면적이 증가할 수 있습니다. PINN이 plateau를 보이면 보통 다음 중 하나입니다.
+
+- network가 front propagation speed를 과소평가함
+- data loss가 관측 지점 주변 fitting에 치우쳐 PDE propagation을 충분히 학습하지 못함
+- mass balance와 front speed constraint가 약하거나 서로 scale이 맞지 않음
+- time curriculum이 너무 짧아 late-time front를 충분히 보지 못함
+- activation/spectral feature가 moving front의 translation을 충분히 표현하지 못함
+
+이 관찰 때문에 moving-front speed consistency, parabolic mass balance, leading-edge area, front-profile alignment, scaled traveling-wave feature, time marching, time-slab ablation을 추가했습니다. 다만 빠른 Colab run에서는 이 항목들이 모두 충분히 수렴하지 않으므로, 결과는 여전히 diagnostic으로 해석해야 합니다.
+
+#### 관찰 4. PINN absolute error가 twin-trap 또는 ring-like 구조로 보이는 경우가 있었다
+
+이 구조는 대개 front의 안쪽과 바깥쪽에서 부호가 반대로 생기는 signed error가 absolute error로 접히면서 나타납니다. 예를 들어 PINN front가 truth보다 뒤처지면 leading edge 바깥쪽에서는 under-prediction, 안쪽에서는 over/under transition이 동시에 생깁니다. signed error로 보면 방향성이 보이지만 absolute error만 보면 두 개의 trap 또는 ring처럼 보일 수 있습니다.
+
+따라서 현재 시각화에는 signed error와 absolute error를 함께 보도록 했습니다. absolute error만 보면 오류의 크기는 알 수 있지만, front가 앞선 것인지 뒤처진 것인지는 알기 어렵습니다.
+
+#### 관찰 5. Korea pine-wilt baseline에서 PINN은 RK4보다 L2를 낮추지만 여전히 high-error이다
+
+산림청 data는 PDE simulation truth가 아니라 surveillance count입니다. RK4는 2016년 density를 초기조건으로 두고 고정된 `D`, `r`로 전진 예측하기 때문에, 관측 체계 변화나 방제 intervention을 설명하지 못합니다. PINN은 supervised observation fitting을 함께 하므로 observed-year L2는 낮출 수 있습니다. 하지만 이것은 PINN이 실제 확산 메커니즘을 완전히 맞췄다는 뜻이 아닙니다.
+
+현재 PINN의 `diagnostic_high_error` 상태는 타당한 경고입니다. 산림청 결과는 "PINN이 RK4보다 fitting flexibility가 있다"는 정도로 해석해야 하며, 정책적 예측 모델 또는 논문급 정확도라고 주장하면 안 됩니다.
+
+#### 관찰 6. land/sea mask를 넣지 않으면 바다로 density가 퍼지는 비물리적 결과가 나온다
+
+직사각형 grid만 사용하면 PDE solver는 바다와 육지를 구분하지 못합니다. diffusion term은 인접 cell로 density를 퍼뜨리므로, 해안선을 경계로 막지 않으면 바다 cell에도 감염 density가 생깁니다. 이는 소나무재선충병 문제 설정에 맞지 않습니다.
+
+이를 해결하기 위해 province GeoJSON 기반 land mask를 만들고, RK4에는 masked no-flux diffusion을 적용했습니다. PINN baseline에도 sea-exclusion penalty와 land-only PDE collocation을 넣었습니다. 따라서 현재 산림청 baseline은 바다를 단순 배경이 아니라 계산 domain 밖의 영역으로 취급합니다.
+
+#### 관찰 7. PINN GIF가 랜덤한 얼룩처럼 보일 수 있다
+
+low-epoch smoke run은 학습 수렴 결과가 아니라 pipeline 작동 확인용입니다. 이 상태에서 GIF를 만들면 field가 랜덤한 얼룩처럼 보일 수 있습니다. 따라서 현재 GIF에는 epoch 수, final relative L2, diagnostic status를 caption에 넣고, `metrics.json`에도 `diagnostic_only_low_epoch`, `diagnostic_high_error`, `diagnostic_moderate_error` 같은 상태를 기록합니다.
+
+즉 GIF는 단독 증거가 아니라 metrics와 함께 해석해야 합니다.
+
+#### 관찰 8. 우측 그림의 `rho(t)` 곡선은 Fisher-KPP probe가 아니었다
+
+Fisher-KPP probe를 장시간 관찰하면 보통 front가 지나가면서 단조 증가하거나 plateau로 접근합니다. 첨부 이미지 우측 곡선처럼 overshoot 후 감쇠 진동하는 형태는 표준 Fisher-KPP density probe와 맞지 않습니다. 처음에는 긴 시간 Fisher-KPP surface와 probe trend를 만들었지만, 사용자의 실제 요구는 우측 곡선 추이만 재현하는 것이었습니다.
+
+따라서 별도 damped oscillator ODE benchmark를 추가했습니다. 이 benchmark에서는 exact solution이 있고, FE/BE/trapezoidal/RK4/PINN이 모두 같은 scalar target을 사용합니다. 이렇게 분리해야 Fisher-KPP front 성능과 `rho(t)` curve 재현 성능을 혼동하지 않습니다.
+
+#### 관찰 9. 단순 PINN ansatz는 긴 시간 curve에서 폭주할 수 있었다
+
+초기 ODE-PINN에서는 `rho0 + v0*t + t^2*NN(t)` 형태의 hard initial-condition ansatz를 사용했습니다. 하지만 `T=30`에서는 `t^2` factor가 커져 작은 neural correction도 큰 오차로 증폭되었습니다. quick run에서 PINN curve error가 크게 나온 이유가 이것입니다.
+
+현재는 damped oscillator의 알려진 analytic 구조를 base로 두고, neural network는 작은 correction만 학습하게 했습니다. 이 구조는 사용자의 목적이 "우측 곡선 추이 재현"이라는 점에 맞습니다. 그 결과 quick run에서도 `max_abs_error`가 `5.845e-08` 수준으로 안정화되었습니다.
+
+#### 관찰 10. 공정한 비교에는 "같은 방정식"과 "같은 기준값"이 먼저 필요하다
+
+PINN과 RK4를 비교할 때 가장 위험한 오류는 서로 다른 문제를 푼 결과를 같은 표에 넣는 것입니다. Fisher-KPP front benchmark와 damped `rho(t)` benchmark는 서로 다른 방정식입니다. 따라서 현재 문서와 코드에서는 다음처럼 분리했습니다.
+
+- Fisher-KPP front 비교: 같은 PDE, 같은 grid, 같은 initial/boundary condition, 같은 `T`, 같은 metric
+- `rho(t)` curve 비교: 같은 ODE, 같은 initial condition, 같은 `T`, 같은 `dt`, exact solution 기준 metric
+- 산림청 baseline 비교: 같은 compact observation grid, 같은 land mask, 같은 observed-year metric
+
+이 분리를 지켜야 "어떤 방법이 어떤 문제에서 왜 잘하거나 못했는지"를 명확히 말할 수 있습니다.
+
+## 8. 장시간 Fisher-KPP 수치적분 비교용 공정 파라미터는 무엇인가
 
 ### 말씀하신 내용 요약
 
@@ -220,7 +300,7 @@ rk4             final_front=15.2623, final_mass=0.5048, rho=0.9299, relL2_to_RK4
 - `fisher-kpp-rk4/scripts/run_long_time_rk4_adjusted.py`
 - `fisher-kpp-rk4/notebooks/fisher_kpp_long_time_methods.ipynb`
 
-## 8. 우측 그림의 장시간 `rho(t)` 곡선은 어떻게 따로 반영했는가
+## 9. 우측 그림의 장시간 `rho(t)` 곡선은 어떻게 따로 반영했는가
 
 ### 말씀하신 내용 요약
 
@@ -285,7 +365,7 @@ PINN final_rho             = 0.3395784
 
 이 결과는 "Fisher-KPP PDE를 PINN이 RK4 수준으로 풀었다"는 의미가 아닙니다. 이것은 사용자가 요구한 우측 `rho(t)` 곡선 형태를 별도 ODE-PINN benchmark에서 안정적으로 재현했다는 의미입니다.
 
-## 9. PINN 시각화와 GIF는 어떻게 해석해야 하는가
+## 10. PINN 시각화와 GIF는 어떻게 해석해야 하는가
 
 ### 말씀하신 내용 요약
 
@@ -307,7 +387,7 @@ PINN GIF가 랜덤한 얼룩처럼 보이는 경우가 있었고, 이런 그림�
 
 산림청 map GIF도 province boundary와 land mask를 기준으로 관측, RK4, PINN panel을 표시합니다. 바다 cell은 density가 퍼지지 않도록 0으로 유지됩니다.
 
-## 10. 코드와 문서 산출물은 어디에 있는가
+## 11. 코드와 문서 산출물은 어디에 있는가
 
 ### 말씀하신 내용 요약
 
@@ -328,7 +408,7 @@ PINN GIF가 랜덤한 얼룩처럼 보이는 경우가 있었고, 이런 그림�
 
 문서 형식은 검토의견별로 `말씀하신 내용 요약`과 `답변`을 나누는 방식을 유지합니다. 이렇게 하면 어떤 요청에 대해 어떤 코드가 바뀌었고, 어떤 결과가 나왔으며, 아직 무엇이 부족한지 추적하기 쉽습니다.
 
-## 11. 앞으로 이 설명 파일은 어떻게 업데이트할 것인가
+## 12. 앞으로 이 설명 파일은 어떻게 업데이트할 것인가
 
 ### 말씀하신 내용 요약
 
@@ -356,7 +436,7 @@ PINN GIF가 랜덤한 얼룩처럼 보이는 경우가 있었고, 이런 그림�
 - 어떤 metric으로 비교했는지
 - 어떤 결과는 diagnostic이고 어떤 결과는 성능 주장인지
 
-## 12. 결론
+## 13. 결론
 
 현재 repository에는 synthetic Fisher-KPP PINN 개선 실험, RK4 same-problem baseline, 산림청 compact data, 산림청 RK4/PINN baseline, Colab notebook, Korea map GIF, 장시간 Fisher-KPP integrator comparison, 그리고 우측 `rho(t)` 곡선용 ODE-PINN benchmark가 반영되어 있습니다.
 
@@ -371,7 +451,7 @@ PINN GIF가 랜덤한 얼룩처럼 보이는 경우가 있었고, 이런 그림�
 
 다음 연구 단계는 산림청 데이터에 대해 spatially varying parameters, observation model, 방제/intervention covariate, forest/host mask, 긴 학습과 validation protocol을 포함하는 것입니다. 그 전까지 현재 산림청 결과는 최종 예측 모델이 아니라 baseline diagnostic으로 보고해야 합니다.
 
-## 13. 참고문헌
+## 14. 참고문헌
 
 Raissi, M., Perdikaris, P., and Karniadakis, G. E. 2019. Physics-informed neural networks: A deep learning framework for solving forward and inverse problems involving nonlinear partial differential equations. Journal of Computational Physics.
 

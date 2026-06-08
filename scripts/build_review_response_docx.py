@@ -157,16 +157,21 @@ def build_docx(markdown_path: Path, output_path: Path) -> None:
                 document.add_paragraph()
             continue
 
-        if line.startswith("## "):
-            paragraph = document.add_paragraph(style="Heading 1")
-            _write_inline_markdown(paragraph, line[3:].strip(), size=13.5, bold=True)
-            if line[3:].strip() == "개론":
-                _add_bottom_border(paragraph)
+        if line.startswith("#### "):
+            paragraph = document.add_paragraph(style="Heading 3")
+            _write_inline_markdown(paragraph, line[5:].strip(), size=10.5, bold=True)
             continue
 
         if line.startswith("### "):
             paragraph = document.add_paragraph(style="Heading 2")
             _write_inline_markdown(paragraph, line[4:].strip(), size=11.2, bold=True)
+            continue
+
+        if line.startswith("## "):
+            paragraph = document.add_paragraph(style="Heading 1")
+            _write_inline_markdown(paragraph, line[3:].strip(), size=13.5, bold=True)
+            if line[3:].strip() == "개론":
+                _add_bottom_border(paragraph)
             continue
 
         if line.startswith("- "):
