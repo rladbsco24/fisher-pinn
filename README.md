@@ -22,6 +22,22 @@ simulation.
 Detailed method explanation, literature rationale, observations, and interpretation are
 maintained in `docs/fisher_kpp_pinn_review_response.docx`.
 
+## Figure Preview Gallery
+
+Representative outputs from the current runnable scripts are committed in
+`docs/figure_previews/` so GitHub readers can inspect the expected result shapes before
+rerunning experiments:
+
+```text
+docs/figure_previews/README.md
+```
+
+The gallery includes RK4 1D/2D demos, long-time explicit/implicit integrator comparisons,
+the damped long-time curve benchmark, Geo-Spectral PINN diagnostic figures, Korea
+pine-wilt land-mask visualizations, GIF previews, and ablation summaries. The PINN and
+Korea figures in that gallery are smoke/diagnostic previews generated with short runtimes;
+use the longer commands below for publication-grade metrics.
+
 ## Install
 
 ```bash
