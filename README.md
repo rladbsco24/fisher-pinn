@@ -267,6 +267,20 @@ Forward ablation outputs:
   MAE, and mass MAE.
 - `summary.png`: side-by-side bars for final L2, `u>0.10` front-area MAE, and mass MAE.
 
+For visual ON/OFF validation of individual model and training features, use:
+
+```bash
+python scripts\run_feature_validation_ablation.py --preset smoke --max-pairs 2 --seeds 7 --out-dir runs\feature_validation_smoke
+python scripts\run_feature_validation_ablation.py --preset quick --pairs level_set_alignment,time_marching_curriculum --seeds 7,8,9 --out-dir runs\feature_validation_quick
+```
+
+Each feature run writes `without/`, `with/`, and `comparison/` folders. The comparison
+folder contains `feature_error_map_comparison.png`, `feature_evolution_comparison.gif`,
+`feature_evolution_comparison_preview.png`, and `comparison_manifest.json`. The paired
+features currently cover level-set alignment, time marching, moving-front features,
+mass/support guards, front-speed/gPINN losses, adaptive balancing, spatial coefficients,
+and the weak RK4 teacher.
+
 Current 60-epoch quick check on one seed with the PirateNet/RWF default, scaled
 traveling-wave features, and front-aware RAR gives `final_time_relative_l2 = 0.3600`,
 `validation_observation_mse = 6.32e-4`, `front_area_010_mae = 0.0119`, and

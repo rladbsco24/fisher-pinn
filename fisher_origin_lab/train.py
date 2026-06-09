@@ -1498,6 +1498,18 @@ def run_experiment(cfg: ExperimentConfig) -> dict[str, object]:
     rk4_final_abs_error = np.abs(final_rk4 - final_truth)
     rk4_final_time_relative_l2 = relative_l2(final_rk4, final_truth)
     pinn_vs_rk4_final_relative_l2 = relative_l2(final_pred, final_rk4)
+    diagnostic_fields_path = cfg.out_dir / "diagnostic_fields.npz"
+    np.savez_compressed(
+        diagnostic_fields_path,
+        x=np.linspace(0.0, cfg.domain.box, final_truth.shape[0]),
+        final_time=np.array([cfg.domain.t_end], dtype=np.float64),
+        truth_final=final_truth,
+        pinn_final=final_pred,
+        rk4_final=final_rk4,
+        pinn_signed_error=final_pred - final_truth,
+        pinn_abs_error=pinn_final_abs_error,
+        rk4_abs_error=rk4_final_abs_error,
+    )
     rk4_train_values = interpolate_truth(rk4_truth, train_observations.xyt)[:, None]
     rk4_train_observation_mse = float(np.mean((rk4_train_values - train_observations.values) ** 2))
     if len(validation_observations.xyt) > 0:
@@ -1623,6 +1635,7 @@ def run_experiment(cfg: ExperimentConfig) -> dict[str, object]:
         "warm_start_mode": cfg.warm_start.mode,
         "front_geometry": front_geometry,
         "pinn_evolution_gif": gif_diagnostics,
+        "diagnostic_fields": str(diagnostic_fields_path),
         "figures": figure_paths,
         "runs": [
             {

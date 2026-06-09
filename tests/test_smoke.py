@@ -16,8 +16,12 @@ import torch
 from scripts.run_inverse_origin import build_config
 from scripts.run_forward_ablation import aggregate as aggregate_forward_ablation
 from scripts.run_forward_ablation import make_forward_cases
+from scripts.run_feature_validation_ablation import make_feature_validation_pairs, summarize_feature_validation_rows
 from scripts.run_korea_pine_wilt_simulation import _save_korea_map_baseline_gif
 
+from PIL import Image
+
+from fisher_origin_lab.ablation_visuals import save_feature_pair_error_map, save_feature_pair_evolution_gif
 from fisher_origin_lab.config import DomainConfig, ExperimentConfig, ModelConfig, PDEConfig, SeedConfig, WarmStartConfig
 from fisher_origin_lab.curve_trend import (
     CurvePINNConfig,
@@ -705,6 +709,82 @@ def test_forward_ablation_cases_report_front_metrics() -> None:
     )
     assert summary["cases"][0]["final_time_relative_l2_mean"] == 0.4
     assert summary["cases"][0]["front_area_010_mae_mean"] == 0.02
+
+
+def test_feature_validation_pairs_and_visual_exports(tmp_path) -> None:
+    cfg = ExperimentConfig(domain=DomainConfig(grid=21, truth_steps=60)).geo_spectral_forward().quick()
+    pairs = make_feature_validation_pairs(cfg)
+    names = [pair["name"] for pair in pairs]
+    assert "level_set_alignment" in names
+    assert "time_marching_curriculum" in names
+    assert "moving_front_features" in names
+    assert "mass_support_guards" in names
+    assert "front_speed_gpinn" in names
+    assert "adaptive_balancing" in names
+    assert "spatial_coefficients" in names
+    assert "rk4_teacher" in names
+    assert all("without" in pair and "with" in pair for pair in pairs)
+
+    xs = np.linspace(0.0, 1.0, 16)
+    x, y = np.meshgrid(xs, xs, indexing="ij")
+    truth = np.exp(-((x - 0.35) ** 2 + (y - 0.55) ** 2) / 0.04)
+    without_pred = np.clip(truth + 0.12 * np.sin(2 * np.pi * x), 0.0, 1.0)
+    with_pred = np.clip(truth + 0.05 * np.sin(2 * np.pi * x), 0.0, 1.0)
+    without_fields = tmp_path / "without_fields.npz"
+    with_fields = tmp_path / "with_fields.npz"
+    np.savez_compressed(
+        without_fields,
+        truth_final=truth,
+        pinn_final=without_pred,
+        rk4_final=truth,
+        pinn_abs_error=np.abs(without_pred - truth),
+    )
+    np.savez_compressed(
+        with_fields,
+        truth_final=truth,
+        pinn_final=with_pred,
+        rk4_final=truth,
+        pinn_abs_error=np.abs(with_pred - truth),
+    )
+    error_map = save_feature_pair_error_map(
+        tmp_path / "feature_error_map_comparison.png",
+        feature_name="test_feature",
+        without_label="without",
+        with_label="with",
+        without_fields=without_fields,
+        with_fields=with_fields,
+        without_metrics={"final_time_relative_l2": 0.5, "validation_observation_mse": 0.02},
+        with_metrics={"final_time_relative_l2": 0.2, "validation_observation_mse": 0.01},
+        domain=cfg.domain,
+    )
+    assert (tmp_path / "feature_error_map_comparison.png").exists()
+    assert error_map["with_max_abs_error"] < error_map["without_max_abs_error"]
+
+    def _dummy_gif(path: Path, color: tuple[int, int, int]) -> None:
+        frames = [Image.new("RGB", (30, 24), tuple(min(255, channel + idx * 20) for channel in color)) for idx in range(3)]
+        frames[0].save(path, save_all=True, append_images=frames[1:], duration=120, loop=0)
+
+    _dummy_gif(tmp_path / "without.gif", (120, 80, 80))
+    _dummy_gif(tmp_path / "with.gif", (80, 120, 80))
+    gif_info = save_feature_pair_evolution_gif(
+        tmp_path / "feature_evolution_comparison.gif",
+        feature_name="test_feature",
+        without_label="without",
+        with_label="with",
+        without_gif=tmp_path / "without.gif",
+        with_gif=tmp_path / "with.gif",
+    )
+    assert (tmp_path / "feature_evolution_comparison.gif").read_bytes()[:6] in {b"GIF87a", b"GIF89a"}
+    assert Path(str(gif_info["preview"])).exists()
+    assert gif_info["frames"] == 3
+
+    summary = summarize_feature_validation_rows(
+        [
+            {"feature": "test", "variant": "without", "final_time_relative_l2": 0.5},
+            {"feature": "test", "variant": "with", "final_time_relative_l2": 0.2},
+        ]
+    )
+    assert summary["features"][0]["improvement_final_time_relative_l2_mean"] == 0.3
 
 
 def test_time_slab_curriculum_uses_cumulative_windows() -> None:
