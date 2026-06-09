@@ -49,6 +49,33 @@ def az_exact_torch(x: torch.Tensor, t: torch.Tensor, x0: float = 0.0) -> torch.T
     return torch.pow(1.0 + torch.exp(torch.clamp(z, -80.0, 80.0)), -2.0)
 
 
+def az_level_x_torch(level: torch.Tensor, t: torch.Tensor, x0: float = 0.0) -> torch.Tensor:
+    level_safe = level.clamp(1.0e-8, 1.0 - 1.0e-8)
+    return AZ_SPEED * t + float(x0) + math.sqrt(6.0) * torch.log(level_safe.rsqrt() - 1.0)
+
+
+def az_level_x_unit_torch(
+    level: torch.Tensor,
+    t: torch.Tensor,
+    *,
+    x_left: float = AZ_X_LEFT_1D,
+    x_right: float = AZ_X_RIGHT_1D,
+    x0: float = 0.0,
+) -> torch.Tensor:
+    return (az_level_x_torch(level, t, x0=x0) - float(x_left)) / (float(x_right) - float(x_left))
+
+
+def az_unit_slope_at_level_torch(
+    level: torch.Tensor,
+    *,
+    x_left: float = AZ_X_LEFT_1D,
+    x_right: float = AZ_X_RIGHT_1D,
+) -> torch.Tensor:
+    level_safe = level.clamp(1.0e-8, 1.0 - 1.0e-8)
+    physical_slope = -(2.0 / math.sqrt(6.0)) * level_safe * (1.0 - torch.sqrt(level_safe))
+    return physical_slope * (float(x_right) - float(x_left))
+
+
 def az_exact_unit_numpy(
     x_unit: np.ndarray,
     t: float | np.ndarray,

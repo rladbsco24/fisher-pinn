@@ -680,7 +680,7 @@ class ExperimentConfig:
                 front_support_tversky=0.0,
                 front_contrast=0.0,
                 front_profile=0.0,
-                level_set_alignment=0.0,
+                level_set_alignment=1.0,
                 time_interface=0.0,
                 physics_parameter_anchor=0.0,
                 coefficient_field=0.0,

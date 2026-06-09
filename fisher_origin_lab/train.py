@@ -18,6 +18,8 @@ from .config import ExperimentConfig
 from .losses import (
     BalancedDecayWeights,
     ablowitz_zeppetella_dirichlet_loss,
+    ablowitz_zeppetella_front_band_samples,
+    ablowitz_zeppetella_front_phase_loss,
     ablowitz_zeppetella_initial_condition_loss,
     bounded_residual_weights,
     boundary_neumann_loss,
@@ -440,6 +442,38 @@ def _sample_curriculum_collocation(
     return torch.cat([focus_xy, global_xy], dim=0), torch.cat([focus_t, global_t], dim=0)
 
 
+def _inject_az_front_band_collocation(
+    cfg: ExperimentConfig,
+    model: OriginPINN,
+    xy_col: torch.Tensor,
+    t_col: torch.Tensor,
+    device: torch.device,
+    *,
+    t_low: float,
+    t_high: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    if cfg.benchmark.kind != "ablowitz_zeppetella" or cfg.weights.level_set_alignment <= 0.0:
+        return xy_col, t_col
+    n = min(len(xy_col) // 4, max(1, cfg.train.level_set_points))
+    if n <= 0:
+        return xy_col, t_col
+    front_xy, front_t = ablowitz_zeppetella_front_band_samples(
+        model,
+        n,
+        device,
+        width=cfg.train.level_set_width,
+        t_low=t_low,
+        t_high=t_high,
+        x_left=cfg.benchmark.x_left,
+        x_right=cfg.benchmark.x_right,
+        x0=cfg.benchmark.wave_x0,
+    )
+    if len(front_xy) == 0:
+        return xy_col, t_col
+    keep = max(0, len(xy_col) - len(front_xy))
+    return torch.cat([xy_col[:keep], front_xy], dim=0), torch.cat([t_col[:keep], front_t], dim=0)
+
+
 def _combine_loss_terms(
     terms: list[tuple[str, float, torch.Tensor]],
     balancer: _AdaptiveLossBalancer | None,
@@ -649,6 +683,15 @@ def train_single(
             )
         else:
             xy_col, t_col = sampler.sample(cfg.train.collocation_points)
+        xy_col, t_col = _inject_az_front_band_collocation(
+            cfg,
+            model,
+            xy_col,
+            t_col,
+            device,
+            t_low=window_t_low,
+            t_high=window_t_high,
+        )
         residual, u_col, u_xy_col, _, _ = pde_residual_terms(model, xy_col, t_col)
         residual_sq = residual.pow(2).flatten()
         residual_exponent = _residual_weight_exponent(cfg, epoch)
@@ -805,14 +848,27 @@ def train_single(
         else:
             front_profile = torch.zeros((), device=device)
         if cfg.weights.level_set_alignment > 0.0 and cfg.train.level_set_points > 0:
-            level_set_loss = front_level_set_alignment_loss(
-                model,
-                cfg.train.level_set_points,
-                device,
-                width=cfg.train.level_set_width,
-                t_low=window_t_low,
-                t_high=window_t_high,
-            )
+            if is_az_benchmark:
+                level_set_loss = ablowitz_zeppetella_front_phase_loss(
+                    model,
+                    cfg.train.level_set_points,
+                    device,
+                    width=cfg.train.level_set_width,
+                    t_low=window_t_low,
+                    t_high=window_t_high,
+                    x_left=cfg.benchmark.x_left,
+                    x_right=cfg.benchmark.x_right,
+                    x0=cfg.benchmark.wave_x0,
+                )
+            else:
+                level_set_loss = front_level_set_alignment_loss(
+                    model,
+                    cfg.train.level_set_points,
+                    device,
+                    width=cfg.train.level_set_width,
+                    t_low=window_t_low,
+                    t_high=window_t_high,
+                )
         else:
             level_set_loss = torch.zeros((), device=device)
         if cfg.weights.mass_balance > 0.0:
@@ -1101,6 +1157,15 @@ def _lbfgs_polish(
     opt = torch.optim.LBFGS(model.parameters(), max_iter=cfg.train.lbfgs_steps, tolerance_grad=1.0e-7)
     xy_col, t_col = sampler.sample(min(cfg.train.collocation_points, 2048))
     is_az_benchmark = cfg.benchmark.kind == "ablowitz_zeppetella"
+    xy_col, t_col = _inject_az_front_band_collocation(
+        cfg,
+        model,
+        xy_col,
+        t_col,
+        device,
+        t_low=0.0,
+        t_high=cfg.domain.t_end,
+    )
 
     def closure() -> torch.Tensor:
         opt.zero_grad()
@@ -1212,12 +1277,23 @@ def _lbfgs_polish(
         else:
             front_profile = torch.zeros((), device=device)
         if cfg.weights.level_set_alignment > 0.0 and cfg.train.level_set_points > 0:
-            level_set_loss = front_level_set_alignment_loss(
-                model,
-                min(cfg.train.level_set_points, 256),
-                device,
-                width=cfg.train.level_set_width,
-            )
+            if is_az_benchmark:
+                level_set_loss = ablowitz_zeppetella_front_phase_loss(
+                    model,
+                    min(cfg.train.level_set_points, 256),
+                    device,
+                    width=cfg.train.level_set_width,
+                    x_left=cfg.benchmark.x_left,
+                    x_right=cfg.benchmark.x_right,
+                    x0=cfg.benchmark.wave_x0,
+                )
+            else:
+                level_set_loss = front_level_set_alignment_loss(
+                    model,
+                    min(cfg.train.level_set_points, 256),
+                    device,
+                    width=cfg.train.level_set_width,
+                )
         else:
             level_set_loss = torch.zeros((), device=device)
         if cfg.weights.mass_balance > 0.0:

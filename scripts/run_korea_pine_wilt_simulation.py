@@ -276,6 +276,125 @@ def _save_korea_map_baseline_gif(
     }
 
 
+def _save_korea_error_gif(
+    path: Path,
+    grid,
+    sim_years: np.ndarray,
+    sim_fields: np.ndarray,
+    *,
+    pinn_years: np.ndarray | None = None,
+    pinn_fields: np.ndarray | None = None,
+    fps: float = 1.2,
+    max_frames: int | None = None,
+) -> dict[str, object]:
+    """Save observed-year RK4/PINN absolute-error maps as an animated Korea GIF."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    province_geojson = _load_korea_province_geojson()
+    province_rings = _province_rings(province_geojson)
+    bbox = _province_bbox(province_rings)
+    lon_edges, lat_edges = _grid_edges_lonlat(grid)
+    frame_years = np.asarray(grid.years, dtype=int)
+    if max_frames is not None and max_frames > 1 and len(frame_years) > max_frames:
+        idx = np.unique(np.linspace(0, len(frame_years) - 1, int(max_frames), dtype=int))
+        frame_years = frame_years[idx]
+
+    error_arrays = []
+    for year in frame_years.tolist():
+        observed = _field_for_year(year, grid.years, grid.density)
+        rk4 = _field_for_year(year, sim_years, sim_fields)
+        if observed is not None and rk4 is not None:
+            error_arrays.append(np.abs(np.asarray(rk4) - np.asarray(observed)))
+        if pinn_years is not None and pinn_fields is not None:
+            pinn = _field_for_year(year, pinn_years, pinn_fields)
+            if observed is not None and pinn is not None:
+                error_arrays.append(np.abs(np.asarray(pinn) - np.asarray(observed)))
+    if error_arrays:
+        stacked = np.concatenate([arr.ravel() for arr in error_arrays])
+        finite = stacked[np.isfinite(stacked)]
+        err_vmax = float(np.percentile(finite, 99.0)) if finite.size else 1.0
+    else:
+        err_vmax = 1.0
+    err_vmax = float(np.clip(err_vmax, 1.0e-6, 1.0))
+    obs_vmax = max(float(np.max(grid.density)), 1.0e-6)
+    norm_obs = PowerNorm(gamma=0.55, vmin=0.0, vmax=obs_vmax)
+    norm_err = PowerNorm(gamma=0.70, vmin=0.0, vmax=err_vmax)
+    obs_cmap = plt.get_cmap("magma").copy()
+    err_cmap = plt.get_cmap("viridis").copy()
+    obs_cmap.set_bad((1.0, 1.0, 1.0, 0.0))
+    err_cmap.set_bad((1.0, 1.0, 1.0, 0.0))
+
+    panels = 3 if pinn_years is not None and pinn_fields is not None else 2
+    frames: list[Image.Image] = []
+    duration_ms = int(round(1000.0 / max(float(fps), 0.1)))
+    for year in frame_years.tolist():
+        fig, axes = plt.subplots(1, panels, figsize=(5.0 * panels, 5.6), constrained_layout=True)
+        axes_arr = np.atleast_1d(axes)
+        observed = _field_for_year(year, grid.years, grid.density)
+        rk4 = _field_for_year(year, sim_years, sim_fields)
+        rk4_error = None if observed is None or rk4 is None else np.abs(np.asarray(rk4) - np.asarray(observed))
+        last_mesh = _draw_map_field_panel(
+            axes_arr[0],
+            title=f"{year} observed",
+            field=observed,
+            lon_edges=lon_edges,
+            lat_edges=lat_edges,
+            province_rings=province_rings,
+            norm=norm_obs,
+            cmap=obs_cmap,
+            bbox=bbox,
+        )
+        last_mesh = _draw_map_field_panel(
+            axes_arr[1],
+            title=f"{year} RK4 |error|",
+            field=rk4_error,
+            lon_edges=lon_edges,
+            lat_edges=lat_edges,
+            province_rings=province_rings,
+            norm=norm_err,
+            cmap=err_cmap,
+            bbox=bbox,
+        ) or last_mesh
+        if panels == 3:
+            pinn = _field_for_year(year, pinn_years, pinn_fields)  # type: ignore[arg-type]
+            pinn_error = None if observed is None or pinn is None else np.abs(np.asarray(pinn) - np.asarray(observed))
+            last_mesh = _draw_map_field_panel(
+                axes_arr[2],
+                title=f"{year} PINN |error|",
+                field=pinn_error,
+                lon_edges=lon_edges,
+                lat_edges=lat_edges,
+                province_rings=province_rings,
+                norm=norm_err,
+                cmap=err_cmap,
+                bbox=bbox,
+            ) or last_mesh
+        if last_mesh is not None:
+            cbar = fig.colorbar(last_mesh, ax=axes_arr, orientation="horizontal", shrink=0.72, pad=0.04)
+            cbar.set_label("absolute normalized-density error", fontsize=9)
+            cbar.ax.tick_params(labelsize=8)
+        fig.suptitle("Korea pine-wilt observed-year absolute error", fontsize=14, fontweight="bold")
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", dpi=110, facecolor="white")
+        plt.close(fig)
+        buf.seek(0)
+        frames.append(Image.open(buf).convert("P", palette=Image.Palette.ADAPTIVE, colors=256))
+    if not frames:
+        raise ValueError("No frames were available for Korea error GIF export.")
+    frames[0].save(path, save_all=True, append_images=frames[1:], duration=duration_ms, loop=0, disposal=2)
+    preview_path = path.with_name(f"{path.stem}_preview.png")
+    frames[min(len(frames) - 1, max(0, len(frames) // 2))].convert("RGB").save(preview_path)
+    return {
+        "path": path.name,
+        "preview": preview_path.name,
+        "frames": int(len(frames)),
+        "fps": float(fps),
+        "max_frames": None if max_frames is None else int(max_frames),
+        "panels": ["observed", "rk4_abs_error", "pinn_abs_error"] if panels == 3 else ["observed", "rk4_abs_error"],
+        "error_vmax": err_vmax,
+    }
+
+
 def _save_observed_density_figure(path: Path, grid) -> None:
     n_years = len(grid.years)
     cols = 4
@@ -610,6 +729,26 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         fps=getattr(args, "map_gif_fps", 1.2),
         max_frames=getattr(args, "map_gif_max_frames", 15),
     )
+    error_gif_info = _save_korea_error_gif(
+        out_dir / "korea_error_baselines.gif",
+        grid,
+        sim_years,
+        sim_fields,
+        pinn_years=pinn_result.years if pinn_result is not None else None,
+        pinn_fields=pinn_result.fields if pinn_result is not None else None,
+        fps=getattr(args, "map_gif_fps", 1.2),
+        max_frames=getattr(args, "map_gif_max_frames", 15),
+    )
+    field_payload = {
+        "observed_years": grid.years,
+        "observed_fields": grid.density,
+        "rk4_years": sim_years,
+        "rk4_fields": sim_fields,
+    }
+    if pinn_result is not None:
+        field_payload["pinn_years"] = pinn_result.years
+        field_payload["pinn_fields"] = pinn_result.fields
+    np.savez_compressed(out_dir / "korea_pine_wilt_fields.npz", **field_payload)
     if pinn_result is not None:
         _save_pinn_baseline_figure(out_dir / "pinn_baseline_observed_years.png", grid, pinn_result.years, pinn_result.fields)
 
@@ -691,8 +830,12 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             "baseline_metric_comparison.png",
             "korea_map_baselines.gif",
             "korea_map_baselines_preview.png",
+            "korea_error_baselines.gif",
+            "korea_error_baselines_preview.png",
+            "korea_pine_wilt_fields.npz",
         ],
         "map_gif": map_gif_info,
+        "error_gif": error_gif_info,
     }
     if pinn_result is not None:
         pinn_summary = _method_summary(pinn_rows)

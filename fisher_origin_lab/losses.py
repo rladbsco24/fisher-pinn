@@ -6,7 +6,7 @@ import torch
 
 from .models import OriginPINN
 from .config import SeedConfig
-from .exact_wave import az_exact_unit_torch
+from .exact_wave import az_exact_unit_torch, az_level_x_unit_torch, az_unit_slope_at_level_torch
 
 
 def pde_residual(
@@ -247,6 +247,108 @@ def ablowitz_zeppetella_initial_condition_loss(
         x0=x0,
     )
     return torch.mean((pred - target) ** 2)
+
+
+def ablowitz_zeppetella_front_band_samples(
+    model: OriginPINN,
+    n: int,
+    device: torch.device,
+    *,
+    levels: tuple[float, ...] = (0.05, 0.10, 0.25, 0.50),
+    width: float = 0.025,
+    t_low: float = 0.0,
+    t_high: float | None = None,
+    x_left: float = -20.0,
+    x_right: float = 20.0,
+    x0: float = 0.0,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    if n <= 0:
+        dtype = next(model.parameters()).dtype
+        return torch.empty((0, 2), dtype=dtype, device=device), torch.empty((0, 1), dtype=dtype, device=device)
+    dtype = next(model.parameters()).dtype
+    levels_t = torch.tensor(levels, dtype=dtype, device=device)
+    level = levels_t[torch.randint(0, len(levels), (n, 1), device=device)]
+    low = max(0.0, min(float(t_low), model.domain.t_end))
+    high = model.domain.t_end if t_high is None else max(0.0, min(float(t_high), model.domain.t_end))
+    if high < low:
+        low, high = high, low
+    t = low + torch.rand(n, 1, dtype=dtype, device=device) * max(high - low, 1.0e-8)
+    x_level = az_level_x_unit_torch(level, t, x_left=x_left, x_right=x_right, x0=x0)
+    x = x_level + torch.randn(n, 1, dtype=dtype, device=device) * max(float(width), 1.0e-4)
+    y = torch.rand(n, 1, dtype=dtype, device=device) * model.domain.box
+    xy = torch.cat([x, y], dim=1)
+    valid = (xy[:, 0] >= 0.0) & (xy[:, 0] <= model.domain.box)
+    if torch.any(valid):
+        return xy[valid], t[valid]
+    return torch.cat([x.clamp(0.0, model.domain.box), y], dim=1), t
+
+
+def ablowitz_zeppetella_front_phase_loss(
+    model: OriginPINN,
+    n: int,
+    device: torch.device,
+    *,
+    levels: tuple[float, ...] = (0.05, 0.10, 0.25, 0.50),
+    width: float = 0.025,
+    sign_margin_fraction: float = 0.20,
+    t_low: float = 0.0,
+    t_high: float | None = None,
+    x_left: float = -20.0,
+    x_right: float = 20.0,
+    x0: float = 0.0,
+) -> torch.Tensor:
+    """Pin the Ablowitz-Zeppetella moving-front phase on exact level sets."""
+
+    if n <= 0 or not levels:
+        return torch.zeros((), device=device)
+    dtype = next(model.parameters()).dtype
+    levels_t = torch.tensor(levels, dtype=dtype, device=device)
+    level = levels_t[torch.randint(0, len(levels), (n, 1), device=device)]
+    low = max(0.0, min(float(t_low), model.domain.t_end))
+    high = model.domain.t_end if t_high is None else max(0.0, min(float(t_high), model.domain.t_end))
+    if high < low:
+        low, high = high, low
+    t = low + torch.rand(n, 1, dtype=dtype, device=device) * max(high - low, 1.0e-8)
+    x_on = az_level_x_unit_torch(level, t, x_left=x_left, x_right=x_right, x0=x0)
+    offset = max(float(width), 1.0e-4)
+    y = torch.rand(n, 1, dtype=dtype, device=device) * model.domain.box
+    xy_on = torch.cat([x_on, y], dim=1)
+    xy_in = torch.cat([x_on - offset, y], dim=1)
+    xy_out = torch.cat([x_on + offset, y], dim=1)
+    valid = (
+        (xy_on[:, 0:1] >= 0.0)
+        & (xy_on[:, 0:1] <= model.domain.box)
+        & (xy_in[:, 0:1] >= 0.0)
+        & (xy_out[:, 0:1] <= model.domain.box)
+    ).detach().float()
+    xy_on = xy_on.clamp(0.0, model.domain.box)
+    xy_in = xy_in.clamp(0.0, model.domain.box)
+    xy_out = xy_out.clamp(0.0, model.domain.box)
+
+    xy_on_req = xy_on.detach().clone().requires_grad_(True)
+    pred_on = model(xy_on_req, t)
+    pred_in = model(xy_in, t)
+    pred_out = model(xy_out, t)
+    target_in = az_exact_unit_torch(xy_in[:, 0:1], t, x_left=x_left, x_right=x_right, x0=x0).detach()
+    target_out = az_exact_unit_torch(xy_out[:, 0:1], t, x_left=x_left, x_right=x_right, x0=x0).detach()
+
+    margin = (float(sign_margin_fraction) * level).clamp_min(1.0e-4)
+    on_loss = valid * (pred_on - level).pow(2)
+    profile_loss = valid * ((pred_in - target_in).pow(2) + (pred_out - target_out).pow(2))
+    order_loss = valid * (
+        torch.relu(level + margin - pred_in).pow(2)
+        + torch.relu(pred_out - (level - margin).clamp_min(0.0)).pow(2)
+    )
+    grad_on = torch.autograd.grad(pred_on, xy_on_req, torch.ones_like(pred_on), create_graph=True)[0]
+    target_slope = az_unit_slope_at_level_torch(level, x_left=x_left, x_right=x_right).detach()
+    slope_loss = valid * (grad_on[:, 0:1] - target_slope).pow(2).clamp_max(25.0)
+    denom = valid.sum().clamp_min(1.0)
+    return (
+        on_loss.sum() / denom
+        + 0.5 * profile_loss.sum() / denom
+        + 0.5 * order_loss.sum() / denom
+        + 0.02 * slope_loss.sum() / denom
+    )
 
 
 def parabolic_mass_balance_loss(

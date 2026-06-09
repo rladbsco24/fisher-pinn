@@ -39,6 +39,8 @@ from fisher_origin_lab.korea_data import (
 )
 from fisher_origin_lab.losses import (
     ablowitz_zeppetella_dirichlet_loss,
+    ablowitz_zeppetella_front_band_samples,
+    ablowitz_zeppetella_front_phase_loss,
     ablowitz_zeppetella_initial_condition_loss,
     expected_front_gradient_residual_loss,
     expected_front_pde_loss,
@@ -295,16 +297,24 @@ def test_ablowitz_zeppetella_forward_preset_matches_exact_wave() -> None:
     assert cfg.pde.include_advection is False
     assert np.isclose(cfg.pde.reaction, 1.0)
     assert np.isclose(cfg.pde.diffusion, 1.0 / 40.0**2)
+    assert cfg.weights.level_set_alignment > 0.0
     model = OriginPINN(cfg.domain, cfg.pde, cfg.seed, cfg.model)
     xy = torch.rand(16, 2)
     t = torch.rand(16, 1) * cfg.domain.t_end
     residual = pde_residual(model, xy, t)
     ic = ablowitz_zeppetella_initial_condition_loss(model, 16, torch.device("cpu"))
     bc = ablowitz_zeppetella_dirichlet_loss(model, 16, torch.device("cpu"))
+    front_xy, front_t = ablowitz_zeppetella_front_band_samples(model, 24, torch.device("cpu"))
+    phase = ablowitz_zeppetella_front_phase_loss(model, 24, torch.device("cpu"))
     assert residual.shape == (16, 1)
     assert torch.isfinite(residual).all()
     assert torch.isfinite(ic)
     assert torch.isfinite(bc)
+    assert front_xy.shape[1] == 2
+    assert front_t.shape[1] == 1
+    assert torch.isfinite(front_xy).all()
+    assert torch.isfinite(front_t).all()
+    assert torch.isfinite(phase)
 
 
 def test_ablowitz_zeppetella_rk4_truth_shape_and_error() -> None:
