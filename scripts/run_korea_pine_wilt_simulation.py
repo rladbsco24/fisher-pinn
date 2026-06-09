@@ -36,6 +36,17 @@ def _format_year_title(year: int, suffix: str = "") -> str:
     return f"{year}{suffix}"
 
 
+def _save_figure_with_padding(fig: plt.Figure, path: Path, *, dpi: int = 180) -> None:
+    fig.savefig(path, dpi=dpi, bbox_inches="tight", pad_inches=0.10)
+
+
+def _add_vertical_colorbar(fig: plt.Figure, image, ax, *, shrink: float = 0.82):
+    cbar = fig.colorbar(image, ax=ax, shrink=shrink, pad=0.035)
+    cbar.ax.tick_params(labelsize=8, pad=3)
+    cbar.ax.yaxis.set_ticks_position("right")
+    return cbar
+
+
 def _geojson_rings(geometry: dict) -> list[np.ndarray]:
     """Return exterior/interior rings from a Polygon or MultiPolygon GeoJSON geometry."""
 
@@ -255,7 +266,7 @@ def _save_korea_map_baseline_gif(
             fontweight="bold",
         )
         buf = io.BytesIO()
-        fig.savefig(buf, format="png", dpi=110, facecolor="white")
+        fig.savefig(buf, format="png", dpi=110, facecolor="white", bbox_inches="tight", pad_inches=0.10)
         plt.close(fig)
         buf.seek(0)
         frames.append(Image.open(buf).convert("P", palette=Image.Palette.ADAPTIVE, colors=256))
@@ -375,7 +386,7 @@ def _save_korea_error_gif(
             cbar.ax.tick_params(labelsize=8)
         fig.suptitle("Korea pine-wilt observed-year absolute error", fontsize=14, fontweight="bold")
         buf = io.BytesIO()
-        fig.savefig(buf, format="png", dpi=110, facecolor="white")
+        fig.savefig(buf, format="png", dpi=110, facecolor="white", bbox_inches="tight", pad_inches=0.10)
         plt.close(fig)
         buf.seek(0)
         frames.append(Image.open(buf).convert("P", palette=Image.Palette.ADAPTIVE, colors=256))
@@ -421,9 +432,9 @@ def _save_observed_density_figure(path: Path, grid) -> None:
     for ax in axes_arr[n_years:]:
         ax.axis("off")
     if last_image is not None:
-        fig.colorbar(last_image, ax=axes_arr[:n_years], shrink=0.82, label="normalized density")
+        _add_vertical_colorbar(fig, last_image, axes_arr[:n_years], shrink=0.82).set_label("normalized density")
     fig.suptitle("Korea Forest Service pine-wilt observations", fontsize=13)
-    fig.savefig(path, dpi=180)
+    _save_figure_with_padding(fig, path, dpi=180)
     plt.close(fig)
 
 
@@ -457,16 +468,16 @@ def _save_forecast_figure(path: Path, grid, sim_years: np.ndarray, sim_fields: n
     for ax in axes_arr[len(target_years):]:
         ax.axis("off")
     if last_image is not None:
-        fig.colorbar(last_image, ax=axes_arr[: len(target_years)], shrink=0.82, label="normalized density")
+        _add_vertical_colorbar(fig, last_image, axes_arr[: len(target_years)], shrink=0.82).set_label("normalized density")
     fig.suptitle("2D Fisher-KPP RK4 simulation from 2016 observed density", fontsize=13)
-    fig.savefig(path, dpi=180)
+    _save_figure_with_padding(fig, path, dpi=180)
     plt.close(fig)
 
 
 def _save_pinn_baseline_figure(path: Path, grid, pinn_years: np.ndarray, pinn_fields: np.ndarray) -> None:
     selected_years = [2016, 2018, 2020, 2023]
     selected_years = [year for year in selected_years if year in set(grid.years.tolist())]
-    fig, axes = plt.subplots(len(selected_years), 3, figsize=(9.6, 2.6 * len(selected_years)), constrained_layout=True)
+    fig, axes = plt.subplots(len(selected_years), 3, figsize=(10.8, 2.6 * len(selected_years)), constrained_layout=True)
     axes_arr = np.atleast_2d(axes)
     extent = [grid.x_edges[0], grid.x_edges[-1], grid.y_edges[0], grid.y_edges[-1]]
     year_to_obs = {int(year): idx for idx, year in enumerate(grid.years.tolist())}
@@ -501,9 +512,9 @@ def _save_pinn_baseline_figure(path: Path, grid, pinn_years: np.ndarray, pinn_fi
             ax.set_xticks([])
             ax.set_yticks([])
             if col == 2:
-                fig.colorbar(im, ax=ax, shrink=0.75)
+                _add_vertical_colorbar(fig, im, ax, shrink=0.75)
     fig.suptitle("Korea pine-wilt PINN baseline: observed years", fontsize=13)
-    fig.savefig(path, dpi=180)
+    _save_figure_with_padding(fig, path, dpi=180)
     plt.close(fig)
 
 
@@ -527,7 +538,7 @@ def _save_baseline_comparison_figure(path: Path, rows: list[dict[str, float | in
     axes[1].set_ylabel("correlation")
     axes[1].grid(alpha=0.25)
     axes[1].legend()
-    fig.savefig(path, dpi=180)
+    _save_figure_with_padding(fig, path, dpi=180)
     plt.close(fig)
 
 
@@ -555,7 +566,7 @@ def _save_metric_figure(path: Path, rows: list[dict[str, float | int]]) -> None:
     axes[1].set_ylabel("mean density")
     axes[1].grid(alpha=0.25)
     axes[1].legend()
-    fig.savefig(path, dpi=180)
+    _save_figure_with_padding(fig, path, dpi=180)
     plt.close(fig)
 
 

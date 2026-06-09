@@ -74,6 +74,18 @@ def _write_title(fig: plt.Figure, title: str, subtitle: str | None = None, *, to
         fig.text(0.01, 0.952, subtitle, ha="left", va="top", fontsize=9, color=TOKENS["muted"])
 
 
+def _add_colorbar(fig: plt.Figure, image, ax: plt.Axes, *, fraction: float = 0.046, pad: float = 0.035):
+    cbar = fig.colorbar(image, ax=ax, fraction=fraction, pad=pad)
+    cbar.ax.tick_params(labelsize=8, pad=3)
+    cbar.ax.yaxis.set_ticks_position("right")
+    cbar.ax.yaxis.set_label_position("right")
+    return cbar
+
+
+def _save_figure(fig: plt.Figure, path: Path, *, dpi: int = 150) -> None:
+    fig.savefig(path, dpi=dpi, bbox_inches="tight", pad_inches=0.10)
+
+
 def _imshow(
     fig: plt.Figure,
     ax: plt.Axes,
@@ -99,7 +111,7 @@ def _imshow(
     ax.set_xticks([])
     ax.set_yticks([])
     if colorbar:
-        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.02)
+        _add_colorbar(fig, im, ax)
 
 
 def _as_history_arrays(history: list[dict[str, float]], key: str) -> tuple[np.ndarray, np.ndarray]:
@@ -172,7 +184,7 @@ def save_reconstruction_figure(
     times = [0.0, observations.start_time * 0.5, observations.start_time, domain.t_end]
     n = 96
     fig, axes = plt.subplots(3, len(times), figsize=(4.0 * len(times), 9.5), constrained_layout=False)
-    fig.subplots_adjust(left=0.035, right=0.965, bottom=0.045, top=0.88, hspace=0.26, wspace=0.16)
+    fig.subplots_adjust(left=0.045, right=0.94, bottom=0.045, top=0.88, hspace=0.26, wspace=0.22)
     true_center = (seed.center_x, seed.center_y)
     xs_late, late = truth_field_at(truth, domain.t_end, n=n)
     centroid = centroid_from_field(xs_late, late)
@@ -212,7 +224,7 @@ def save_reconstruction_figure(
     if show_source_estimate:
         subtitle += " Green is the trainable source estimate; red is the late weighted centroid."
     _write_title(fig, "Fisher-KPP field reconstruction", subtitle, top=0.88)
-    fig.savefig(path, dpi=150)
+    _save_figure(fig, path, dpi=150)
     plt.close(fig)
 
 
@@ -294,7 +306,7 @@ def save_spacetime_error_figure(
         "Trend views summarize field error, mass, active front, and low-level moving-front area.",
         top=0.84,
     )
-    fig.savefig(path, dpi=150)
+    _save_figure(fig, path, dpi=150)
     plt.close(fig)
 
 
@@ -420,7 +432,7 @@ def save_training_diagnostics_figure(
         "Loss including known IC, moving-front speed, mass balance, adaptive multipliers, and learned coefficients.",
         top=0.84,
     )
-    fig.savefig(path, dpi=150)
+    _save_figure(fig, path, dpi=150)
     plt.close(fig)
 
 
@@ -461,7 +473,7 @@ def save_residual_front_diagnostics_figure(
         ("front-speed error", maps["front_speed_error"], "magma", 0.0, None),
     ]
     fig, axes = plt.subplots(2, 4, figsize=(15.2, 7.4), constrained_layout=False)
-    fig.subplots_adjust(left=0.03, right=0.97, bottom=0.06, top=0.84, hspace=0.30, wspace=0.20)
+    fig.subplots_adjust(left=0.04, right=0.94, bottom=0.06, top=0.84, hspace=0.30, wspace=0.24)
     for ax, (title, field, cmap, vmin, vmax) in zip(axes.ravel(), panels):
         _imshow(fig, ax, field, domain, title=title, cmap=cmap, vmin=vmin, vmax=vmax, colorbar=True)
 
@@ -471,7 +483,7 @@ def save_residual_front_diagnostics_figure(
         f"Maps at t={time_value:.2f}; residual, active-front weights, and normal speed explain moving-front behavior.",
         top=0.84,
     )
-    fig.savefig(path, dpi=150)
+    _save_figure(fig, path, dpi=150)
     plt.close(fig)
 
 
@@ -499,8 +511,8 @@ def save_pinn_rk4_comparison_figure(
     pinn_error = np.abs(pinn_field - true_field)
     rk4_error = np.abs(rk4_field - true_field)
 
-    fig = plt.figure(figsize=(17.5, 7.6))
-    fig.subplots_adjust(left=0.035, right=0.975, bottom=0.07, top=0.84, hspace=0.34, wspace=0.36)
+    fig = plt.figure(figsize=(18.8, 7.6))
+    fig.subplots_adjust(left=0.045, right=0.93, bottom=0.07, top=0.84, hspace=0.34, wspace=0.42)
     axes = np.array(
         [
             [
@@ -574,7 +586,7 @@ def save_pinn_rk4_comparison_figure(
         f"Both methods solve the same 2D Fisher-KPP problem; maps and metrics are evaluated at t={time_value:.2f}.",
         top=0.84,
     )
-    fig.savefig(path, dpi=150)
+    _save_figure(fig, path, dpi=150)
     plt.close(fig)
 
 
@@ -616,8 +628,8 @@ def save_pinn_evolution_gif(
         frame_relative_l2.append(rel)
         frames.append((float(time_value), true_field, pred, signed, err, rel))
 
-    fig, axes = plt.subplots(1, 4, figsize=(14.0, 4.0), constrained_layout=False)
-    fig.subplots_adjust(left=0.030, right=0.985, bottom=0.13, top=0.76, wspace=0.16)
+    fig, axes = plt.subplots(1, 4, figsize=(15.8, 4.0), constrained_layout=False)
+    fig.subplots_adjust(left=0.035, right=0.925, bottom=0.13, top=0.76, wspace=0.24)
     panels = [
         ("reference truth", frames[0][1], "magma", 0.0, 1.0),
         ("PINN prediction", frames[0][2], "magma", 0.0, 1.0),
@@ -640,8 +652,8 @@ def save_pinn_evolution_gif(
         ax.set_xticks([])
         ax.set_yticks([])
         images.append(im)
-    fig.colorbar(images[2], ax=axes[2], fraction=0.046, pad=0.02)
-    fig.colorbar(images[3], ax=axes[3], fraction=0.046, pad=0.02)
+    _add_colorbar(fig, images[2], axes[2])
+    _add_colorbar(fig, images[3], axes[3])
     title = fig.text(
         0.01,
         0.965,
@@ -684,7 +696,7 @@ def save_pinn_evolution_gif(
         return [*images, title]
 
     animation = FuncAnimation(fig, _update, frames=len(frames), interval=1000 / max(fps, 1), blit=True)
-    animation.save(path, writer=PillowWriter(fps=fps))
+    animation.save(path, writer=PillowWriter(fps=fps), savefig_kwargs={"pad_inches": 0.12})
     plt.close(fig)
     return {
         "path": str(path),
@@ -722,7 +734,7 @@ def save_observation_coverage_figure(
     all_times = np.concatenate([train_observations.xyt[:, 2], validation_observations.xyt[:, 2]])
 
     fig, axes = plt.subplots(1, 3, figsize=(13.5, 3.9), constrained_layout=False)
-    fig.subplots_adjust(left=0.055, right=0.985, bottom=0.13, top=0.78, wspace=0.28)
+    fig.subplots_adjust(left=0.065, right=0.94, bottom=0.13, top=0.78, wspace=0.34)
     sc = axes[0].scatter(
         train_xyt[:, 0],
         train_xyt[:, 1],
@@ -738,7 +750,7 @@ def save_observation_coverage_figure(
     axes[0].set_ylim(0.0, domain.box)
     axes[0].set_aspect("equal")
     axes[0].set_title("train samples", fontsize=9)
-    fig.colorbar(sc, ax=axes[0], fraction=0.046, pad=0.02)
+    _add_colorbar(fig, sc, axes[0])
 
     if len(val_xyt):
         axes[1].scatter(val_xyt[:, 0], val_xyt[:, 1], c=val_values, s=10, cmap="magma", vmin=0.0, vmax=1.0, alpha=0.75, linewidths=0.0)
@@ -764,7 +776,7 @@ def save_observation_coverage_figure(
         "Spatial samples are colored by normalized infection density; histogram shows train/validation time support.",
         top=0.78,
     )
-    fig.savefig(path, dpi=150)
+    _save_figure(fig, path, dpi=150)
     plt.close(fig)
 
 
