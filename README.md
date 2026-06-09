@@ -110,6 +110,20 @@ Run the Korea pine-wilt 2D Fisher-KPP RK4 baseline:
 python scripts\run_korea_pine_wilt_simulation.py --output-dir runs\korea_pine_wilt_csv_simulation
 ```
 
+To compare spread before large-scale cutting/control actions, use the raw CSV
+`조사일자` and `방제완료여부` columns instead of the compact yearly axis:
+
+```bash
+python scripts\run_korea_pine_wilt_simulation.py --time-axis pre_action_month --raw-csv-dir C:\path\to\korea-pine-wilt-pinn-main\Data --output-dir runs\korea_pine_wilt_pre_action
+```
+
+The default action proxy is the first date when cumulative infected and completed
+records exceed 50,000. On the provided raw bundle this is `2016-10-02`, so the default
+pre-action comparison uses monthly observations from `2016-01` through `2016-09`.
+All three panels, observed/RK4/PINN, are then evaluated on the same monthly elapsed-year
+time grid before that large-scale action proxy. Use `--action-threshold`,
+`--action-cutoff-date`, and `--include-action-month` to change this definition.
+
 Outputs:
 
 - `korea_pine_wilt_metrics.csv`: observed-year relative L2, correlation, and mean-density

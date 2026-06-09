@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import ast
 import base64
+import csv
 import io
 import json
 import re
@@ -34,12 +35,17 @@ from fisher_origin_lab.curve_trend import (
 )
 from fisher_origin_lab.korea_data import (
     build_density_grid,
+    compare_observed_and_simulated,
+    estimate_korea_action_start,
     fit_korea_pine_wilt_pinn,
+    korea_grid_time_values,
     korea_physics_prior_from_normalized,
     korea_physics_prior_from_physical,
+    load_korea_pine_wilt_action_time_points,
     load_korea_pine_wilt_points,
     load_manifest,
     simulate_density_rk4,
+    simulate_density_rk4_at_times,
 )
 from fisher_origin_lab.losses import (
     ablowitz_zeppetella_dirichlet_loss,
@@ -522,6 +528,54 @@ def test_korea_pine_wilt_compact_dataset_and_rk4_smoke(tmp_path) -> None:
     assert (tmp_path / "korea_map_baselines_preview.png").exists()
     assert gif_info["frames"] == 2
     assert gif_info["panels"] == ["observed", "rk4", "pinn"]
+
+
+def test_korea_action_time_points_and_rk4_smoke(tmp_path) -> None:
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    csv_path = raw_dir / "병해충발생정보관리_2016.csv"
+    rows = [
+        ["5420000", "1000", "2000", "A", "1", "1", "30", "피해고사목", "감염목", "2016-01-05", "완료"],
+        ["5420000", "1050", "2050", "A", "1", "1", "30", "피해고사목", "감염목", "2016-02-05", "완료"],
+        ["5420000", "1100", "2100", "A", "1", "1", "30", "피해고사목", "감염목", "2016-03-05", "완료"],
+        ["5420000", "1150", "2150", "A", "1", "1", "30", "피해고사목", "감염목", "2016-04-05", "완료"],
+    ]
+    with csv_path.open("w", encoding="cp949", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["발생관리기관코드", "지역X좌표", "지역Y좌표", "국가지점번호", "PNU코드", "법정동코드", "발생경급수치", "고사목구분", "감염목구분", "조사일자", "방제완료여부"])
+        writer.writerows(rows)
+
+    action = estimate_korea_action_start(raw_dir, cumulative_infected_complete_threshold=3)
+    assert action["large_scale_action_start_date"] == "2016-03-05"
+    action_data = load_korea_pine_wilt_action_time_points(raw_dir, cumulative_infected_complete_threshold=3)
+    assert action_data.time_labels == ("2016-01", "2016-02")
+    assert action_data.metadata["kept_records"] == 2
+    grid = build_density_grid(
+        action_data.points,
+        years=action_data.period_ids,
+        grid_size=12,
+        pad_m=10.0,
+        smooth_passes=0,
+        enforce_land_mask=False,
+        time_values=action_data.time_values,
+        time_labels=action_data.time_labels,
+        time_unit="pre_action_month",
+        action_metadata=action_data.metadata,
+    )
+    assert np.allclose(korea_grid_time_values(grid), [0.0, 1.0 / 12.0])
+    sim_ids, sim_fields = simulate_density_rk4_at_times(
+        grid.density[0],
+        output_ids=grid.years,
+        output_times=korea_grid_time_values(grid),
+        diffusion=1.0e-4,
+        reaction=0.1,
+        steps_per_year=12,
+    )
+    assert sim_ids.tolist() == [0, 1]
+    assert sim_fields.shape[0] == 2
+    rows_out = compare_observed_and_simulated(grid, sim_ids, sim_fields)
+    assert rows_out[0]["time_label"] == "2016-01"
+    assert rows_out[1]["elapsed_years"] == 1.0 / 12.0
 
 
 def test_geo_spectral_forward_profile_extends_korea_setup() -> None:

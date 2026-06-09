@@ -20,12 +20,16 @@ from fisher_origin_lab.korea_data import (
     build_density_grid,
     compare_observed_and_simulated,
     fit_korea_pine_wilt_pinn,
+    korea_grid_time_label,
+    korea_grid_time_values,
     korea_equivalent_dr_pairs,
     korea_physics_prior_from_normalized,
     korea_physics_prior_from_physical,
+    load_korea_pine_wilt_action_time_points,
     load_korea_pine_wilt_points,
     load_manifest,
     simulate_density_rk4,
+    simulate_density_rk4_at_times,
 )
 
 
@@ -34,6 +38,10 @@ PROVINCE_GEOJSON = ROOT / "data" / "korea_pine_wilt" / "assets" / "skorea_provin
 
 def _format_year_title(year: int, suffix: str = "") -> str:
     return f"{year}{suffix}"
+
+
+def _format_grid_time_title(grid, period: int, suffix: str = "") -> str:
+    return korea_grid_time_label(grid, int(period), suffix)
 
 
 def _save_figure_with_padding(fig: plt.Figure, path: Path, *, dpi: int = 180) -> None:
@@ -223,7 +231,7 @@ def _save_korea_map_baseline_gif(
         rk4 = _field_for_year(year, sim_years, sim_fields)
         last_mesh = _draw_map_field_panel(
             axes_arr[0],
-            title=f"{year} observed",
+            title=f"{_format_grid_time_title(grid, year)} observed",
             field=observed,
             lon_edges=lon_edges,
             lat_edges=lat_edges,
@@ -234,7 +242,7 @@ def _save_korea_map_baseline_gif(
         )
         last_mesh = _draw_map_field_panel(
             axes_arr[1],
-            title=f"{year} RK4",
+            title=f"{_format_grid_time_title(grid, year)} RK4",
             field=rk4,
             lon_edges=lon_edges,
             lat_edges=lat_edges,
@@ -247,7 +255,7 @@ def _save_korea_map_baseline_gif(
             pinn = _field_for_year(year, pinn_years, pinn_fields)  # type: ignore[arg-type]
             last_mesh = _draw_map_field_panel(
                 axes_arr[2],
-                title=f"{year} PINN",
+                title=f"{_format_grid_time_title(grid, year)} PINN",
                 field=pinn,
                 lon_edges=lon_edges,
                 lat_edges=lat_edges,
@@ -298,7 +306,7 @@ def _save_korea_error_gif(
     fps: float = 1.2,
     max_frames: int | None = None,
 ) -> dict[str, object]:
-    """Save observed-year RK4/PINN absolute-error maps as an animated Korea GIF."""
+    """Save observed-period RK4/PINN absolute-error maps as an animated Korea GIF."""
 
     path.parent.mkdir(parents=True, exist_ok=True)
     province_geojson = _load_korea_province_geojson()
@@ -346,7 +354,7 @@ def _save_korea_error_gif(
         rk4_error = None if observed is None or rk4 is None else np.abs(np.asarray(rk4) - np.asarray(observed))
         last_mesh = _draw_map_field_panel(
             axes_arr[0],
-            title=f"{year} observed",
+            title=f"{_format_grid_time_title(grid, year)} observed",
             field=observed,
             lon_edges=lon_edges,
             lat_edges=lat_edges,
@@ -357,7 +365,7 @@ def _save_korea_error_gif(
         )
         last_mesh = _draw_map_field_panel(
             axes_arr[1],
-            title=f"{year} RK4 |error|",
+            title=f"{_format_grid_time_title(grid, year)} RK4 |error|",
             field=rk4_error,
             lon_edges=lon_edges,
             lat_edges=lat_edges,
@@ -371,7 +379,7 @@ def _save_korea_error_gif(
             pinn_error = None if observed is None or pinn is None else np.abs(np.asarray(pinn) - np.asarray(observed))
             last_mesh = _draw_map_field_panel(
                 axes_arr[2],
-                title=f"{year} PINN |error|",
+                title=f"{_format_grid_time_title(grid, year)} PINN |error|",
                 field=pinn_error,
                 lon_edges=lon_edges,
                 lat_edges=lat_edges,
@@ -384,7 +392,7 @@ def _save_korea_error_gif(
             cbar = fig.colorbar(last_mesh, ax=axes_arr, orientation="horizontal", shrink=0.72, pad=0.04)
             cbar.set_label("absolute normalized-density error", fontsize=9)
             cbar.ax.tick_params(labelsize=8)
-        fig.suptitle("Korea pine-wilt observed-year absolute error", fontsize=14, fontweight="bold")
+        fig.suptitle("Korea pine-wilt observed-period absolute error", fontsize=14, fontweight="bold")
         buf = io.BytesIO()
         fig.savefig(buf, format="png", dpi=110, facecolor="white", bbox_inches="tight", pad_inches=0.10)
         plt.close(fig)
@@ -426,7 +434,7 @@ def _save_observed_density_figure(path: Path, grid) -> None:
             vmax=vmax,
             interpolation="nearest",
         )
-        ax.set_title(_format_year_title(int(year)))
+        ax.set_title(_format_grid_time_title(grid, int(year)))
         ax.set_xticks([])
         ax.set_yticks([])
     for ax in axes_arr[n_years:]:
@@ -439,9 +447,13 @@ def _save_observed_density_figure(path: Path, grid) -> None:
 
 
 def _save_forecast_figure(path: Path, grid, sim_years: np.ndarray, sim_fields: np.ndarray) -> None:
-    target_years = [2016, 2018, 2020, 2023, 2025, 2027, int(sim_years[-1])]
-    seen: set[int] = set()
-    target_years = [year for year in target_years if year in set(sim_years.tolist()) and not (year in seen or seen.add(year))]
+    if getattr(grid, "time_unit", "year") == "year":
+        target_years = [2016, 2018, 2020, 2023, 2025, 2027, int(sim_years[-1])]
+        seen: set[int] = set()
+        target_years = [year for year in target_years if year in set(sim_years.tolist()) and not (year in seen or seen.add(year))]
+    else:
+        idx = np.unique(np.linspace(0, len(sim_years) - 1, min(8, len(sim_years)), dtype=int))
+        target_years = [int(sim_years[item]) for item in idx]
     cols = min(4, len(target_years))
     rows = int(np.ceil(len(target_years) / cols))
     fig, axes = plt.subplots(rows, cols, figsize=(3.4 * cols, 3.1 * rows), constrained_layout=True)
@@ -462,21 +474,25 @@ def _save_forecast_figure(path: Path, grid, sim_years: np.ndarray, sim_fields: n
             interpolation="nearest",
         )
         suffix = " observed span" if year <= int(grid.years[-1]) else " forecast"
-        ax.set_title(_format_year_title(year, suffix))
+        ax.set_title(_format_grid_time_title(grid, year, suffix))
         ax.set_xticks([])
         ax.set_yticks([])
     for ax in axes_arr[len(target_years):]:
         ax.axis("off")
     if last_image is not None:
         _add_vertical_colorbar(fig, last_image, axes_arr[: len(target_years)], shrink=0.82).set_label("normalized density")
-    fig.suptitle("2D Fisher-KPP RK4 simulation from 2016 observed density", fontsize=13)
+    fig.suptitle("2D Fisher-KPP RK4 simulation from initial observed density", fontsize=13)
     _save_figure_with_padding(fig, path, dpi=180)
     plt.close(fig)
 
 
 def _save_pinn_baseline_figure(path: Path, grid, pinn_years: np.ndarray, pinn_fields: np.ndarray) -> None:
-    selected_years = [2016, 2018, 2020, 2023]
-    selected_years = [year for year in selected_years if year in set(grid.years.tolist())]
+    if getattr(grid, "time_unit", "year") == "year":
+        selected_years = [2016, 2018, 2020, 2023]
+        selected_years = [year for year in selected_years if year in set(grid.years.tolist())]
+    else:
+        idx = np.unique(np.linspace(0, len(grid.years) - 1, min(4, len(grid.years)), dtype=int))
+        selected_years = [int(grid.years[item]) for item in idx]
     fig, axes = plt.subplots(len(selected_years), 3, figsize=(10.8, 2.6 * len(selected_years)), constrained_layout=True)
     axes_arr = np.atleast_2d(axes)
     extent = [grid.x_edges[0], grid.x_edges[-1], grid.y_edges[0], grid.y_edges[-1]]
@@ -493,9 +509,9 @@ def _save_pinn_baseline_figure(path: Path, grid, pinn_years: np.ndarray, pinn_fi
         pred = pinn_fields[year_to_pinn[year]]
         err = np.abs(pred - obs)
         panels = [
-            (f"{year} observed", obs, "magma", 0.0, vmax),
-            (f"{year} PINN", pred, "magma", 0.0, vmax),
-            (f"{year} |error|", err, "viridis", 0.0, err_vmax),
+            (f"{_format_grid_time_title(grid, year)} observed", obs, "magma", 0.0, vmax),
+            (f"{_format_grid_time_title(grid, year)} PINN", pred, "magma", 0.0, vmax),
+            (f"{_format_grid_time_title(grid, year)} |error|", err, "viridis", 0.0, err_vmax),
         ]
         for col, (title, field, cmap, vmin, panel_vmax) in enumerate(panels):
             ax = axes_arr[row, col]
@@ -528,13 +544,13 @@ def _save_baseline_comparison_figure(path: Path, rows: list[dict[str, float | in
         corr = np.asarray([row["correlation"] for row in method_rows], dtype=float)
         axes[0].plot(years, rel_l2, marker="o", label=method)
         axes[1].plot(years, corr, marker="o", label=method)
-    axes[0].set_title("Observed-year relative L2")
-    axes[0].set_xlabel("Year")
+    axes[0].set_title("Observed-period relative L2")
+    axes[0].set_xlabel("Time id")
     axes[0].set_ylabel("relative L2")
     axes[0].grid(alpha=0.25)
     axes[0].legend()
-    axes[1].set_title("Observed-year spatial correlation")
-    axes[1].set_xlabel("Year")
+    axes[1].set_title("Observed-period spatial correlation")
+    axes[1].set_xlabel("Time id")
     axes[1].set_ylabel("correlation")
     axes[1].grid(alpha=0.25)
     axes[1].legend()
@@ -551,8 +567,8 @@ def _save_metric_figure(path: Path, rows: list[dict[str, float | int]]) -> None:
 
     fig, axes = plt.subplots(1, 2, figsize=(10.5, 4.0), constrained_layout=True)
     axes[0].plot(years, rel_l2, marker="o", label="relative L2")
-    axes[0].set_title("Observed-year field error")
-    axes[0].set_xlabel("Year")
+    axes[0].set_title("Observed-period field error")
+    axes[0].set_xlabel("Time id")
     axes[0].set_ylabel("relative L2")
     axes[0].grid(alpha=0.25)
     ax_corr = axes[0].twinx()
@@ -562,7 +578,7 @@ def _save_metric_figure(path: Path, rows: list[dict[str, float | int]]) -> None:
     axes[1].plot(years, obs_mean, marker="o", label="observed")
     axes[1].plot(years, sim_mean, marker="o", label="simulated")
     axes[1].set_title("Mean normalized density")
-    axes[1].set_xlabel("Year")
+    axes[1].set_xlabel("Time id")
     axes[1].set_ylabel("mean density")
     axes[1].grid(alpha=0.25)
     axes[1].legend()
@@ -632,7 +648,7 @@ def _mean_metric(rows: list[dict[str, float | int | str]], key: str) -> float | 
 
 
 def _method_summary(rows: list[dict[str, float | int | str]]) -> dict[str, float | None]:
-    return {
+    summary = {
         "mean_relative_l2_observed_years": _mean_metric(rows, "relative_l2"),
         "mean_correlation_observed_years": _mean_metric(rows, "correlation"),
         "mean_mass_absolute_error": _mean_metric(rows, "mass_absolute_error"),
@@ -646,6 +662,9 @@ def _method_summary(rows: list[dict[str, float | int | str]]) -> dict[str, float
         "mean_support_tversky_005": _mean_metric(rows, "support_tversky_005"),
         "mean_support_tversky_010": _mean_metric(rows, "support_tversky_010"),
     }
+    summary["mean_relative_l2_observed_periods"] = summary["mean_relative_l2_observed_years"]
+    summary["mean_correlation_observed_periods"] = summary["mean_correlation_observed_years"]
+    return summary
 
 
 def run(args: argparse.Namespace) -> dict[str, object]:
@@ -653,14 +672,40 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     manifest = load_manifest()
-    points = load_korea_pine_wilt_points()
-    grid = build_density_grid(
-        points,
-        grid_size=args.grid_size,
-        pad_m=args.pad_m,
-        capacity_percentile=args.capacity_percentile,
-        smooth_passes=args.smooth_passes,
-    )
+    time_axis = str(getattr(args, "time_axis", "year")).lower()
+    action_data = None
+    if time_axis == "year":
+        points = load_korea_pine_wilt_points()
+        grid = build_density_grid(
+            points,
+            grid_size=args.grid_size,
+            pad_m=args.pad_m,
+            capacity_percentile=args.capacity_percentile,
+            smooth_passes=args.smooth_passes,
+        )
+    elif time_axis == "pre_action_month":
+        action_data = load_korea_pine_wilt_action_time_points(
+            getattr(args, "raw_csv_dir", None),
+            action_cutoff_date=getattr(args, "action_cutoff_date", None),
+            cumulative_infected_complete_threshold=int(getattr(args, "action_threshold", 50_000)),
+            include_action_month=bool(getattr(args, "include_action_month", False)),
+            raw_crs=str(getattr(args, "raw_crs", "EPSG:5181")),
+        )
+        points = action_data.points
+        grid = build_density_grid(
+            points,
+            years=action_data.period_ids,
+            grid_size=args.grid_size,
+            pad_m=args.pad_m,
+            capacity_percentile=args.capacity_percentile,
+            smooth_passes=args.smooth_passes,
+            time_values=action_data.time_values,
+            time_labels=action_data.time_labels,
+            time_unit="pre_action_month",
+            action_metadata=action_data.metadata,
+        )
+    else:
+        raise ValueError("time_axis must be either 'year' or 'pre_action_month'.")
     parameterization = str(getattr(args, "parameterization", "physical")).lower()
     length_scale_mode = str(getattr(args, "physics_length_scale", "max_extent"))
     if parameterization == "physical":
@@ -686,16 +731,28 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     pinn_initial_reaction = getattr(args, "pinn_initial_reaction", None)
     if pinn_initial_reaction is None:
         pinn_initial_reaction = reaction
-    sim_years, sim_fields = simulate_density_rk4(
-        grid.density[0],
-        start_year=int(grid.years[0]),
-        end_year=args.end_year,
-        diffusion=physics_prior.normalized_diffusion_x,
-        diffusion_y=physics_prior.normalized_diffusion_y,
-        reaction=reaction,
-        steps_per_year=args.steps_per_year,
-        land_mask=grid.land_mask,
-    )
+    if time_axis == "year":
+        sim_years, sim_fields = simulate_density_rk4(
+            grid.density[0],
+            start_year=int(grid.years[0]),
+            end_year=args.end_year,
+            diffusion=physics_prior.normalized_diffusion_x,
+            diffusion_y=physics_prior.normalized_diffusion_y,
+            reaction=reaction,
+            steps_per_year=args.steps_per_year,
+            land_mask=grid.land_mask,
+        )
+    else:
+        sim_years, sim_fields = simulate_density_rk4_at_times(
+            grid.density[0],
+            output_ids=grid.years,
+            output_times=korea_grid_time_values(grid),
+            diffusion=physics_prior.normalized_diffusion_x,
+            diffusion_y=physics_prior.normalized_diffusion_y,
+            reaction=reaction,
+            steps_per_year=args.steps_per_year,
+            land_mask=grid.land_mask,
+        )
     rows = compare_observed_and_simulated(grid, sim_years, sim_fields)
     baseline_rows: list[dict[str, float | int | str]] = [dict(method="rk4", **row) for row in rows]
 
@@ -704,6 +761,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         pinn_result = fit_korea_pine_wilt_pinn(
             grid,
             end_year=args.end_year,
+            end_time_years=None if time_axis == "year" else float(korea_grid_time_values(grid)[-1]),
             epochs=getattr(args, "pinn_epochs", 120),
             batch_size=getattr(args, "pinn_batch_size", 4096),
             collocation_points=getattr(args, "pinn_collocation_points", 768),
@@ -752,12 +810,18 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     )
     field_payload = {
         "observed_years": grid.years,
+        "observed_time_values": korea_grid_time_values(grid),
         "observed_fields": grid.density,
         "rk4_years": sim_years,
+        "rk4_time_values": korea_grid_time_values(grid) if time_axis != "year" else sim_years.astype(float) - float(sim_years[0]),
         "rk4_fields": sim_fields,
     }
+    if grid.time_labels is not None:
+        field_payload["observed_time_labels"] = np.asarray(grid.time_labels)
+        field_payload["rk4_time_labels"] = np.asarray(grid.time_labels)
     if pinn_result is not None:
         field_payload["pinn_years"] = pinn_result.years
+        field_payload["pinn_time_values"] = korea_grid_time_values(grid) if time_axis != "year" else pinn_result.years.astype(float) - float(pinn_result.years[0])
         field_payload["pinn_fields"] = pinn_result.fields
     np.savez_compressed(out_dir / "korea_pine_wilt_fields.npz", **field_payload)
     if pinn_result is not None:
@@ -767,10 +831,12 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     pinn_rows = [row for row in baseline_rows if row["method"] == "pinn"]
     baseline_protocol = {
         "methods": ["rk4"] + (["pinn"] if pinn_result is not None else []),
-        "initial_condition": "observed_density_2016",
+        "initial_condition": "first_observed_density",
         "same_initial_density": True,
-        "same_observed_year_metrics": True,
+        "same_observed_period_metrics": True,
         "grid_size": int(args.grid_size),
+        "time_axis": time_axis,
+        "time_unit": grid.time_unit,
         "land_mask_enabled": grid.land_mask is not None,
         "sea_cells_forced_zero": grid.land_mask is not None,
         "parameterization": parameterization,
@@ -783,12 +849,20 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         "reaction_per_year": float(physics_prior.reaction_per_year),
         "steps_per_year": int(args.steps_per_year),
         "end_year": int(args.end_year),
+        "end_elapsed_years": float(korea_grid_time_values(grid)[-1]) if time_axis != "year" else float(int(args.end_year) - int(grid.years[0])),
     }
     summary = {
         "dataset": manifest["dataset"],
         "records": int(len(points.year)),
-        "year_min": int(points.year.min()),
-        "year_max": int(points.year.max()),
+        "time_axis": time_axis,
+        "time_unit": grid.time_unit,
+        "time_labels": list(grid.time_labels) if grid.time_labels is not None else None,
+        "elapsed_years": korea_grid_time_values(grid).tolist(),
+        "year_min": int(points.year.min()) if time_axis == "year" else None,
+        "year_max": int(points.year.max()) if time_axis == "year" else None,
+        "period_min": int(points.year.min()),
+        "period_max": int(points.year.max()),
+        "action_metadata": grid.action_metadata,
         "grid_size": int(args.grid_size),
         "capacity": float(grid.capacity),
         "land_mask": {
@@ -819,6 +893,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         "front_speed_km_per_year": float(physics_prior.front_speed_km_per_year),
         "steps_per_year": int(args.steps_per_year),
         "end_year": int(args.end_year),
+        "end_elapsed_years": float(korea_grid_time_values(grid)[-1]) if time_axis != "year" else float(int(args.end_year) - int(grid.years[0])),
         "mean_relative_l2_observed_years": rk4_summary["mean_relative_l2_observed_years"],
         "mean_correlation_observed_years": rk4_summary["mean_correlation_observed_years"],
         "baselines": {
@@ -876,6 +951,12 @@ def main() -> None:
     parser.add_argument("--pad-m", type=float, default=15_000.0)
     parser.add_argument("--capacity-percentile", type=float, default=99.0)
     parser.add_argument("--smooth-passes", type=int, default=1)
+    parser.add_argument("--time-axis", choices=["year", "pre_action_month"], default="year")
+    parser.add_argument("--raw-csv-dir", type=Path, default=None, help="Original KFS annual CSV directory used by --time-axis pre_action_month.")
+    parser.add_argument("--raw-crs", default="EPSG:5181", help="CRS of original KFS raw CSV x/y coordinates before conversion to EPSG:5179.")
+    parser.add_argument("--action-threshold", type=int, default=50_000, help="Cumulative infected/completed records used to infer large-scale action start.")
+    parser.add_argument("--action-cutoff-date", default=None, help="Override large-scale action cutoff date, e.g. 2016-10-02.")
+    parser.add_argument("--include-action-month", action="store_true", help="Include the cutoff month in the pre-action monthly comparison.")
     parser.add_argument("--parameterization", choices=["physical", "normalized"], default="physical")
     parser.add_argument("--physics-length-scale", choices=["max_extent", "mean_extent", "geometric_mean_extent", "x_extent", "y_extent"], default="max_extent")
     parser.add_argument("--diffusion-km2-per-year", type=float, default=15.5)
