@@ -20,7 +20,8 @@ simulation.
 ## Method
 
 Detailed method explanation, literature rationale, observations, and interpretation are
-maintained in `docs/fisher_kpp_pinn_review_response.docx`.
+maintained in `docs/fisher_kpp_pinn_and_korea_pinn_technical_note.docx` and
+`docs/fisher_kpp_rk4_pde_technical_note.docx`.
 
 ## Figure Preview Gallery
 
@@ -33,10 +34,9 @@ docs/figure_previews/README.md
 ```
 
 The gallery includes RK4 1D/2D demos, long-time explicit/implicit integrator comparisons,
-the damped long-time curve benchmark, Geo-Spectral PINN diagnostic figures, Korea
-pine-wilt land-mask visualizations, GIF previews, and ablation summaries. The PINN and
-Korea figures in that gallery are smoke/diagnostic previews generated with short runtimes;
-use the longer commands below for publication-grade metrics.
+the damped long-time curve benchmark, Geo-Spectral PINN figures, Korea pine-wilt
+land-mask visualizations, GIF previews, and ablation summaries. The Geo-Spectral PINN
+and Korea pine-wilt PINN figures are generated from full 1200-epoch runs.
 
 ## Install
 
@@ -144,10 +144,10 @@ Outputs:
 - `korea_pine_wilt_summary.json`: run configuration and aggregate metrics.
 
 The PINN baseline reuses this repository's PirateNet/Fourier/geo-feature PINN backbone
-and fits the yearly gridded Korea observations with a weak Fisher-KPP PDE residual. It is
-a diagnostic baseline, not a calibrated surveillance or intervention model. Use
-`--skip-pinn` to run only the RK4 baseline, or increase `--pinn-epochs` for a stronger
-PINN fit.
+and fits the yearly gridded Korea observations with a weak Fisher-KPP PDE residual,
+known-initial-condition loss, sea-exclusion penalty, and learned effective D/r
+coefficients. Use `--skip-pinn` to run only the RK4 baseline, or increase
+`--pinn-epochs` for a stronger PINN fit.
 
 For an interactive Colab/Jupyter workflow, open:
 
@@ -165,7 +165,8 @@ pine-wilt compatibility mode, but changes the model and training objective. Deta
 method rationale and observations are kept in:
 
 ```text
-docs/fisher_kpp_pinn_review_response.docx
+docs/fisher_kpp_pinn_and_korea_pinn_technical_note.docx
+docs/fisher_kpp_rk4_pde_technical_note.docx
 ```
 
 Run the profile with:
@@ -382,4 +383,5 @@ Outputs:
 ## References
 
 References and method rationale are maintained in
-`docs/fisher_kpp_pinn_review_response.docx`.
+`docs/fisher_kpp_pinn_and_korea_pinn_technical_note.docx` and
+`docs/fisher_kpp_rk4_pde_technical_note.docx`.

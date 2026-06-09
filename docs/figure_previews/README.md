@@ -1,9 +1,9 @@
 # Figure Previews
 
-These figures are committed previews from reproducible smoke/demo runs. They are
-intended to show what each code path produces before a user runs the notebooks or
-scripts locally. PINN previews are intentionally short diagnostic runs, not final
-paper-grade training results.
+These figures are committed previews from reproducible script runs. They show what each
+code path produces before a user runs the notebooks or scripts locally. The
+Geo-Spectral PINN and Korea pine-wilt PINN previews were refreshed from full
+1200-epoch runs on 2026-06-09.
 
 ## RK4 1D And 2D Demos
 
@@ -41,6 +41,12 @@ paper-grade training results.
 
 ## Geo-Spectral PINN Diagnostic Preview
 
+Run source: `python scripts\run_inverse_origin.py --geo-spectral-forward --epochs 1200 --ensemble 1 --run-classical-baseline --out-dir runs\figure_update_full_geo_spectral_forward`.
+The refreshed run produced `pinn_final_time_relative_l2 = 0.9769`,
+`pinn_final_time_max_abs_error = 0.1955`, `rk4_final_time_relative_l2 = 0.00147`,
+`validation_observation_mse = 0.00578`, `front_area_010_mae = 0.01587`, and
+`mass_mae = 0.00437`.
+
 ![PINN observation coverage](pinn_observation_coverage.png)
 
 ![PINN reconstruction](pinn_reconstruction.png)
@@ -57,6 +63,11 @@ paper-grade training results.
 
 ## Korea Pine-Wilt Preview
 
+Run source: `python scripts\run_korea_pine_wilt_simulation.py --output-dir runs\figure_update_korea_pine_wilt_full --pinn-epochs 1200`.
+The refreshed run used grid size 96, 80 RK4 steps/year, and full 1200-epoch PINN
+training. It produced PINN mean observed-year relative L2 `0.6883` and RK4 mean
+observed-year relative L2 `2.5024` under the committed land-mask Fisher-KPP setup.
+
 ![Korea observed density by year](korea_observed_density_by_year.png)
 
 ![Korea RK4 forecast timeline](korea_rk4_forecast_timeline.png)
@@ -70,6 +81,10 @@ paper-grade training results.
 ![Korea map baseline preview](korea_map_baselines_preview.png)
 
 ![Korea map baseline GIF](korea_map_baselines.gif)
+
+![Korea error baseline preview](korea_error_baselines_preview.png)
+
+![Korea error baseline GIF](korea_error_baselines.gif)
 
 ## Ablation Summaries
 
