@@ -32,9 +32,9 @@ from fisher_kpp_rk4.config import (
     Nt,
     T,
     ablowitz_zeppetella_exact,
-    ablowitz_zeppetella_exact_2d,
     c,
     dt,
+    generalized_fisher_kpp_exact_2d,
     left_bc,
     LONG_TIME_D,
     LONG_TIME_DT,
@@ -117,7 +117,7 @@ def test_2d_rk4_shapes_bounds_and_front_areas() -> None:
     assert result["mass"].shape == result["times"].shape
 
 
-def test_ablowitz_zeppetella_2d_rk4_matches_exact_solution() -> None:
+def test_generalized_fisher_kpp_2d_rk4_matches_exact_solution() -> None:
     result = solve_rk4_2d(
         x=x_2d,
         y=y_2d,
@@ -128,7 +128,7 @@ def test_ablowitz_zeppetella_2d_rk4_matches_exact_solution() -> None:
         initial_condition=initial_condition_2d,
         save_interval=0.5,
         boundary_condition="dirichlet_exact",
-        exact_solution=ablowitz_zeppetella_exact_2d,
+        exact_solution=generalized_fisher_kpp_exact_2d,
     )
     assert float(result["relative_l2_final"]) < 3.0e-3
 

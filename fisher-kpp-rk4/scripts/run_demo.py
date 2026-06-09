@@ -23,11 +23,11 @@ from fisher_kpp_rk4.config import (
     T,
     T_2D,
     ablowitz_zeppetella_exact,
-    ablowitz_zeppetella_exact_2d,
     dt,
     dt_2d,
     dx,
     dx_2d,
+    generalized_fisher_kpp_exact_2d,
     initial_condition,
     initial_condition_2d,
     left_bc,
@@ -73,7 +73,7 @@ def run_1d() -> dict[str, np.ndarray]:
 
 def run_2d() -> dict[str, np.ndarray]:
     info = check_rk4_stability(dx=dx_2d, dt=dt_2d, D=D_2D, r=r_2D, dim=2)
-    print("\n=== 2D Fisher-KPP RK4 ===")
+    print("\n=== 2D generalized Fisher-KPP exact-wave RK4 ===")
     print(f"D={D_2D}, r={r_2D}, box={BOX_2D}, T={T_2D}")
     print(f"grid={GRID_2D}x{GRID_2D}, dx={dx_2d:.6g}, Nt={Nt_2d}, dt={dt_2d:.6g}")
     print(f"Practical dt safe? {info['is_practically_safe']} (limit={info['dt_practical']:.6g})")
@@ -88,7 +88,7 @@ def run_2d() -> dict[str, np.ndarray]:
         initial_condition=initial_condition_2d,
         save_interval=0.05,
         boundary_condition="dirichlet_exact",
-        exact_solution=ablowitz_zeppetella_exact_2d,
+        exact_solution=generalized_fisher_kpp_exact_2d,
     )
     print(f"Final mean mass = {result['mass'][-1]:.6g}")
     print(f"Final area u>=0.05 = {result['area_ge_0.05'][-1]:.6g}")
@@ -140,13 +140,13 @@ def save_plots(result_1d: dict[str, np.ndarray], result_2d: dict[str, np.ndarray
             extent=[result_2d["x"][0], result_2d["x"][-1], result_2d["y"][0], result_2d["y"][-1]],
             vmin=0.0,
             vmax=1.0,
-            cmap="magma",
+            cmap="cividis",
         )
         ax.set_title(f"t={times[idx]:.2f}")
         ax.set_xlabel("x")
         ax.set_ylabel("y")
     fig.colorbar(im, ax=axes, shrink=0.82)
-    fig.suptitle("2D Fisher-KPP RK4 snapshots")
+    fig.suptitle("2D generalized Fisher-KPP exact-wave RK4 snapshots")
     fig.savefig(OUTPUT_DIR / "snapshots_2d.png", dpi=200)
     plt.close(fig)
 

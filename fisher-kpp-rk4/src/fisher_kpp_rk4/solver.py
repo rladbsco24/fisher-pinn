@@ -646,7 +646,7 @@ def solve_rk4_2d(
     boundary_condition: str = "neumann",
     exact_solution=None,
 ) -> dict[str, np.ndarray]:
-    """Solve the 2D Fisher-KPP equation with no-flux boundaries."""
+    """Solve the 2D Fisher-KPP equation with no-flux or exact Dirichlet boundaries."""
     x = np.asarray(x, dtype=np.float64)
     y = np.asarray(y, dtype=np.float64)
     if x.ndim != 1 or y.ndim != 1 or len(x) != len(y):

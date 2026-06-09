@@ -38,9 +38,12 @@ def right_bc(t: float) -> float:
     return float(ablowitz_zeppetella_exact(np.asarray([x_right]), t)[0])
 
 
-# 2D exact ridge setup: u(x,y,t)=u_AZ(x,t), so u_yy=0 --------------------------
+# 2D generalized Fisher-KPP exact traveling-front setup ------------------------
 D_2D = 1.0
 r_2D = 1.0
+P_2D = 1.0
+PHI_2D = np.pi / 4.0
+C_2D = 0.0
 L_2D = 30.0
 BOX_2D = L_2D
 x_left_2d = -15.0
@@ -57,12 +60,33 @@ dt_2d = T_2D / TRUTH_STEPS_2D
 Nt_2d = TRUTH_STEPS_2D
 
 
+def generalized_fisher_kpp_exact_2d(
+    x: np.ndarray,
+    y: np.ndarray,
+    t: float | np.ndarray,
+    *,
+    p: float = P_2D,
+    phi: float = PHI_2D,
+    c0: float = C_2D,
+) -> np.ndarray:
+    if p <= 0.0:
+        raise ValueError("p must be positive for the generalized Fisher-KPP exact solution.")
+    x_arr = np.asarray(x, dtype=np.float64)
+    y_arr = np.asarray(y, dtype=np.float64)
+    t_arr = np.asarray(t, dtype=np.float64)
+    spatial = x_arr * np.sin(phi) + y_arr * np.cos(phi)
+    psi = (p / (2.0 * np.sqrt(2.0 * p + 4.0))) * spatial
+    psi = psi + (p * (p + 4.0) / (4.0 * (p + 2.0))) * t_arr + c0
+    base = 0.5 * np.tanh(psi) + 0.5
+    return np.power(np.clip(base, 0.0, 1.0), 2.0 / p)
+
+
 def initial_condition_2d(x: np.ndarray, y: np.ndarray) -> np.ndarray:
-    return ablowitz_zeppetella_exact(x, 0.0)
+    return generalized_fisher_kpp_exact_2d(x, y, 0.0)
 
 
 def ablowitz_zeppetella_exact_2d(x: np.ndarray, y: np.ndarray, t: float | np.ndarray) -> np.ndarray:
-    return ablowitz_zeppetella_exact(x, t)
+    return generalized_fisher_kpp_exact_2d(x, y, t)
 
 
 # Kept for compatibility with implicit solvers; RK4 does not use them.

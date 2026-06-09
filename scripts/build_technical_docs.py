@@ -354,63 +354,71 @@ PINN_REFERENCES = [
 ]
 
 
-RK4_PAGES: list[tuple[str, list[str], tuple[list[str], list[list[str]], list[float]] | None]] = [
+RK4_PAGES = [
     (
-        "1. PDE와 비교 기준",
+        "1. Fisher-KPP 검증 regime",
         [
-            "RK4와 PDE 수치해석 계열은 u_t = D Laplacian(u) + r u(1-u)를 기준 방정식으로 사용한다. 기본 synthetic 문제와 산림청 문제는 같은 Fisher-KPP family로 정리되며, 기본 문제에서는 Gaussian seed 또는 Ablowitz-Zeppetella travelling wave를 사용하고, 산림청 문제에서는 gridded observation density를 초기장으로 사용한다.",
-            "Ablowitz-Zeppetella 기준은 c = 5/sqrt(6)에서 명시적 travelling wave가 존재하므로, forward solver와 PINN이 front phase를 얼마나 따라가는지 확인하기 좋다. 1D 물리 좌표 x in [-20,20]은 단위 좌표로 변환되고, 따라서 코드상 diffusion은 D_norm = 1/40^2로 들어간다.",
-            "공정 비교는 같은 PDE, 같은 초기조건, 같은 final time, 같은 공간 grid, 같은 metric을 사용한다. RK4, explicit Euler, backward Euler, trapezoidal은 시간 적분법만 다르게 두고 나머지 조건을 고정한다. same-problem RK4는 현재 PINN 문제 설정과 동일한 초기장, 계수, boundary condition, 평가 지표를 사용한다.",
+            "본 RK4 모듈의 기본 검증 문제는 Fisher-KPP 반응-확산 방정식 u_t = D Δu + r u(1-u)이다. 이번 수정에서는 시간 적분법을 변경하지 않고, 검증 regime만 폐형식 travelling-wave 해가 존재하는 문제로 정렬하였다. 목적은 수치해가 정확해와 직접 비교될 수 있도록 초기조건, Dirichlet boundary condition, 최종 시간, 격자, 오차 지표를 모두 같은 해에서 유도하는 것이다.",
+            "1차원 기준 문제는 Ablowitz-Zeppetella travelling wave이다. 확산계수와 반응계수는 D = 1, r = 1로 두며, 특수 파속 c = 5/sqrt(6)에서 u(x,t) = {1 + exp[(x - c t - x0)/sqrt(6)]}^{-2}가 정확해가 된다. 계산 영역은 x in [-20, 20], 최종 시간은 T = 10, 기본 격자는 Nx = 201, 시간 간격은 dt = 0.005이다.",
+            "2차원 기준 문제는 generalized Fisher-KPP exact wave의 p = 1 경우이다. 방정식은 u_t = u_xx + u_yy + u(1-u)이고, phi = pi/4, C = 0을 두면 u(x,y,t) = [0.5 tanh((x+y)/(4 sqrt(3)) + 5t/12) + 0.5]^2가 정확해이다. 계산 영역은 x,y in [-15, 15], 최종 시간은 T = 3, 기본 격자는 61 x 61, 시간 간격은 dt = 0.01이다.",
+            "두 문제 모두 초기조건은 정확해의 t = 0 단면을 사용한다. 1D에서는 양 끝점 x = -L/2, x = L/2의 Dirichlet 값을 정확해에서 가져오고, 2D에서는 네 변 x = -L/2, x = L/2, y = -L/2, y = L/2의 Dirichlet 값을 같은 2D 정확해에서 가져온다. 따라서 경계 오차와 내부 시간 적분 오차를 분리하여 평가할 수 있다.",
         ],
         (
-            ["비교 요소", "고정 기준"],
+            ["항목", "1D 기준", "2D 기준"],
             [
-                ["PDE", "동일한 Fisher-KPP D, r, boundary condition"],
-                ["초기조건", "Gaussian seed, AZ exact profile, 또는 산림청 첫 관측 밀도"],
-                ["평가지표", "final L2, max abs error, front area, active-front, mass"],
+                ["PDE", "u_t = u_xx + u(1-u)", "u_t = u_xx + u_yy + u(1-u)"],
+                ["Exact solution", "Ablowitz-Zeppetella exponential wave", "Generalized Fisher-KPP tanh wave, p=1"],
+                ["Domain", "[-20, 20]", "[-15, 15] x [-15, 15]"],
+                ["Default grid/time", "Nx=201, T=10, dt=0.005", "61x61, T=3, dt=0.01"],
             ],
-            [1.55, 5.50],
+            [1.35, 2.95, 3.25],
         ),
     ),
     (
-        "2. RK4 구현과 안정성",
+        "2. 공간 이산화와 Dirichlet boundary",
         [
-            "RK4는 method-of-lines 방식이다. 먼저 공간 Laplacian을 finite difference로 이산화하고, resulting ODE system을 네 단계 Runge-Kutta로 적분한다. 기본 2D square 문제에서는 no-flux Neumann boundary를 edge padding으로 구현한다. AZ 2D 검증은 exact travelling-wave profile을 x 방향으로 반복하고 boundary에는 exact Dirichlet 값을 적용한다.",
-            "명시적 RK4도 확산 CFL 제약을 피할 수 없다. 현재 안정성 점검은 dt_diff_limit = 0.69 dx^2 / (dim D)와 reaction scale 1/r 중 작은 값을 safety factor와 비교한다. 산림청 masked RK4도 같은 취지로 dt가 diffusion/reaction practical limit을 넘으면 에러를 내며, land/sea 경계에서는 masked no-flux flux를 사용한다.",
-            "RK4는 정확한 초기장과 계수가 주어진 forward problem에서 낮은 격자 오차를 제공한다. PINN은 연속 함수와 계수, residual, 관측, front 제약을 동시에 최적화한다. 따라서 RK4는 reference solver로, PINN은 inverse와 sparse-data 상황까지 포괄하는 continuous surrogate로 배치된다.",
+            "공간 이산화는 method-of-lines 관점에서 수행된다. 1D 격자는 x_i = -L/2 + i Δx, i = 0, 1, ..., Nx - 1로 정의하고, 내부점 i = 1, ..., Nx - 2에서 u_xx ≈ (u_{i-1} - 2u_i + u_{i+1}) / Δx^2의 중심차분을 사용한다. 양 끝점은 미지수가 아니라 정확해에서 산출된 boundary value로 고정된다.",
+            "1D Dirichlet boundary contribution을 포함하면 내부점에 대한 Laplacian matrix는 삼중대각 행렬이 된다. 본 RK4 구현에서는 전체 벡터에 boundary 값을 먼저 삽입하고, 내부점에 대해서만 RHS를 계산한다. 이 방식은 행렬을 명시적으로 구성하지 않아도 동일한 중심차분 stencil과 boundary contribution을 재현한다.",
+            "2D에서는 동일한 중심차분 stencil을 x, y 방향에 적용한다. 내부 격자점에서 Δu ≈ (u_{i-1,j} - 2u_{i,j} + u_{i+1,j})/Δx^2 + (u_{i,j-1} - 2u_{i,j} + u_{i,j+1})/Δy^2이며, 정사각 균일 격자를 사용하므로 Δx = Δy이다. 행렬 관점에서는 L_2D = L_x ⊗ I_y + I_x ⊗ L_y로 해석된다.",
+            "이번 regime에서 2D boundary는 no-flux가 아니라 exact Dirichlet boundary이다. 매 RK4 stage마다 stage time에 해당하는 정확해를 네 변에 다시 삽입한다. 따라서 수치해가 받는 경계 정보는 분석해와 일치하며, final relative L2와 absolute error map은 공간 이산화와 RK4 시간 적분에서 발생한 오차를 주로 반영한다.",
         ],
         (
-            ["구현 함수", "역할"],
+            ["구분", "적용 방식"],
             [
-                ["forward_fisher_kpp_rk4", "Gaussian seed 2D same-problem reference"],
-                ["forward_ablowitz_zeppetella_rk4", "AZ travelling wave exact-boundary reference"],
-                ["simulate_density_rk4_at_times", "산림청 월별/연도별 arbitrary output time reference"],
+                ["1D 내부점", "second-order central finite difference"],
+                ["1D boundary", "u(-L/2,t), u(L/2,t)를 정확해에서 부여"],
+                ["2D 내부점", "L_x ⊗ I_y + I_x ⊗ L_y 형태의 five-point Laplacian"],
+                ["2D boundary", "네 변 모두 generalized Fisher-KPP 정확해에서 부여"],
             ],
-            [2.05, 5.00],
+            [2.10, 4.95],
         ),
     ),
     (
-        "3. 산림청 PDE/RK4와 조치 전 월별 축",
+        "3. RK4 시간 적분과 안정성 판정",
         [
-            "산림청 RK4는 첫 관측 밀도를 초기조건으로 놓고, land mask 내부에서만 반응-확산을 진행한다. 바다 셀은 0으로 유지되며, diffusion은 land/sea 경계에서 바다로 흐르지 않는다. 물리 prior는 기본적으로 D = 15.5 km^2/year, r = 0.70 1/year이고, front speed는 2 sqrt(D r) = 6.5879 km/year로 계산된다.",
-            "좌표 정규화 때문에 D는 두 단계로 해석된다. 물리 diffusion D_phys는 grid scale L_km에 의해 D_norm = D_phys / L_km^2로 바뀌고, 실제 PDE residual이나 RK4에서는 x/y extent 차이에 맞춰 D_x = D_phys / width_km^2, D_y = D_phys / height_km^2가 쓰인다. reaction은 시간 단위가 year이므로 r_per_year로 그대로 들어간다.",
-            "조치 전 월별 모드는 raw CSV의 조사일자와 방제완료여부를 사용한다. 기본 proxy는 누적 infected and completed count가 50,000을 넘는 첫 날짜이고, 제공 raw bundle에서는 2016-10-02가 나온다. 그래서 기본 비교는 2016-01부터 2016-09까지의 observed density, RK4 density, PINN density를 같은 elapsed-year time grid에서 비교한다.",
+            "시간 적분은 고전적 4단계 Runge-Kutta 방법을 그대로 사용한다. 반이산화된 ODE를 u_t = F(u,t)로 쓰면 k1 = F(u^n,t_n), k2 = F(u^n + dt k1/2, t_n + dt/2), k3 = F(u^n + dt k2/2, t_n + dt/2), k4 = F(u^n + dt k3, t_n + dt)이고, u^{n+1} = u^n + dt(k1 + 2k2 + 2k3 + k4)/6으로 갱신한다.",
+            "Dirichlet 문제에서는 각 stage 입력장에 해당 stage time의 boundary value를 먼저 삽입한 뒤 RHS를 계산한다. 따라서 k1, k2, k3, k4가 모두 같은 물리적 boundary condition 아래에서 계산된다. 이 절차는 방법을 바꾸는 것이 아니라, 정확해 기반 검증 문제에 맞도록 stage boundary를 일관되게 적용하는 것이다.",
+            "명시적 RK4는 diffusion-dominated semi-discrete system에서 안정성 제약을 가진다. 코드의 실용 판정은 dt_diff_limit = 0.69 Δx^2 / (dim D)와 reaction scale 1/r 중 작은 값을 safety factor와 비교한다. 1D 기본값 dt = 0.005와 2D 기본값 dt = 0.01은 해당 기준 안에 있으며, 안정성 위반 시 실행 전에 오류를 발생시킨다.",
+            "오차 평가는 exact final field와 numerical final field의 relative L2, final absolute error, 1D front position, 2D mass 및 front-area 지표로 수행한다. 정확해 기반 regime이므로 RK4 결과는 단순한 reference curve가 아니라 분석해와 직접 대조되는 수치해이다. 별도의 forward Euler, backward Euler, trapezoidal 비교에서는 같은 grid, 같은 dt, 같은 초기조건을 유지하여 시간 적분법의 차이만 관찰한다.",
         ],
         (
-            ["값", "현재 기본값"],
+            ["항목", "검증 원칙"],
             [
-                ["D_phys", "15.5 km^2/year"],
-                ["r_phys", "0.70 1/year"],
-                ["action proxy", "cumulative infected-completed count > 50,000, default 2016-10-02"],
+                ["Method", "classical RK4, four-stage explicit time integration"],
+                ["Stage boundary", "각 stage time의 exact Dirichlet 값을 삽입"],
+                ["Stability", "diffusion scale과 reaction scale을 동시에 점검"],
+                ["Metrics", "relative L2, absolute error, front/mass diagnostics"],
             ],
-            [1.55, 5.50],
+            [1.75, 5.30],
         ),
     ),
     (
-        "4. 공정 비교와 참고문헌",
+        "4. 결과 해석과 보고 기준",
         [
-            "RK4와 implicit/explicit 계열 수치해석법의 공정 비교는 accuracy, stability, solve cost를 함께 평가한다. explicit methods는 안정성 조건을 직접 반영하고 구현이 단순하다. backward Euler와 trapezoidal은 큰 dt에서도 안정적인 시간 적분을 제공하며 step마다 선형 또는 비선형 solve를 수행한다. RK4는 네 개의 stage를 사용해 같은 grid와 smooth solution에서 높은 정확도와 구현 균형을 제공한다.",
-            "산림청 문제의 PDE/RK4 계열은 관측된 감염 밀도를 시작점으로 land-constrained Fisher-KPP spread를 계산한다. 방제, 신고 지연, 벌목, 기주 분포, 매개충 이동 효과는 effective D/r과 관측 밀도장에 반영되며, RK4 결과는 PINN과 같은 조건에서 비교되는 forward numerical reference로 사용된다.",
+            "1D 결과에서 front가 오른쪽으로 이동하고 final relative L2가 작은 값으로 유지되면, 중심차분 공간 이산화와 RK4 시간 적분이 Ablowitz-Zeppetella travelling wave의 phase와 profile을 함께 포착하고 있음을 의미한다. 격자를 세분화하면 중심차분의 2차 공간 정확도에 따라 오차가 감소하는 경향을 보이며, dt를 충분히 줄인 조건에서는 공간 오차가 전체 오차를 지배한다.",
+            "2D 결과에서 tanh front가 대각선 방향으로 이동하고 exact final field와 수치해의 차이가 작으면, Kronecker 형태의 2D Laplacian stencil과 stage별 exact Dirichlet 처리가 정상적으로 작동한다고 해석한다. 2D 문제는 내부 격자점 수가 (Nx - 2)(Ny - 2)에 비례하므로 격자 세분화는 정확도 향상과 계산비 증가를 동시에 유발한다.",
+            "보고서와 notebook의 핵심 표기는 PDE, 정확해, 초기조건, boundary condition, 공간 이산화, RK4 stage 적용 순서, 안정성 판정, 오차 지표의 순서로 구성한다. 이는 사진의 설명 흐름을 따르되, 연구 재현성을 위해 모든 상수와 비교 기준을 명시한 형식이다. 본 문서의 수식과 코드 설정은 fisher-kpp-rk4 패키지의 현재 기본값과 일치한다.",
+            "이 기준은 RK4를 다른 방법으로 대체하지 않는다. 변경된 것은 검증 regime이며, solver는 여전히 method-of-lines, second-order central finite difference, classical RK4를 사용한다. 따라서 기존 RK4 결과와 새 결과의 차이는 수치법 변경이 아니라 정확해를 갖는 Fisher-KPP benchmark로 문제 설정을 정렬한 데서 발생한다.",
         ],
         None,
     ),
@@ -464,8 +472,8 @@ def build_pinn_doc(path: Path) -> None:
 
 def build_rk4_doc(path: Path) -> None:
     document = Document()
-    _configure_document(document, "RK4 및 Fisher-KPP PDE 구현 설명")
-    _add_title(document, "RK4 및 Fisher-KPP PDE 구현 설명", "Fisher-KPP PDE 수치해석 구현 사양")
+    _configure_document(document, "Fisher-KPP RK4 검증 regime 및 수치해석 사양")
+    _add_title(document, "Fisher-KPP RK4 검증 regime 및 수치해석 사양", "Exact travelling-wave benchmark 기반 1D/2D RK4 보고서")
     _build_pages(document, RK4_PAGES, RK4_REFERENCES)
     _audit_all_runs(document)
     document.save(path)

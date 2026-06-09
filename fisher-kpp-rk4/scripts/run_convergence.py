@@ -18,7 +18,7 @@ from fisher_kpp_rk4.config import (
     T,
     T_2D,
     ablowitz_zeppetella_exact,
-    ablowitz_zeppetella_exact_2d,
+    generalized_fisher_kpp_exact_2d,
     initial_condition,
     initial_condition_2d,
     left_bc,
@@ -66,9 +66,9 @@ def run_case_2d(grid: int, steps: int) -> dict[str, np.ndarray]:
         D=D_2D,
         r=r_2D,
         initial_condition=initial_condition_2d,
-        save_interval=T,
+        save_interval=T_2D,
         boundary_condition="dirichlet_exact",
-        exact_solution=ablowitz_zeppetella_exact_2d,
+        exact_solution=generalized_fisher_kpp_exact_2d,
     )
 
 

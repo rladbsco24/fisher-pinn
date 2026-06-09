@@ -6,9 +6,9 @@ It includes both:
 
 - **1D Ablowitz-Zeppetella traveling-wave Fisher-KPP** with time-dependent
   Dirichlet boundaries.
-- **2D ridge-wave Fisher-KPP** using the same exact wave in `x`, exact
-  time-dependent Dirichlet boundaries, and relative-L2 checks against the
-  analytic solution.
+- **2D generalized Fisher-KPP traveling wave** with `p=1`, `phi=pi/4`,
+  exact time-dependent Dirichlet boundaries, and relative-L2 checks against the
+  analytic tanh solution.
 
 ## Equations
 
@@ -23,6 +23,10 @@ u_t = D u_xx + r u(1-u)
 ```text
 u_t = D (u_xx + u_yy) + r u(1-u)
 ```
+
+The default demo uses `D=r=1`. In 2D this is the `p=1` member of the
+generalized Fisher-KPP exact-wave family, so the reaction term is again
+`u(1-u)`.
 
 ## Project Structure
 
@@ -66,15 +70,26 @@ python scripts/run_convergence.py
 
 This writes `outputs/convergence_summary.csv` with both 1D and 2D relative-L2 checks.
 
-The default short benchmark follows the exact Ablowitz-Zeppetella wave for
-`u_t = u_xx + u(1-u)`:
+The default short benchmark follows the exact traveling-wave regimes used for
+direct numerical verification:
 
 ```text
+1D:
+u_t = u_xx + u(1-u)
 c = 5/sqrt(6)
 u(x,t) = (1 + exp((x - c t - x0)/sqrt(6)))^-2
-1D: x in [-20, 20], T=10, Nx=201, dt=0.005
-2D: x,y in [-15, 15], T=3, grid=61x61, dt=0.01
+x in [-20, 20], T=10, Nx=201, dt=0.005
+
+2D:
+u_t = u_xx + u_yy + u(1-u)
+u(x,y,t) = [0.5 tanh((x+y)/(4 sqrt(3)) + 5t/12) + 0.5]^2
+x,y in [-15, 15], T=3, grid=61x61, dt=0.01
 ```
+
+Initial conditions and all Dirichlet boundary values are taken from the same
+exact solution. The RK4 method, finite-difference stencil, and comparison
+metrics are unchanged; only the benchmark problem definition is set to the
+formal exact-wave regime above.
 
 ## Long-Time Method Comparison
 
@@ -327,6 +342,6 @@ before release.
 ## Notes
 
 - Classical RK4 is explicit. The solver reports a practical diffusion-reaction stability estimate.
-- The 2D default uses `D=1`, `r=1`, `x,y in [-15,15]`, `T=3`, `grid=61`, and exact time-dependent Dirichlet boundaries from the Ablowitz-Zeppetella wave.
+- The 2D default uses `D=1`, `r=1`, `x,y in [-15,15]`, `T=3`, `grid=61`, and exact time-dependent Dirichlet boundaries from the generalized Fisher-KPP tanh wave.
 - Scalar Fisher-KPP with positive diffusion and logistic reaction follows a maximum-principle/front-propagation regime. The long-time plots therefore show surface, probe, front, and mass trends; they are not intended to reproduce intrinsic damped oscillations unless the PDE/model is changed.
 - `tol` and `max_iter` are retained only for compatibility with implicit-solver experiments; RK4 does not use nonlinear iterations.
