@@ -8,7 +8,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageSequence
 
 from .config import DomainConfig
-from .plotting import COLORS, TOKENS, _add_colorbar, _apply_chart_theme, _save_figure
+from .plotting import COLORS, ERROR_CMAP, FIELD_CMAP, SIGNED_ERROR_CMAP, TOKENS, _add_colorbar, _apply_chart_theme, _save_figure
 
 
 def _load_diagnostic_fields(path: Path) -> dict[str, np.ndarray]:
@@ -91,18 +91,18 @@ def save_feature_pair_error_map(
 
     fig, axes = plt.subplots(2, 4, figsize=(18.8, 8.4), constrained_layout=False)
     fig.subplots_adjust(left=0.035, right=0.94, bottom=0.06, top=0.84, hspace=0.30, wspace=0.34)
-    _imshow_field(fig, axes[0, 0], truth, title="reference", cmap="magma", vmin=0.0, vmax=1.0, domain=domain)
-    _imshow_field(fig, axes[0, 1], without_pred, title=f"without: {without_label}", cmap="magma", vmin=0.0, vmax=1.0, domain=domain)
-    _imshow_field(fig, axes[0, 2], without_error, title="without absolute error", cmap="viridis", vmin=0.0, vmax=error_vmax, domain=domain)
-    _imshow_field(fig, axes[1, 0], truth, title="reference", cmap="magma", vmin=0.0, vmax=1.0, domain=domain)
-    _imshow_field(fig, axes[1, 1], with_pred, title=f"with: {with_label}", cmap="magma", vmin=0.0, vmax=1.0, domain=domain)
-    _imshow_field(fig, axes[1, 2], with_error, title="with absolute error", cmap="viridis", vmin=0.0, vmax=error_vmax, domain=domain)
+    _imshow_field(fig, axes[0, 0], truth, title="reference", cmap=FIELD_CMAP, vmin=0.0, vmax=1.0, domain=domain)
+    _imshow_field(fig, axes[0, 1], without_pred, title=f"without: {without_label}", cmap=FIELD_CMAP, vmin=0.0, vmax=1.0, domain=domain)
+    _imshow_field(fig, axes[0, 2], without_error, title="without absolute error", cmap=ERROR_CMAP, vmin=0.0, vmax=error_vmax, domain=domain)
+    _imshow_field(fig, axes[1, 0], truth, title="reference", cmap=FIELD_CMAP, vmin=0.0, vmax=1.0, domain=domain)
+    _imshow_field(fig, axes[1, 1], with_pred, title=f"with: {with_label}", cmap=FIELD_CMAP, vmin=0.0, vmax=1.0, domain=domain)
+    _imshow_field(fig, axes[1, 2], with_error, title="with absolute error", cmap=ERROR_CMAP, vmin=0.0, vmax=error_vmax, domain=domain)
     _imshow_field(
         fig,
         axes[1, 3],
         error_delta,
         title="error delta, with - without",
-        cmap="coolwarm",
+        cmap=SIGNED_ERROR_CMAP,
         vmin=-delta_lim,
         vmax=delta_lim,
         domain=domain,

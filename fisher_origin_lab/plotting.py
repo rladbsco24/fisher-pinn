@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Iterable
 
 from matplotlib.animation import FuncAnimation, PillowWriter
+from matplotlib.ticker import MaxNLocator
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
@@ -35,6 +36,17 @@ COLORS = {
     "teal": "#2A9D8F",
     "neutral": "#7A828F",
 }
+
+# Research-style scientific colormap roles. Scalar state fields use a
+# perceptually uniform color-vision-deficiency-friendly map; error magnitudes
+# use a high-contrast sequential map; signed deviations use a zero-centered
+# diverging map.
+FIELD_CMAP = "cividis"
+ERROR_CMAP = "inferno"
+SIGNED_ERROR_CMAP = "RdBu_r"
+RESIDUAL_CMAP = "inferno"
+FRONT_CMAP = "cividis"
+WEIGHT_CMAP = "YlOrBr"
 
 
 def _apply_chart_theme() -> None:
@@ -74,11 +86,22 @@ def _write_title(fig: plt.Figure, title: str, subtitle: str | None = None, *, to
         fig.text(0.01, 0.952, subtitle, ha="left", va="top", fontsize=9, color=TOKENS["muted"])
 
 
-def _add_colorbar(fig: plt.Figure, image, ax: plt.Axes, *, fraction: float = 0.046, pad: float = 0.035):
-    cbar = fig.colorbar(image, ax=ax, fraction=fraction, pad=pad)
-    cbar.ax.tick_params(labelsize=8, pad=3)
+def _add_colorbar(
+    fig: plt.Figure,
+    image,
+    ax: plt.Axes,
+    *,
+    fraction: float = 0.046,
+    pad: float = 0.035,
+    extend: str = "neither",
+):
+    cbar = fig.colorbar(image, ax=ax, fraction=fraction, pad=pad, extend=extend)
+    cbar.ax.tick_params(labelsize=8, pad=3, colors=TOKENS["muted"])
     cbar.ax.yaxis.set_ticks_position("right")
     cbar.ax.yaxis.set_label_position("right")
+    cbar.ax.yaxis.set_major_locator(MaxNLocator(nbins=5))
+    cbar.outline.set_edgecolor(TOKENS["axis"])
+    cbar.outline.set_linewidth(0.8)
     return cbar
 
 
@@ -196,9 +219,9 @@ def save_reconstruction_figure(
         _, pred = predict_field(model, time_value, n=n, device=device)
         err = np.abs(pred - true_field)
         for row, field, label, cmap, vmin, vmax in [
-            (0, true_field, "truth", "magma", 0.0, 1.0),
-            (1, pred, "pinn", "magma", 0.0, 1.0),
-            (2, err, "absolute error", "viridis", 0.0, None),
+            (0, true_field, "truth", FIELD_CMAP, 0.0, 1.0),
+            (1, pred, "pinn", FIELD_CMAP, 0.0, 1.0),
+            (2, err, "absolute error", ERROR_CMAP, 0.0, None),
         ]:
             ax = axes[row, col]
             _imshow(
@@ -463,14 +486,14 @@ def save_residual_front_diagnostics_figure(
     residual_log = np.log10(maps["residual_abs"] + 1.0e-8)
 
     panels: list[tuple[str, np.ndarray, str, float | None, float | None]] = [
-        ("truth", true_field, "magma", 0.0, 1.0),
-        ("prediction", maps["u"], "magma", 0.0, 1.0),
-        ("absolute error", abs_error, "viridis", 0.0, None),
-        ("log10 |PDE residual|", residual_log, "cividis", None, None),
-        ("u(1-u) front indicator", maps["front_indicator"], "plasma", 0.0, 0.25),
-        ("front/adaptive weight", maps["front_weight"], "YlGnBu", None, None),
-        ("normal front speed", maps["normal_speed"], "coolwarm", None, None),
-        ("front-speed error", maps["front_speed_error"], "magma", 0.0, None),
+        ("truth", true_field, FIELD_CMAP, 0.0, 1.0),
+        ("prediction", maps["u"], FIELD_CMAP, 0.0, 1.0),
+        ("absolute error", abs_error, ERROR_CMAP, 0.0, None),
+        ("log10 |PDE residual|", residual_log, RESIDUAL_CMAP, None, None),
+        ("u(1-u) front indicator", maps["front_indicator"], FRONT_CMAP, 0.0, 0.25),
+        ("front/adaptive weight", maps["front_weight"], WEIGHT_CMAP, None, None),
+        ("normal front speed", maps["normal_speed"], SIGNED_ERROR_CMAP, None, None),
+        ("front-speed error", maps["front_speed_error"], ERROR_CMAP, 0.0, None),
     ]
     fig, axes = plt.subplots(2, 4, figsize=(15.2, 7.4), constrained_layout=False)
     fig.subplots_adjust(left=0.04, right=0.94, bottom=0.06, top=0.84, hspace=0.30, wspace=0.24)
@@ -531,12 +554,12 @@ def save_pinn_rk4_comparison_figure(
     )
 
     for ax, title, field, cmap, vmin, vmax in [
-        (axes[0, 0], "reference", true_field, "magma", 0.0, 1.0),
-        (axes[0, 1], "PINN", pinn_field, "magma", 0.0, 1.0),
-        (axes[0, 2], "RK4", rk4_field, "magma", 0.0, 1.0),
-        (axes[1, 0], "PINN signed error", signed_error, "coolwarm", -signed_error_lim, signed_error_lim),
-        (axes[1, 1], "PINN absolute error", pinn_error, "viridis", 0.0, None),
-        (axes[1, 2], "RK4 absolute error", rk4_error, "viridis", 0.0, None),
+        (axes[0, 0], "reference", true_field, FIELD_CMAP, 0.0, 1.0),
+        (axes[0, 1], "PINN", pinn_field, FIELD_CMAP, 0.0, 1.0),
+        (axes[0, 2], "RK4", rk4_field, FIELD_CMAP, 0.0, 1.0),
+        (axes[1, 0], "PINN signed error", signed_error, SIGNED_ERROR_CMAP, -signed_error_lim, signed_error_lim),
+        (axes[1, 1], "PINN absolute error", pinn_error, ERROR_CMAP, 0.0, None),
+        (axes[1, 2], "RK4 absolute error", rk4_error, ERROR_CMAP, 0.0, None),
     ]:
         _imshow(fig, ax, field, domain, title=title, cmap=cmap, vmin=vmin, vmax=vmax, colorbar=True)
 
@@ -631,10 +654,10 @@ def save_pinn_evolution_gif(
     fig, axes = plt.subplots(1, 4, figsize=(15.8, 4.0), constrained_layout=False)
     fig.subplots_adjust(left=0.035, right=0.925, bottom=0.13, top=0.76, wspace=0.24)
     panels = [
-        ("reference truth", frames[0][1], "magma", 0.0, 1.0),
-        ("PINN prediction", frames[0][2], "magma", 0.0, 1.0),
-        ("signed error", frames[0][3], "coolwarm", -signed_error_lim, signed_error_lim),
-        ("absolute error", frames[0][4], "viridis", 0.0, abs_error_vmax),
+        ("reference truth", frames[0][1], FIELD_CMAP, 0.0, 1.0),
+        ("PINN prediction", frames[0][2], FIELD_CMAP, 0.0, 1.0),
+        ("signed error", frames[0][3], SIGNED_ERROR_CMAP, -signed_error_lim, signed_error_lim),
+        ("absolute error", frames[0][4], ERROR_CMAP, 0.0, abs_error_vmax),
     ]
     images = []
     for ax, (title, field, cmap, vmin, vmax) in zip(axes, panels):
@@ -740,7 +763,7 @@ def save_observation_coverage_figure(
         train_xyt[:, 1],
         c=train_values,
         s=8,
-        cmap="magma",
+        cmap=FIELD_CMAP,
         vmin=0.0,
         vmax=1.0,
         alpha=0.75,
@@ -753,7 +776,7 @@ def save_observation_coverage_figure(
     _add_colorbar(fig, sc, axes[0])
 
     if len(val_xyt):
-        axes[1].scatter(val_xyt[:, 0], val_xyt[:, 1], c=val_values, s=10, cmap="magma", vmin=0.0, vmax=1.0, alpha=0.75, linewidths=0.0)
+        axes[1].scatter(val_xyt[:, 0], val_xyt[:, 1], c=val_values, s=10, cmap=FIELD_CMAP, vmin=0.0, vmax=1.0, alpha=0.75, linewidths=0.0)
     axes[1].set_xlim(0.0, domain.box)
     axes[1].set_ylim(0.0, domain.box)
     axes[1].set_aspect("equal")

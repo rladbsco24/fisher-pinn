@@ -10,6 +10,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import PowerNorm
+from matplotlib.ticker import MaxNLocator
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -31,6 +32,7 @@ from fisher_origin_lab.korea_data import (
     simulate_density_rk4,
     simulate_density_rk4_at_times,
 )
+from fisher_origin_lab.plotting import ERROR_CMAP, FIELD_CMAP, TOKENS
 
 
 PROVINCE_GEOJSON = ROOT / "data" / "korea_pine_wilt" / "assets" / "skorea_provinces_2018.geojson"
@@ -50,9 +52,20 @@ def _save_figure_with_padding(fig: plt.Figure, path: Path, *, dpi: int = 180) ->
 
 def _add_vertical_colorbar(fig: plt.Figure, image, ax, *, shrink: float = 0.82):
     cbar = fig.colorbar(image, ax=ax, shrink=shrink, pad=0.035)
-    cbar.ax.tick_params(labelsize=8, pad=3)
-    cbar.ax.yaxis.set_ticks_position("right")
+    _style_colorbar(cbar, horizontal=False)
     return cbar
+
+
+def _style_colorbar(cbar, *, horizontal: bool) -> None:
+    cbar.ax.tick_params(labelsize=8, pad=3, colors=TOKENS["muted"])
+    cbar.outline.set_edgecolor(TOKENS["axis"])
+    cbar.outline.set_linewidth(0.8)
+    if horizontal:
+        cbar.ax.xaxis.set_major_locator(MaxNLocator(nbins=6))
+    else:
+        cbar.ax.yaxis.set_major_locator(MaxNLocator(nbins=5))
+        cbar.ax.yaxis.set_label_position("right")
+        cbar.ax.yaxis.set_ticks_position("right")
 
 
 def _geojson_rings(geometry: dict) -> list[np.ndarray]:
@@ -218,7 +231,7 @@ def _save_korea_map_baseline_gif(
     vmax = float(np.percentile(positive, 99.5)) if positive.size else 1.0
     vmax = float(np.clip(vmax, 0.05, 1.0))
     norm = PowerNorm(gamma=0.55, vmin=0.0, vmax=vmax)
-    cmap = plt.get_cmap("magma").copy()
+    cmap = plt.get_cmap(FIELD_CMAP).copy()
     cmap.set_bad((1.0, 1.0, 1.0, 0.0))
 
     frames: list[Image.Image] = []
@@ -267,7 +280,7 @@ def _save_korea_map_baseline_gif(
         if last_mesh is not None:
             cbar = fig.colorbar(last_mesh, ax=axes_arr, orientation="horizontal", shrink=0.72, pad=0.04)
             cbar.set_label("normalized pine-wilt density, power-scaled for visibility", fontsize=9)
-            cbar.ax.tick_params(labelsize=8)
+            _style_colorbar(cbar, horizontal=True)
         fig.suptitle(
             "Korea pine-wilt Fisher-KPP baselines on province map",
             fontsize=14,
@@ -338,8 +351,8 @@ def _save_korea_error_gif(
     obs_vmax = max(float(np.max(grid.density)), 1.0e-6)
     norm_obs = PowerNorm(gamma=0.55, vmin=0.0, vmax=obs_vmax)
     norm_err = PowerNorm(gamma=0.70, vmin=0.0, vmax=err_vmax)
-    obs_cmap = plt.get_cmap("magma").copy()
-    err_cmap = plt.get_cmap("viridis").copy()
+    obs_cmap = plt.get_cmap(FIELD_CMAP).copy()
+    err_cmap = plt.get_cmap(ERROR_CMAP).copy()
     obs_cmap.set_bad((1.0, 1.0, 1.0, 0.0))
     err_cmap.set_bad((1.0, 1.0, 1.0, 0.0))
 
@@ -391,7 +404,7 @@ def _save_korea_error_gif(
         if last_mesh is not None:
             cbar = fig.colorbar(last_mesh, ax=axes_arr, orientation="horizontal", shrink=0.72, pad=0.04)
             cbar.set_label("absolute normalized-density error", fontsize=9)
-            cbar.ax.tick_params(labelsize=8)
+            _style_colorbar(cbar, horizontal=True)
         fig.suptitle("Korea pine-wilt observed-period absolute error", fontsize=14, fontweight="bold")
         buf = io.BytesIO()
         fig.savefig(buf, format="png", dpi=110, facecolor="white", bbox_inches="tight", pad_inches=0.10)
@@ -429,7 +442,7 @@ def _save_observed_density_figure(path: Path, grid) -> None:
             grid.density[idx],
             origin="lower",
             extent=extent,
-            cmap="magma",
+            cmap=FIELD_CMAP,
             vmin=0.0,
             vmax=vmax,
             interpolation="nearest",
@@ -468,7 +481,7 @@ def _save_forecast_figure(path: Path, grid, sim_years: np.ndarray, sim_fields: n
             sim_fields[year_to_idx[year]],
             origin="lower",
             extent=extent,
-            cmap="viridis",
+            cmap=FIELD_CMAP,
             vmin=0.0,
             vmax=vmax,
             interpolation="nearest",
@@ -509,9 +522,9 @@ def _save_pinn_baseline_figure(path: Path, grid, pinn_years: np.ndarray, pinn_fi
         pred = pinn_fields[year_to_pinn[year]]
         err = np.abs(pred - obs)
         panels = [
-            (f"{_format_grid_time_title(grid, year)} observed", obs, "magma", 0.0, vmax),
-            (f"{_format_grid_time_title(grid, year)} PINN", pred, "magma", 0.0, vmax),
-            (f"{_format_grid_time_title(grid, year)} |error|", err, "viridis", 0.0, err_vmax),
+            (f"{_format_grid_time_title(grid, year)} observed", obs, FIELD_CMAP, 0.0, vmax),
+            (f"{_format_grid_time_title(grid, year)} PINN", pred, FIELD_CMAP, 0.0, vmax),
+            (f"{_format_grid_time_title(grid, year)} |error|", err, ERROR_CMAP, 0.0, err_vmax),
         ]
         for col, (title, field, cmap, vmin, panel_vmax) in enumerate(panels):
             ax = axes_arr[row, col]
