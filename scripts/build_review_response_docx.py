@@ -5,95 +5,81 @@ from pathlib import Path
 
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Inches, Pt, RGBColor
 
 
-def _set_run_font(run, *, size: float | None = None, bold: bool | None = None, italic: bool | None = None) -> None:
-    run.font.name = "Malgun Gothic"
-    run._element.rPr.rFonts.set(qn("w:eastAsia"), "Malgun Gothic")
-    run.font.size = Pt(10.0 if size is None else size)
-    run.font.color.rgb = RGBColor(0, 0, 0)
+FONT_NAME = "Malgun Gothic"
+FONT_SIZE = 10.0
+BLACK = RGBColor(0, 0, 0)
+
+
+def _set_run_font(run, *, bold: bool | None = None) -> None:
+    run.font.name = FONT_NAME
+    run._element.rPr.rFonts.set(qn("w:eastAsia"), FONT_NAME)
+    run.font.size = Pt(FONT_SIZE)
+    run.font.color.rgb = BLACK
     if bold is not None:
         run.bold = bold
-    if italic is not None:
-        run.italic = italic
 
 
-def _set_paragraph_spacing(paragraph, *, before: float = 0, after: float = 6, line: float = 1.28) -> None:
+def _set_paragraph_spacing(paragraph, *, before: float = 0, after: float = 4, line: float = 1.08) -> None:
     fmt = paragraph.paragraph_format
     fmt.space_before = Pt(before)
     fmt.space_after = Pt(after)
     fmt.line_spacing = line
 
 
-def _add_bottom_border(paragraph, color: str = "D9D9D9") -> None:
-    p_pr = paragraph._p.get_or_add_pPr()
-    p_bdr = p_pr.find(qn("w:pBdr"))
-    if p_bdr is None:
-        p_bdr = OxmlElement("w:pBdr")
-        p_pr.append(p_bdr)
-    bottom = OxmlElement("w:bottom")
-    bottom.set(qn("w:val"), "single")
-    bottom.set(qn("w:sz"), "6")
-    bottom.set(qn("w:space"), "6")
-    bottom.set(qn("w:color"), color)
-    p_bdr.append(bottom)
-
-
-def _add_paragraph(document: Document, text: str = "", *, style: str | None = None):
-    paragraph = document.add_paragraph(style=style)
-    if text:
-        run = paragraph.add_run(text)
-        _set_run_font(run, size=10.0)
-    _set_paragraph_spacing(paragraph)
-    return paragraph
-
-
 def _configure_document(document: Document) -> None:
     section = document.sections[0]
-    section.top_margin = Inches(0.9)
-    section.bottom_margin = Inches(0.78)
-    section.left_margin = Inches(0.95)
-    section.right_margin = Inches(0.95)
+    section.top_margin = Inches(0.62)
+    section.bottom_margin = Inches(0.58)
+    section.left_margin = Inches(0.68)
+    section.right_margin = Inches(0.68)
+    section.header_distance = Inches(0.3)
+    section.footer_distance = Inches(0.3)
 
     styles = document.styles
-    normal = styles["Normal"]
-    normal.font.name = "Malgun Gothic"
-    normal._element.rPr.rFonts.set(qn("w:eastAsia"), "Malgun Gothic")
-    normal.font.size = Pt(10.0)
-    normal.font.color.rgb = RGBColor(0, 0, 0)
-
-    for style_name, size, bold, before, after in [
-        ("Heading 1", 10, True, 12, 8),
-        ("Heading 2", 10, True, 10, 4),
-        ("Heading 3", 10, True, 8, 2),
-    ]:
+    for style_name in ["Normal", "Heading 1", "Heading 2", "Heading 3"]:
         style = styles[style_name]
-        style.font.name = "Malgun Gothic"
-        style._element.rPr.rFonts.set(qn("w:eastAsia"), "Malgun Gothic")
-        style.font.size = Pt(size)
-        style.font.bold = bold
-        style.font.color.rgb = RGBColor(0, 0, 0)
-        style.paragraph_format.space_before = Pt(before)
-        style.paragraph_format.space_after = Pt(after)
-        style.paragraph_format.line_spacing = 1.18
+        style.font.name = FONT_NAME
+        style._element.rPr.rFonts.set(qn("w:eastAsia"), FONT_NAME)
+        style.font.size = Pt(FONT_SIZE)
+        style.font.color.rgb = BLACK
+        style.paragraph_format.line_spacing = 1.08
+        style.paragraph_format.space_after = Pt(4)
+
+    for style_name in ["Heading 1", "Heading 2", "Heading 3"]:
+        styles[style_name].font.bold = True
+
+    styles["Heading 1"].paragraph_format.space_before = Pt(9)
+    styles["Heading 1"].paragraph_format.space_after = Pt(4)
+    styles["Heading 2"].paragraph_format.space_before = Pt(7)
+    styles["Heading 2"].paragraph_format.space_after = Pt(3)
+    styles["Heading 3"].paragraph_format.space_before = Pt(5)
+    styles["Heading 3"].paragraph_format.space_after = Pt(2)
 
 
-def _write_inline_markdown(paragraph, text: str, *, size: float = 10.0, bold: bool = False) -> None:
-    # Minimal inline handling for backtick code spans; keep the parser deterministic.
+def _write_inline_markdown(paragraph, text: str, *, bold: bool = False) -> None:
     parts = text.split("`")
     for idx, part in enumerate(parts):
         if not part:
             continue
         run = paragraph.add_run(part)
-        _set_run_font(run, size=size, bold=bold)
+        _set_run_font(run, bold=bold)
         if idx % 2 == 1:
             run.font.name = "Consolas"
             run._element.rPr.rFonts.set(qn("w:eastAsia"), "Consolas")
-            run.font.size = Pt(10.0)
-            run.font.color.rgb = RGBColor(0, 0, 0)
+            run.font.size = Pt(FONT_SIZE)
+            run.font.color.rgb = BLACK
+
+
+def _add_title(document: Document, text: str) -> None:
+    paragraph = document.add_paragraph()
+    paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    _set_paragraph_spacing(paragraph, before=0, after=8, line=1.08)
+    run = paragraph.add_run(text)
+    _set_run_font(run, bold=True)
 
 
 def build_docx(markdown_path: Path, output_path: Path) -> None:
@@ -103,20 +89,19 @@ def build_docx(markdown_path: Path, output_path: Path) -> None:
 
     in_code = False
     code_buffer: list[str] = []
-    title_written = False
-    metadata_lines: list[str] = []
+    title_done = False
 
     def flush_code() -> None:
         nonlocal code_buffer
         if not code_buffer:
             return
         paragraph = document.add_paragraph()
-        _set_paragraph_spacing(paragraph, before=3, after=7, line=1.0)
+        _set_paragraph_spacing(paragraph, before=2, after=5, line=1.0)
         run = paragraph.add_run("\n".join(code_buffer))
         run.font.name = "Consolas"
         run._element.rPr.rFonts.set(qn("w:eastAsia"), "Consolas")
-        run.font.size = Pt(10.0)
-        run.font.color.rgb = RGBColor(0, 0, 0)
+        run.font.size = Pt(FONT_SIZE)
+        run.font.color.rgb = BLACK
         code_buffer = []
 
     for raw in lines:
@@ -136,71 +121,39 @@ def build_docx(markdown_path: Path, output_path: Path) -> None:
             continue
 
         if line.startswith("# "):
-            title = line[2:].strip()
-            paragraph = document.add_paragraph()
-            paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            _set_paragraph_spacing(paragraph, before=72, after=30, line=1.0)
-            run = paragraph.add_run(title)
-            _set_run_font(run, size=10.0, bold=True)
-            title_written = True
-            continue
-
-        if title_written and (line.startswith("작성:") or line.startswith("일자:")):
-            metadata_lines.append(line)
-            if len(metadata_lines) == 2:
-                for meta in metadata_lines:
-                    paragraph = document.add_paragraph()
-                    paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-                    _set_paragraph_spacing(paragraph, after=2, line=1.0)
-                    run = paragraph.add_run(meta)
-                    _set_run_font(run, size=10.0)
-                document.add_paragraph()
-            continue
-
-        if line.startswith("#### "):
-            paragraph = document.add_paragraph(style="Heading 3")
-            _write_inline_markdown(paragraph, line[5:].strip(), size=10.0, bold=True)
+            _add_title(document, line[2:].strip())
+            title_done = True
             continue
 
         if line.startswith("### "):
             paragraph = document.add_paragraph(style="Heading 2")
-            _write_inline_markdown(paragraph, line[4:].strip(), size=10.0, bold=True)
+            _write_inline_markdown(paragraph, line[4:].strip(), bold=True)
             continue
 
         if line.startswith("## "):
             paragraph = document.add_paragraph(style="Heading 1")
-            _write_inline_markdown(paragraph, line[3:].strip(), size=10.0, bold=True)
-            if line[3:].strip() == "개론":
-                _add_bottom_border(paragraph)
-            continue
-
-        if line.startswith("- "):
-            paragraph = document.add_paragraph(style="List Bullet")
-            paragraph.paragraph_format.left_indent = Inches(0.25)
-            paragraph.paragraph_format.first_line_indent = Inches(-0.12)
-            _set_paragraph_spacing(paragraph, after=3)
-            _write_inline_markdown(paragraph, line[2:].strip(), size=10.0)
+            _write_inline_markdown(paragraph, line[3:].strip(), bold=True)
             continue
 
         paragraph = document.add_paragraph()
-        paragraph.paragraph_format.first_line_indent = Inches(0.18)
-        _set_paragraph_spacing(paragraph, after=7, line=1.35)
-        _write_inline_markdown(paragraph, line, size=10.0)
+        paragraph.paragraph_format.first_line_indent = Inches(0.16 if title_done else 0)
+        _set_paragraph_spacing(paragraph, after=4, line=1.08)
+        _write_inline_markdown(paragraph, line)
 
     flush_code()
 
     footer = document.sections[0].footer.paragraphs[0]
     footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
     footer.text = ""
-    run = footer.add_run("Fisher-KPP PINN 산림청 적용 및 장시간 곡선 기술 검토 보고서")
-    _set_run_font(run, size=10.0)
+    run = footer.add_run("Fisher-KPP PINN 및 한국 산림청 확장 모델 기술 설명서")
+    _set_run_font(run)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     document.save(output_path)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Build the Fisher-KPP PINN review-response DOCX.")
+    parser = argparse.ArgumentParser(description="Build the Fisher-KPP PINN technical explanation DOCX.")
     parser.add_argument("--input", type=Path, default=Path("docs") / "fisher_kpp_pinn_review_response.md")
     parser.add_argument("--output", type=Path, default=Path("docs") / "fisher_kpp_pinn_review_response.docx")
     args = parser.parse_args()
