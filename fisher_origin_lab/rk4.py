@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from .config import DomainConfig, PDEConfig, SeedConfig
+from .exact_wave import az_exact_unit_numpy
 from .simulate import TruthData, gaussian_seed_numpy
 
 
@@ -86,6 +87,65 @@ def rk4_step_2d(u: np.ndarray, dt: float, dx: float, pde: PDEConfig) -> np.ndarr
     return np.clip(_apply_neumann_copy(u_next), 0.0, 1.0)
 
 
+def _apply_exact_dirichlet_2d(
+    u: np.ndarray,
+    xs: np.ndarray,
+    t: float,
+    *,
+    x_left: float,
+    x_right: float,
+    x0: float,
+) -> np.ndarray:
+    out = np.asarray(u, dtype=np.float64).copy()
+    x_unit = xs / max(float(xs[-1]), 1.0e-12)
+    profile = az_exact_unit_numpy(x_unit, t, x_left=x_left, x_right=x_right, x0=x0)
+    left_value = float(profile[0])
+    right_value = float(profile[-1])
+    out[0, :] = left_value
+    out[-1, :] = right_value
+    out[:, 0] = profile
+    out[:, -1] = profile
+    return out
+
+
+def _laplacian_dirichlet(u: np.ndarray, dx: float) -> np.ndarray:
+    lap = np.zeros_like(u)
+    lap[1:-1, 1:-1] = (
+        u[2:, 1:-1]
+        + u[:-2, 1:-1]
+        + u[1:-1, 2:]
+        + u[1:-1, :-2]
+        - 4.0 * u[1:-1, 1:-1]
+    ) / dx**2
+    return lap
+
+
+def _rk4_step_az_2d(
+    u: np.ndarray,
+    dt: float,
+    dx: float,
+    xs: np.ndarray,
+    t: float,
+    pde: PDEConfig,
+    *,
+    x_left: float,
+    x_right: float,
+    x0: float,
+) -> np.ndarray:
+    u0 = _apply_exact_dirichlet_2d(u, xs, t, x_left=x_left, x_right=x_right, x0=x0)
+
+    def rhs(v: np.ndarray, stage_t: float) -> np.ndarray:
+        v_bc = _apply_exact_dirichlet_2d(v, xs, stage_t, x_left=x_left, x_right=x_right, x0=x0)
+        return pde.diffusion * _laplacian_dirichlet(v_bc, dx) + pde.reaction * v_bc * (1.0 - v_bc)
+
+    k1 = rhs(u0, t)
+    k2 = rhs(u0 + 0.5 * dt * k1, t + 0.5 * dt)
+    k3 = rhs(u0 + 0.5 * dt * k2, t + 0.5 * dt)
+    k4 = rhs(u0 + dt * k3, t + dt)
+    u_next = u0 + (dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
+    return np.clip(_apply_exact_dirichlet_2d(u_next, xs, t + dt, x_left=x_left, x_right=x_right, x0=x0), 0.0, 1.0)
+
+
 def forward_fisher_kpp_rk4(
     domain: DomainConfig,
     pde: PDEConfig,
@@ -113,6 +173,44 @@ def forward_fisher_kpp_rk4(
 
     for step in range(step_count):
         u = rk4_step_2d(u, dt, dx, pde)
+        if (step + 1) % stride == 0 or step == step_count - 1:
+            fields.append(u.copy())
+            times.append((step + 1) * dt)
+
+    return TruthData(xs=xs, times=np.array(times), fields=np.array(fields))
+
+
+def forward_ablowitz_zeppetella_rk4(
+    domain: DomainConfig,
+    pde: PDEConfig,
+    *,
+    snapshots: int = 80,
+    steps: int | None = None,
+    x_left: float = -20.0,
+    x_right: float = 20.0,
+    x0: float = 0.0,
+) -> TruthData:
+    xs = np.linspace(0.0, domain.box, domain.grid)
+    dx = xs[1] - xs[0]
+    step_count = int(steps if steps is not None else domain.truth_steps)
+    dt = domain.t_end / step_count
+    info = check_rk4_stability(dx, dt, pde, dim=2)
+    if not info.is_practically_safe:
+        raise ValueError(
+            "Ablowitz-Zeppetella RK4 solver is outside the practical explicit stability estimate; "
+            f"dt={dt:.3e}, practical_limit={info.dt_practical:.3e}."
+        )
+
+    profile = az_exact_unit_numpy(xs / max(domain.box, 1.0e-12), 0.0, x_left=x_left, x_right=x_right, x0=x0)
+    u = np.repeat(profile[:, None], len(xs), axis=1)
+    u = _apply_exact_dirichlet_2d(u, xs, 0.0, x_left=x_left, x_right=x_right, x0=x0)
+    fields = [u.copy()]
+    times = [0.0]
+    stride = max(1, step_count // snapshots)
+
+    for step in range(step_count):
+        t = step * dt
+        u = _rk4_step_az_2d(u, dt, dx, xs, t, pde, x_left=x_left, x_right=x_right, x0=x0)
         if (step + 1) % stride == 0 or step == step_count - 1:
             fields.append(u.copy())
             times.append((step + 1) * dt)

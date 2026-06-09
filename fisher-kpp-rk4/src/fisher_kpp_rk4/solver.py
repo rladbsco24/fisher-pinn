@@ -30,6 +30,14 @@ def apply_dirichlet_bc(u: np.ndarray, left_bc: float, right_bc: float) -> np.nda
     return u
 
 
+def _bc_value(bc, t: float) -> float:
+    return float(bc(t)) if callable(bc) else float(bc)
+
+
+def _apply_dirichlet_bc_at(u: np.ndarray, left_bc, right_bc, t: float) -> np.ndarray:
+    return apply_dirichlet_bc(u, _bc_value(left_bc, t), _bc_value(right_bc, t))
+
+
 def apply_neumann_bc_2d(u: np.ndarray) -> np.ndarray:
     out = np.asarray(u, dtype=np.float64).copy()
     if out.ndim != 2:
@@ -64,15 +72,15 @@ def fisher_kpp_rhs_2d(u: np.ndarray, dx: float, D: float, r: float) -> np.ndarra
     return D * lap + r * u_bc * (1.0 - u_bc)
 
 
-def rk4_step(u: np.ndarray, dt: float, dx: float, D: float, r: float, left_bc: float, right_bc: float) -> np.ndarray:
+def rk4_step(u: np.ndarray, dt: float, dx: float, D: float, r: float, left_bc, right_bc, t: float = 0.0) -> np.ndarray:
     """One classical RK4 step for the 1D MOL-FDM Fisher-KPP system."""
-    u0 = apply_dirichlet_bc(u, left_bc, right_bc)
+    u0 = _apply_dirichlet_bc_at(u, left_bc, right_bc, t)
     k1 = fisher_kpp_rhs(u0, dx, D, r)
-    k2 = fisher_kpp_rhs(apply_dirichlet_bc(u0 + 0.5 * dt * k1, left_bc, right_bc), dx, D, r)
-    k3 = fisher_kpp_rhs(apply_dirichlet_bc(u0 + 0.5 * dt * k2, left_bc, right_bc), dx, D, r)
-    k4 = fisher_kpp_rhs(apply_dirichlet_bc(u0 + dt * k3, left_bc, right_bc), dx, D, r)
+    k2 = fisher_kpp_rhs(_apply_dirichlet_bc_at(u0 + 0.5 * dt * k1, left_bc, right_bc, t + 0.5 * dt), dx, D, r)
+    k3 = fisher_kpp_rhs(_apply_dirichlet_bc_at(u0 + 0.5 * dt * k2, left_bc, right_bc, t + 0.5 * dt), dx, D, r)
+    k4 = fisher_kpp_rhs(_apply_dirichlet_bc_at(u0 + dt * k3, left_bc, right_bc, t + dt), dx, D, r)
     u_next = u0 + (dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
-    return np.clip(apply_dirichlet_bc(u_next, left_bc, right_bc), 0.0, 1.0)
+    return np.clip(_apply_dirichlet_bc_at(u_next, left_bc, right_bc, t + dt), 0.0, 1.0)
 
 
 def forward_euler_step(
@@ -83,11 +91,12 @@ def forward_euler_step(
     r: float,
     left_bc: float,
     right_bc: float,
+    t: float = 0.0,
 ) -> np.ndarray:
     """One forward-Euler step for the 1D MOL-FDM Fisher-KPP system."""
-    u0 = apply_dirichlet_bc(u, left_bc, right_bc)
+    u0 = _apply_dirichlet_bc_at(u, left_bc, right_bc, t)
     u_next = u0 + dt * fisher_kpp_rhs(u0, dx, D, r)
-    return np.clip(apply_dirichlet_bc(u_next, left_bc, right_bc), 0.0, 1.0)
+    return np.clip(_apply_dirichlet_bc_at(u_next, left_bc, right_bc, t + dt), 0.0, 1.0)
 
 
 def _solve_tridiagonal(lower: np.ndarray, diag: np.ndarray, upper: np.ndarray, rhs: np.ndarray) -> np.ndarray:
@@ -121,20 +130,21 @@ def _theta_implicit_step(
     theta: float,
     tol: float = 1.0e-10,
     max_iter: int = 30,
+    t: float = 0.0,
 ) -> tuple[np.ndarray, int, float]:
     """One theta-method step with Newton solves for the nonlinear logistic term."""
     if not 0.0 < theta <= 1.0:
         raise ValueError("theta must satisfy 0 < theta <= 1.")
-    u_old = apply_dirichlet_bc(u, left_bc, right_bc)
+    u_old = _apply_dirichlet_bc_at(u, left_bc, right_bc, t)
     f_old = fisher_kpp_rhs(u_old, dx, D, r)
-    v = apply_dirichlet_bc(u_old + dt * f_old, left_bc, right_bc)
+    v = _apply_dirichlet_bc_at(u_old + dt * f_old, left_bc, right_bc, t + dt)
     alpha = theta * dt * D / dx**2
     explicit_part = (1.0 - theta) * f_old[1:-1]
     residual_norm = np.inf
     iterations = 0
 
     for iterations in range(1, max_iter + 1):
-        v = apply_dirichlet_bc(v, left_bc, right_bc)
+        v = _apply_dirichlet_bc_at(v, left_bc, right_bc, t + dt)
         f_v = fisher_kpp_rhs(v, dx, D, r)
         g = v[1:-1] - u_old[1:-1] - dt * (explicit_part + theta * f_v[1:-1])
         residual_norm = float(np.linalg.norm(g, ord=np.inf))
@@ -145,13 +155,13 @@ def _theta_implicit_step(
         delta = _solve_tridiagonal(off, diag, off, -g)
         v[1:-1] += delta
         if float(np.linalg.norm(delta, ord=np.inf)) <= tol:
-            v = apply_dirichlet_bc(v, left_bc, right_bc)
+            v = _apply_dirichlet_bc_at(v, left_bc, right_bc, t + dt)
             f_v = fisher_kpp_rhs(v, dx, D, r)
             g = v[1:-1] - u_old[1:-1] - dt * (explicit_part + theta * f_v[1:-1])
             residual_norm = float(np.linalg.norm(g, ord=np.inf))
             break
 
-    return np.clip(apply_dirichlet_bc(v, left_bc, right_bc), 0.0, 1.0), int(iterations), residual_norm
+    return np.clip(_apply_dirichlet_bc_at(v, left_bc, right_bc, t + dt), 0.0, 1.0), int(iterations), residual_norm
 
 
 def backward_euler_step(
@@ -164,9 +174,10 @@ def backward_euler_step(
     right_bc: float,
     tol: float = 1.0e-10,
     max_iter: int = 30,
+    t: float = 0.0,
 ) -> tuple[np.ndarray, int, float]:
     """One backward-Euler step for the nonlinear 1D Fisher-KPP system."""
-    return _theta_implicit_step(u, dt, dx, D, r, left_bc, right_bc, theta=1.0, tol=tol, max_iter=max_iter)
+    return _theta_implicit_step(u, dt, dx, D, r, left_bc, right_bc, theta=1.0, tol=tol, max_iter=max_iter, t=t)
 
 
 def trapezoidal_step(
@@ -179,9 +190,10 @@ def trapezoidal_step(
     right_bc: float,
     tol: float = 1.0e-10,
     max_iter: int = 30,
+    t: float = 0.0,
 ) -> tuple[np.ndarray, int, float]:
     """One Crank-Nicolson/trapezoidal step for the nonlinear 1D Fisher-KPP system."""
-    return _theta_implicit_step(u, dt, dx, D, r, left_bc, right_bc, theta=0.5, tol=tol, max_iter=max_iter)
+    return _theta_implicit_step(u, dt, dx, D, r, left_bc, right_bc, theta=0.5, tol=tol, max_iter=max_iter, t=t)
 
 
 def rk4_step_2d(u: np.ndarray, dt: float, dx: float, D: float, r: float) -> np.ndarray:
@@ -193,6 +205,65 @@ def rk4_step_2d(u: np.ndarray, dt: float, dx: float, D: float, r: float) -> np.n
     k4 = fisher_kpp_rhs_2d(u0 + dt * k3, dx, D, r)
     u_next = u0 + (dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
     return np.clip(apply_neumann_bc_2d(u_next), 0.0, 1.0)
+
+
+def apply_dirichlet_bc_2d_from_exact(u: np.ndarray, x: np.ndarray, y: np.ndarray, t: float, exact_solution) -> np.ndarray:
+    out = np.asarray(u, dtype=np.float64).copy()
+    xx, yy = np.meshgrid(x, y, indexing="ij")
+    exact = np.asarray(exact_solution(xx, yy, t), dtype=np.float64)
+    out[0, :] = exact[0, :]
+    out[-1, :] = exact[-1, :]
+    out[:, 0] = exact[:, 0]
+    out[:, -1] = exact[:, -1]
+    return out
+
+
+def fisher_kpp_rhs_2d_dirichlet(u: np.ndarray, dx: float, D: float, r: float) -> np.ndarray:
+    dudt = np.zeros_like(u, dtype=np.float64)
+    lap = (
+        u[2:, 1:-1]
+        + u[:-2, 1:-1]
+        + u[1:-1, 2:]
+        + u[1:-1, :-2]
+        - 4.0 * u[1:-1, 1:-1]
+    ) / dx**2
+    dudt[1:-1, 1:-1] = D * lap + r * u[1:-1, 1:-1] * (1.0 - u[1:-1, 1:-1])
+    return dudt
+
+
+def rk4_step_2d_dirichlet_exact(
+    u: np.ndarray,
+    dt: float,
+    dx: float,
+    x: np.ndarray,
+    y: np.ndarray,
+    t: float,
+    D: float,
+    r: float,
+    exact_solution,
+) -> np.ndarray:
+    u0 = apply_dirichlet_bc_2d_from_exact(u, x, y, t, exact_solution)
+    k1 = fisher_kpp_rhs_2d_dirichlet(u0, dx, D, r)
+    k2 = fisher_kpp_rhs_2d_dirichlet(
+        apply_dirichlet_bc_2d_from_exact(u0 + 0.5 * dt * k1, x, y, t + 0.5 * dt, exact_solution),
+        dx,
+        D,
+        r,
+    )
+    k3 = fisher_kpp_rhs_2d_dirichlet(
+        apply_dirichlet_bc_2d_from_exact(u0 + 0.5 * dt * k2, x, y, t + 0.5 * dt, exact_solution),
+        dx,
+        D,
+        r,
+    )
+    k4 = fisher_kpp_rhs_2d_dirichlet(
+        apply_dirichlet_bc_2d_from_exact(u0 + dt * k3, x, y, t + dt, exact_solution),
+        dx,
+        D,
+        r,
+    )
+    u_next = u0 + (dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
+    return np.clip(apply_dirichlet_bc_2d_from_exact(u_next, x, y, t + dt, exact_solution), 0.0, 1.0)
 
 
 def check_rk4_stability(dx: float, dt: float, D: float, r: float, dim: int = 1, safety: float = 0.95) -> dict[str, float | bool]:
@@ -415,11 +486,12 @@ def solve_rk4(
     left_bc: float,
     right_bc: float,
     save_interval: float = 5.0,
+    exact_solution=None,
 ) -> dict[str, np.ndarray]:
     """Solve the 1D Fisher-KPP equation with Dirichlet boundaries."""
     x = np.asarray(x, dtype=np.float64)
     dx = float(x[1] - x[0])
-    u = np.clip(apply_dirichlet_bc(initial_condition(x), left_bc, right_bc), 0.0, 1.0)
+    u = np.clip(_apply_dirichlet_bc_at(initial_condition(x), left_bc, right_bc, 0.0), 0.0, 1.0)
 
     snapshots: list[np.ndarray] = []
     times: list[float] = []
@@ -437,9 +509,9 @@ def solve_rk4(
             next_save_t += save_interval
         if n == Nt:
             break
-        u = rk4_step(u, dt, dx, D, r, left_bc, right_bc)
+        u = rk4_step(u, dt, dx, D, r, left_bc, right_bc, t=t)
 
-    return {
+    result = {
         "dimension": np.array(1),
         "x": x,
         "times": np.asarray(times),
@@ -448,6 +520,14 @@ def solve_rk4(
         "mass": np.asarray(masses),
         "u_final": u,
     }
+    if exact_solution is not None:
+        exact_snapshots = np.asarray([exact_solution(x, float(t)) for t in result["times"]])
+        exact_final = exact_solution(x, float(Nt * dt))
+        result["exact_snapshots"] = exact_snapshots
+        result["exact_final"] = np.asarray(exact_final)
+        result["abs_error_final"] = np.abs(u - exact_final)
+        result["relative_l2_final"] = np.array(relative_l2(u, exact_final))
+    return result
 
 
 def solve_1d_method(
@@ -464,6 +544,7 @@ def solve_1d_method(
     probe_x: float | None = None,
     tol: float = 1.0e-10,
     max_iter: int = 30,
+    exact_solution=None,
 ) -> dict[str, np.ndarray]:
     """Solve the same 1D Fisher-KPP problem with FE, BE, trapezoidal, or RK4."""
     normalized = method.lower().replace("-", "_").replace(" ", "_")
@@ -487,7 +568,7 @@ def solve_1d_method(
     method_name = aliases[normalized]
     x = np.asarray(x, dtype=np.float64)
     dx = float(x[1] - x[0])
-    u = np.clip(apply_dirichlet_bc(initial_condition(x), left_bc, right_bc), 0.0, 1.0)
+    u = np.clip(_apply_dirichlet_bc_at(initial_condition(x), left_bc, right_bc, 0.0), 0.0, 1.0)
     if probe_x is None:
         probe_x = float(0.5 * (x[0] + x[-1]))
 
@@ -512,23 +593,23 @@ def solve_1d_method(
         if n == Nt:
             break
         if method_name == "forward_euler":
-            u = forward_euler_step(u, dt, dx, D, r, left_bc, right_bc)
+            u = forward_euler_step(u, dt, dx, D, r, left_bc, right_bc, t=t)
             newton_iters.append(0)
             newton_residuals.append(0.0)
         elif method_name == "backward_euler":
-            u, iters, residual = backward_euler_step(u, dt, dx, D, r, left_bc, right_bc, tol=tol, max_iter=max_iter)
+            u, iters, residual = backward_euler_step(u, dt, dx, D, r, left_bc, right_bc, tol=tol, max_iter=max_iter, t=t)
             newton_iters.append(iters)
             newton_residuals.append(residual)
         elif method_name == "trapezoidal":
-            u, iters, residual = trapezoidal_step(u, dt, dx, D, r, left_bc, right_bc, tol=tol, max_iter=max_iter)
+            u, iters, residual = trapezoidal_step(u, dt, dx, D, r, left_bc, right_bc, tol=tol, max_iter=max_iter, t=t)
             newton_iters.append(iters)
             newton_residuals.append(residual)
         else:
-            u = rk4_step(u, dt, dx, D, r, left_bc, right_bc)
+            u = rk4_step(u, dt, dx, D, r, left_bc, right_bc, t=t)
             newton_iters.append(0)
             newton_residuals.append(0.0)
 
-    return {
+    result = {
         "dimension": np.array(1),
         "method": np.array(method_name),
         "x": x,
@@ -542,6 +623,14 @@ def solve_1d_method(
         "newton_residual": np.asarray(newton_residuals, dtype=np.float64),
         "u_final": u,
     }
+    if exact_solution is not None:
+        exact_snapshots = np.asarray([exact_solution(x, float(t)) for t in result["times"]])
+        exact_final = exact_solution(x, float(Nt * dt))
+        result["exact_snapshots"] = exact_snapshots
+        result["exact_final"] = np.asarray(exact_final)
+        result["abs_error_final"] = np.abs(u - exact_final)
+        result["relative_l2_final"] = np.array(relative_l2(u, exact_final))
+    return result
 
 
 def solve_rk4_2d(
@@ -554,6 +643,8 @@ def solve_rk4_2d(
     initial_condition,
     save_interval: float = 0.05,
     front_levels: tuple[float, ...] = (0.05, 0.10),
+    boundary_condition: str = "neumann",
+    exact_solution=None,
 ) -> dict[str, np.ndarray]:
     """Solve the 2D Fisher-KPP equation with no-flux boundaries."""
     x = np.asarray(x, dtype=np.float64)
@@ -565,7 +656,14 @@ def solve_rk4_2d(
         raise ValueError("2D RK4 solver expects a uniform square grid.")
 
     xx, yy = np.meshgrid(x, y, indexing="ij")
-    u = np.clip(apply_neumann_bc_2d(initial_condition(xx, yy)), 0.0, 1.0)
+    if boundary_condition == "dirichlet_exact":
+        if exact_solution is None:
+            raise ValueError("exact_solution is required when boundary_condition='dirichlet_exact'.")
+        u = np.clip(apply_dirichlet_bc_2d_from_exact(initial_condition(xx, yy), x, y, 0.0, exact_solution), 0.0, 1.0)
+    elif boundary_condition == "neumann":
+        u = np.clip(apply_neumann_bc_2d(initial_condition(xx, yy)), 0.0, 1.0)
+    else:
+        raise ValueError("boundary_condition must be 'neumann' or 'dirichlet_exact'.")
 
     snapshots: list[np.ndarray] = []
     times: list[float] = []
@@ -584,7 +682,10 @@ def solve_rk4_2d(
             next_save_t += save_interval
         if n == Nt:
             break
-        u = rk4_step_2d(u, dt, dx, D, r)
+        if boundary_condition == "dirichlet_exact":
+            u = rk4_step_2d_dirichlet_exact(u, dt, dx, x, y, t, D, r, exact_solution)
+        else:
+            u = rk4_step_2d(u, dt, dx, D, r)
 
     result: dict[str, np.ndarray] = {
         "dimension": np.array(2),
@@ -597,6 +698,11 @@ def solve_rk4_2d(
     }
     for level, values in areas.items():
         result[f"area_ge_{level:.2f}"] = np.asarray(values)
+    if exact_solution is not None:
+        exact_final = np.asarray(exact_solution(xx, yy, Nt * dt), dtype=np.float64)
+        result["exact_final"] = exact_final
+        result["abs_error_final"] = np.abs(u - exact_final)
+        result["relative_l2_final"] = np.array(relative_l2(u, exact_final))
     return result
 
 

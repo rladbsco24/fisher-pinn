@@ -3,46 +3,66 @@ from __future__ import annotations
 import numpy as np
 
 
-# 1D traveling-front setup -------------------------------------------------------
+# Ablowitz-Zeppetella exact traveling-front setup ------------------------------
 D = 1.0
 r = 1.0
-L = 200.0
-T = 60.0
-Nx = 401
+c = 5.0 / np.sqrt(6.0)
+alpha = 1.0 / np.sqrt(6.0)
+L = 40.0
+x_left = -20.0
+x_right = 20.0
+T = 10.0
+Nx = 201
 dx = L / (Nx - 1)
-x = np.linspace(0.0, L, Nx)
-dt = 0.01
+x = np.linspace(x_left, x_right, Nx)
+dt = 0.005
 Nt = int(round(T / dt))
 dt = T / Nt
-left_bc = 1.0
-right_bc = 0.0
+x0 = 0.0
+
+
+def ablowitz_zeppetella_exact(x: np.ndarray, t: float | np.ndarray, x0_value: float = x0) -> np.ndarray:
+    z = (np.asarray(x, dtype=np.float64) - c * np.asarray(t, dtype=np.float64) - float(x0_value)) / np.sqrt(6.0)
+    return np.power(1.0 + np.exp(np.clip(z, -80.0, 80.0)), -2.0)
 
 
 def initial_condition(x: np.ndarray) -> np.ndarray:
-    return 1.0 / (1.0 + np.exp((x - 50.0) / 5.0))
+    return ablowitz_zeppetella_exact(x, 0.0)
 
 
-# 2D square-domain setup matching the PINN/RK4 comparison problem ----------------
-D_2D = 0.02
-r_2D = 3.0
-BOX_2D = 1.0
-T_2D = 0.5
-GRID_2D = 51
-TRUTH_STEPS_2D = 160
-x_2d = np.linspace(0.0, BOX_2D, GRID_2D)
-y_2d = np.linspace(0.0, BOX_2D, GRID_2D)
-dx_2d = BOX_2D / (GRID_2D - 1)
+def left_bc(t: float) -> float:
+    return float(ablowitz_zeppetella_exact(np.asarray([x_left]), t)[0])
+
+
+def right_bc(t: float) -> float:
+    return float(ablowitz_zeppetella_exact(np.asarray([x_right]), t)[0])
+
+
+# 2D exact ridge setup: u(x,y,t)=u_AZ(x,t), so u_yy=0 --------------------------
+D_2D = 1.0
+r_2D = 1.0
+L_2D = 30.0
+BOX_2D = L_2D
+x_left_2d = -15.0
+x_right_2d = 15.0
+y_bottom_2d = -15.0
+y_top_2d = 15.0
+T_2D = 3.0
+GRID_2D = 61
+TRUTH_STEPS_2D = 300
+x_2d = np.linspace(x_left_2d, x_right_2d, GRID_2D)
+y_2d = np.linspace(y_bottom_2d, y_top_2d, GRID_2D)
+dx_2d = L_2D / (GRID_2D - 1)
 dt_2d = T_2D / TRUTH_STEPS_2D
 Nt_2d = TRUTH_STEPS_2D
-seed_center_x = 0.32
-seed_center_y = 0.68
-seed_sigma = 0.07
-seed_amplitude = 0.35
 
 
 def initial_condition_2d(x: np.ndarray, y: np.ndarray) -> np.ndarray:
-    dist2 = (x - seed_center_x) ** 2 + (y - seed_center_y) ** 2
-    return seed_amplitude * np.exp(-dist2 / (2.0 * seed_sigma**2))
+    return ablowitz_zeppetella_exact(x, 0.0)
+
+
+def ablowitz_zeppetella_exact_2d(x: np.ndarray, y: np.ndarray, t: float | np.ndarray) -> np.ndarray:
+    return ablowitz_zeppetella_exact(x, t)
 
 
 # Kept for compatibility with implicit solvers; RK4 does not use them.

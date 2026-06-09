@@ -318,15 +318,19 @@ def save_training_diagnostics_figure(
         ("ic", COLORS["gold"]),
         ("bc", COLORS["neutral"]),
         ("mass", COLORS["teal"]),
+        ("mass_floor", COLORS["olive"]),
         ("expected_front_pde", COLORS["gold"]),
         ("leading_edge", COLORS["pink"]),
         ("leading_edge_area", COLORS["teal"]),
+        ("front_support_tversky", COLORS["olive"]),
         ("front_contrast", COLORS["rose"]),
         ("front_profile", COLORS["blue"]),
         ("level_set", COLORS["gold"]),
         ("front_speed", COLORS["blue_light"]),
         ("front_grad", COLORS["pink"]),
         ("grad", COLORS["neutral"]),
+        ("physics_anchor", COLORS["neutral"]),
+        ("coefficient_field", COLORS["teal"]),
     ]:
         epochs, values = _as_history_arrays(history, key)
         if len(values) and np.nanmax(values) > 0.0:
@@ -340,6 +344,8 @@ def save_training_diagnostics_figure(
     for key, color, true_value in [
         ("diffusion", COLORS["blue"], true_diffusion),
         ("reaction", COLORS["orange"], true_reaction),
+        ("diffusion_field_mean", COLORS["teal"], true_diffusion),
+        ("reaction_field_mean", COLORS["pink"], true_reaction),
     ]:
         epochs, values = _as_history_arrays(history, key)
         if len(values):
@@ -355,6 +361,9 @@ def save_training_diagnostics_figure(
         ("front_weight_mean", COLORS["blue"]),
         ("residual_exponent", COLORS["gold"]),
         ("sparse", COLORS["orange"]),
+        ("diffusion_field_std", COLORS["teal"]),
+        ("reaction_field_std", COLORS["pink"]),
+        ("coefficient_log_abs_mean", COLORS["neutral"]),
         ("time_window_high", COLORS["pink"]),
         ("origin_error", COLORS["olive"]),
     ]:
@@ -373,13 +382,16 @@ def save_training_diagnostics_figure(
         ("aw_ic", COLORS["gold"]),
         ("aw_bc", COLORS["neutral"]),
         ("aw_mass", COLORS["teal"]),
+        ("aw_mass_floor", COLORS["olive"]),
         ("aw_expected_front_pde", COLORS["gold"]),
         ("aw_leading_edge", COLORS["pink"]),
+        ("aw_front_support_tversky", COLORS["olive"]),
         ("aw_front_contrast", COLORS["rose"]),
         ("aw_front_profile", COLORS["blue"]),
         ("aw_level_set", COLORS["gold"]),
         ("aw_front_speed", COLORS["blue_light"]),
         ("aw_front_grad", COLORS["pink"]),
+        ("aw_coefficient_field", COLORS["teal"]),
     ]
     plotted_adaptive = False
     for key, color in adaptive_keys:

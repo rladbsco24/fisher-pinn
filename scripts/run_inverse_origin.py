@@ -60,6 +60,11 @@ def parse_args() -> argparse.Namespace:
         help="Use the Geo-Spectral Causal Adaptive gPINN forward profile on the same Fisher-KPP problem.",
     )
     parser.add_argument(
+        "--ablowitz-zeppetella",
+        action="store_true",
+        help="Use the exact Ablowitz-Zeppetella traveling-wave benchmark: D=r=1, c=5/sqrt(6), x in [-20,20].",
+    )
+    parser.add_argument(
         "--warm-start",
         choices=["drift_corrected", "centroid", "neutral", "shooting_prefit"],
         default="drift_corrected",
@@ -101,6 +106,8 @@ def build_config(args: argparse.Namespace) -> ExperimentConfig:
         cfg = cfg.korea_pine_style()
     if args.geo_spectral_forward:
         cfg = cfg.geo_spectral_forward()
+    if getattr(args, "ablowitz_zeppetella", False):
+        cfg = cfg.ablowitz_zeppetella_forward()
     if args.data_density_gain is not None:
         cfg = replace(cfg, weights=replace(cfg.weights, data_density_gain=args.data_density_gain))
     if args.quick:

@@ -29,12 +29,28 @@ from fisher_kpp_rk4.config import (
     CURVE_RHO0,
     CURVE_RHO_INF,
     CURVE_V0,
+    Nt,
+    T,
+    ablowitz_zeppetella_exact,
+    ablowitz_zeppetella_exact_2d,
+    c,
+    dt,
+    left_bc,
     LONG_TIME_D,
     LONG_TIME_DT,
     LONG_TIME_DX,
     LONG_TIME_R,
+    D,
+    D_2D,
+    Nt_2d,
+    r,
+    r_2D,
+    right_bc,
     initial_condition,
     initial_condition_2d,
+    x,
+    x_2d,
+    y_2d,
 )
 
 
@@ -60,6 +76,24 @@ def test_1d_rk4_shapes_bounds_and_fronts() -> None:
     assert result["fronts"].shape == result["times"].shape
 
 
+def test_ablowitz_zeppetella_1d_rk4_matches_exact_solution() -> None:
+    result = solve_rk4(
+        x=x,
+        dt=dt,
+        Nt=Nt,
+        D=D,
+        r=r,
+        initial_condition=initial_condition,
+        left_bc=left_bc,
+        right_bc=right_bc,
+        save_interval=T,
+        exact_solution=ablowitz_zeppetella_exact,
+    )
+    assert float(result["relative_l2_final"]) < 3.0e-3
+    speed = result["fronts"][-1] - result["fronts"][0]
+    assert abs(speed / T - c) < 0.1
+
+
 def test_2d_rk4_shapes_bounds_and_front_areas() -> None:
     x = np.linspace(0.0, 1.0, 25)
     result = solve_rk4_2d(
@@ -81,6 +115,22 @@ def test_2d_rk4_shapes_bounds_and_front_areas() -> None:
     assert result["area_ge_0.05"].shape == result["times"].shape
     assert result["area_ge_0.10"].shape == result["times"].shape
     assert result["mass"].shape == result["times"].shape
+
+
+def test_ablowitz_zeppetella_2d_rk4_matches_exact_solution() -> None:
+    result = solve_rk4_2d(
+        x=x_2d,
+        y=y_2d,
+        dt=0.005,
+        Nt=int(round(0.5 / 0.005)),
+        D=D_2D,
+        r=r_2D,
+        initial_condition=initial_condition_2d,
+        save_interval=0.5,
+        boundary_condition="dirichlet_exact",
+        exact_solution=ablowitz_zeppetella_exact_2d,
+    )
+    assert float(result["relative_l2_final"]) < 3.0e-3
 
 
 def test_stability_check_accepts_1d_and_2d() -> None:

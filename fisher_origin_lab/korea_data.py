@@ -11,7 +11,7 @@ import torch
 from matplotlib.path import Path as MplPath
 
 from .config import DomainConfig, ModelConfig, PDEConfig, SeedConfig
-from .losses import boundary_neumann_loss, pde_residual
+from .losses import boundary_neumann_loss, spatial_coefficient_regularization_loss
 from .models import OriginPINN
 
 
@@ -46,13 +46,202 @@ class KoreaPineWiltGrid:
 
 
 @dataclass(frozen=True)
+class KoreaPineWiltDomainScale:
+    width_km: float
+    height_km: float
+    length_scale_km: float
+    length_scale_mode: str
+
+
+@dataclass(frozen=True)
+class KoreaPineWiltPhysicsPrior:
+    diffusion_km2_per_year: float
+    reaction_per_year: float
+    normalized_diffusion: float
+    normalized_diffusion_x: float
+    normalized_diffusion_y: float
+    normalized_reaction: float
+    front_speed_km_per_year: float
+    scale: KoreaPineWiltDomainScale
+
+
+@dataclass(frozen=True)
 class KoreaPineWiltPINNResult:
     years: np.ndarray
     fields: np.ndarray
     history: list[dict[str, float]]
     metrics: list[dict[str, float | int]]
-    physics: dict[str, float]
+    physics: dict[str, float | str]
     status: str
+
+
+def korea_domain_scale(grid: KoreaPineWiltGrid, mode: str = "max_extent") -> KoreaPineWiltDomainScale:
+    """Return the physical length scale used by the normalized Korea model.
+
+    The current PINN/RK4 grid uses x,y in [0, 1]. A physical diffusion D_phys in
+    km^2/year therefore maps to D_norm = D_phys / L^2, where L is the chosen
+    kilometer length represented by one normalized coordinate unit.
+    """
+
+    width_km = float((grid.x_edges[-1] - grid.x_edges[0]) / 1000.0)
+    height_km = float((grid.y_edges[-1] - grid.y_edges[0]) / 1000.0)
+    if width_km <= 0.0 or height_km <= 0.0:
+        raise ValueError("Korea grid must have positive x/y physical extents.")
+    mode_key = str(mode).lower()
+    if mode_key == "max_extent":
+        length_scale_km = max(width_km, height_km)
+    elif mode_key == "mean_extent":
+        length_scale_km = 0.5 * (width_km + height_km)
+    elif mode_key == "geometric_mean_extent":
+        length_scale_km = float(np.sqrt(width_km * height_km))
+    elif mode_key == "x_extent":
+        length_scale_km = width_km
+    elif mode_key == "y_extent":
+        length_scale_km = height_km
+    else:
+        raise ValueError(
+            "Unsupported Korea length-scale mode. Use one of "
+            "'max_extent', 'mean_extent', 'geometric_mean_extent', 'x_extent', or 'y_extent'."
+        )
+    return KoreaPineWiltDomainScale(
+        width_km=width_km,
+        height_km=height_km,
+        length_scale_km=float(length_scale_km),
+        length_scale_mode=mode_key,
+    )
+
+
+def korea_physical_to_normalized_diffusion(
+    diffusion_km2_per_year: float,
+    grid: KoreaPineWiltGrid,
+    *,
+    length_scale_mode: str = "max_extent",
+) -> float:
+    scale = korea_domain_scale(grid, length_scale_mode)
+    return float(diffusion_km2_per_year) / max(scale.length_scale_km**2, 1.0e-12)
+
+
+def korea_physical_to_anisotropic_normalized_diffusion(
+    diffusion_km2_per_year: float,
+    grid: KoreaPineWiltGrid,
+) -> tuple[float, float]:
+    """Map physical scalar diffusion to x/y normalized diffusion coefficients."""
+
+    scale = korea_domain_scale(grid, "max_extent")
+    diffusion = float(diffusion_km2_per_year)
+    dx = diffusion / max(scale.width_km**2, 1.0e-12)
+    dy = diffusion / max(scale.height_km**2, 1.0e-12)
+    return float(dx), float(dy)
+
+
+def korea_anisotropic_normalized_diffusion_components(
+    normalized_diffusion: float,
+    grid: KoreaPineWiltGrid,
+    *,
+    length_scale_mode: str = "max_extent",
+) -> tuple[float, float]:
+    """Return x/y coefficients consistent with a scalar physical D prior.
+
+    ``normalized_diffusion`` is defined against the selected length scale L. Since
+    the Korea grid stores x and y separately in [0, 1], the physical PDE maps to
+    D_x = D_phys / width^2 and D_y = D_phys / height^2.
+    """
+
+    scale = korea_domain_scale(grid, length_scale_mode)
+    diffusion_phys = float(normalized_diffusion) * scale.length_scale_km**2
+    return korea_physical_to_anisotropic_normalized_diffusion(diffusion_phys, grid)
+
+
+def korea_normalized_to_physical_diffusion(
+    normalized_diffusion: float,
+    grid: KoreaPineWiltGrid,
+    *,
+    length_scale_mode: str = "max_extent",
+) -> float:
+    scale = korea_domain_scale(grid, length_scale_mode)
+    return float(normalized_diffusion) * scale.length_scale_km**2
+
+
+def korea_physics_prior_from_physical(
+    grid: KoreaPineWiltGrid,
+    *,
+    diffusion_km2_per_year: float = 15.5,
+    reaction_per_year: float = 0.70,
+    length_scale_mode: str = "max_extent",
+) -> KoreaPineWiltPhysicsPrior:
+    """Build a physical-to-normalized Korea Fisher-KPP prior.
+
+    The default diffusion follows the previous Korea PINN notebook's reported
+    D ~= 15.5 km^2/year. Reaction remains configurable because the old PINN
+    fitted near-zero growth in a decreasing-control period, while the forward
+    Fisher simulation may intentionally use a nonzero spread regime.
+    """
+
+    scale = korea_domain_scale(grid, length_scale_mode)
+    diffusion_norm = float(diffusion_km2_per_year) / max(scale.length_scale_km**2, 1.0e-12)
+    diffusion_x, diffusion_y = korea_physical_to_anisotropic_normalized_diffusion(diffusion_km2_per_year, grid)
+    reaction_norm = float(reaction_per_year)
+    speed = 2.0 * np.sqrt(max(float(diffusion_km2_per_year) * float(reaction_per_year), 0.0))
+    return KoreaPineWiltPhysicsPrior(
+        diffusion_km2_per_year=float(diffusion_km2_per_year),
+        reaction_per_year=float(reaction_per_year),
+        normalized_diffusion=diffusion_norm,
+        normalized_diffusion_x=diffusion_x,
+        normalized_diffusion_y=diffusion_y,
+        normalized_reaction=reaction_norm,
+        front_speed_km_per_year=float(speed),
+        scale=scale,
+    )
+
+
+def korea_physics_prior_from_normalized(
+    grid: KoreaPineWiltGrid,
+    *,
+    normalized_diffusion: float,
+    normalized_reaction: float,
+    length_scale_mode: str = "max_extent",
+) -> KoreaPineWiltPhysicsPrior:
+    scale = korea_domain_scale(grid, length_scale_mode)
+    diffusion_phys = float(normalized_diffusion) * scale.length_scale_km**2
+    diffusion_x, diffusion_y = korea_physical_to_anisotropic_normalized_diffusion(diffusion_phys, grid)
+    reaction_phys = float(normalized_reaction)
+    speed = 2.0 * np.sqrt(max(diffusion_phys * reaction_phys, 0.0))
+    return KoreaPineWiltPhysicsPrior(
+        diffusion_km2_per_year=diffusion_phys,
+        reaction_per_year=reaction_phys,
+        normalized_diffusion=float(normalized_diffusion),
+        normalized_diffusion_x=diffusion_x,
+        normalized_diffusion_y=diffusion_y,
+        normalized_reaction=float(normalized_reaction),
+        front_speed_km_per_year=float(speed),
+        scale=scale,
+    )
+
+
+def korea_equivalent_dr_pairs(
+    *,
+    diffusion_km2_per_year: float,
+    reaction_per_year: float,
+    multipliers: tuple[float, ...] = (0.25, 0.5, 1.0, 2.0, 4.0),
+) -> list[dict[str, float]]:
+    """Return D/r pairs with the same Fisher front speed 2 sqrt(D r)."""
+
+    product = max(float(diffusion_km2_per_year) * float(reaction_per_year), 0.0)
+    rows = []
+    for multiplier in multipliers:
+        if multiplier <= 0.0:
+            continue
+        d_value = float(diffusion_km2_per_year) * float(multiplier)
+        r_value = product / max(d_value, 1.0e-12)
+        rows.append(
+            {
+                "diffusion_km2_per_year": d_value,
+                "reaction_per_year": r_value,
+                "front_speed_km_per_year": float(2.0 * np.sqrt(product)),
+                "diffusion_multiplier": float(multiplier),
+            }
+        )
+    return rows
 
 
 def load_manifest(path: Path | None = None) -> dict:
@@ -229,6 +418,33 @@ def _laplacian_masked_neumann(u: np.ndarray, dx: float, land_mask: np.ndarray) -
     return np.where(mask, lap, 0.0)
 
 
+def _second_derivatives_neumann(u: np.ndarray, dx: float) -> tuple[np.ndarray, np.ndarray]:
+    padded = np.pad(u, 1, mode="edge")
+    center = padded[1:-1, 1:-1]
+    d2y = (padded[2:, 1:-1] + padded[:-2, 1:-1] - 2.0 * center) / dx**2
+    d2x = (padded[1:-1, 2:] + padded[1:-1, :-2] - 2.0 * center) / dx**2
+    return d2x, d2y
+
+
+def _second_derivatives_masked_neumann(
+    u: np.ndarray,
+    dx: float,
+    land_mask: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    mask = np.asarray(land_mask, dtype=bool)
+    u_land = np.where(mask, u, 0.0)
+    padded_u = np.pad(u_land, 1, mode="edge")
+    padded_m = np.pad(mask, 1, mode="edge")
+    center = u_land
+    up = np.where(padded_m[2:, 1:-1], padded_u[2:, 1:-1], center)
+    down = np.where(padded_m[:-2, 1:-1], padded_u[:-2, 1:-1], center)
+    right = np.where(padded_m[1:-1, 2:], padded_u[1:-1, 2:], center)
+    left = np.where(padded_m[1:-1, :-2], padded_u[1:-1, :-2], center)
+    d2y = (up + down - 2.0 * center) / dx**2
+    d2x = (right + left - 2.0 * center) / dx**2
+    return np.where(mask, d2x, 0.0), np.where(mask, d2y, 0.0)
+
+
 def _rk4_step_2d(
     u: np.ndarray,
     dt: float,
@@ -236,14 +452,19 @@ def _rk4_step_2d(
     diffusion: float,
     reaction: float,
     land_mask: np.ndarray | None = None,
+    diffusion_y: float | None = None,
 ) -> np.ndarray:
     mask = None if land_mask is None else np.asarray(land_mask, dtype=bool)
+    diffusion_x = float(diffusion)
+    diffusion_y_value = diffusion_x if diffusion_y is None else float(diffusion_y)
 
     def rhs(v: np.ndarray) -> np.ndarray:
         if mask is None:
-            return diffusion * _laplacian_neumann(v, dx) + reaction * v * (1.0 - v)
+            d2x, d2y = _second_derivatives_neumann(v, dx)
+            return diffusion_x * d2x + diffusion_y_value * d2y + reaction * v * (1.0 - v)
         v_land = np.where(mask, v, 0.0)
-        return np.where(mask, diffusion * _laplacian_masked_neumann(v_land, dx, mask) + reaction * v_land * (1.0 - v_land), 0.0)
+        d2x, d2y = _second_derivatives_masked_neumann(v_land, dx, mask)
+        return np.where(mask, diffusion_x * d2x + diffusion_y_value * d2y + reaction * v_land * (1.0 - v_land), 0.0)
 
     k1 = rhs(u)
     k2 = rhs(u + 0.5 * dt * k1)
@@ -261,6 +482,7 @@ def simulate_density_rk4(
     start_year: int = 2016,
     end_year: int = 2030,
     diffusion: float = 0.0015,
+    diffusion_y: float | None = None,
     reaction: float = 0.70,
     steps_per_year: int = 80,
     land_mask: np.ndarray | None = None,
@@ -280,7 +502,9 @@ def simulate_density_rk4(
         u = np.where(mask, u, 0.0)
     dx = 1.0 / max(u.shape[0] - 1, 1)
     dt = 1.0 / float(steps_per_year)
-    dt_diff_limit = 0.69 * dx**2 / (2.0 * max(diffusion, 1.0e-12))
+    diffusion_x = float(diffusion)
+    diffusion_y_value = diffusion_x if diffusion_y is None else float(diffusion_y)
+    dt_diff_limit = 0.69 * dx**2 / (2.0 * max(diffusion_x + diffusion_y_value, 1.0e-12))
     if dt > 0.95 * min(dt_diff_limit, 1.0 / max(reaction, 1.0e-12)):
         raise ValueError(
             "RK4 Korea simulation is outside the practical stability estimate; "
@@ -291,7 +515,7 @@ def simulate_density_rk4(
     fields = [np.where(mask, np.clip(u, 0.0, 1.0), 0.0) if mask is not None else np.clip(u, 0.0, 1.0)]
     for _year in years[:-1]:
         for _ in range(steps_per_year):
-            u = _rk4_step_2d(u, dt, dx, diffusion, reaction, mask)
+            u = _rk4_step_2d(u, dt, dx, diffusion_x, reaction, mask, diffusion_y=diffusion_y_value)
         fields.append(u.copy())
     return years, np.asarray(fields)
 
@@ -317,19 +541,45 @@ def compare_observed_and_simulated(
             pred_eval = pred.ravel()
         denom = float(np.linalg.norm(obs_eval)) + 1.0e-12
         rel_l2 = float(np.linalg.norm(pred_eval - obs_eval) / denom)
+        mae = float(np.mean(np.abs(pred_eval - obs_eval)))
+        observed_mass = float(np.mean(obs_eval))
+        simulated_mass = float(np.mean(pred_eval))
+        mass_absolute_error = abs(simulated_mass - observed_mass)
+        mass_relative_error = mass_absolute_error / (abs(observed_mass) + 1.0e-12)
         if np.std(obs_eval) <= 1.0e-12 or np.std(pred_eval) <= 1.0e-12:
             corr = np.nan
         else:
             corr = float(np.corrcoef(obs_eval, pred_eval)[0, 1])
-        rows.append(
-            {
-                "year": int(year),
-                "observed_mean": float(obs_eval.mean()),
-                "simulated_mean": float(pred_eval.mean()),
-                "relative_l2": rel_l2,
-                "correlation": corr,
-            }
-        )
+        row = {
+            "year": int(year),
+            "observed_mean": observed_mass,
+            "simulated_mean": simulated_mass,
+            "mean_absolute_error": mae,
+            "mass_absolute_error": mass_absolute_error,
+            "mass_relative_error": mass_relative_error,
+            "relative_l2": rel_l2,
+            "correlation": corr,
+        }
+        for threshold, suffix in [(0.05, "005"), (0.10, "010")]:
+            obs_pos = obs_eval >= threshold
+            pred_pos = pred_eval >= threshold
+            tp = float(np.logical_and(obs_pos, pred_pos).sum())
+            fp = float(np.logical_and(~obs_pos, pred_pos).sum())
+            fn = float(np.logical_and(obs_pos, ~pred_pos).sum())
+            tn = float(np.logical_and(~obs_pos, ~pred_pos).sum())
+            obs_count = tp + fn
+            pred_count = tp + fp
+            row[f"support_tp_{suffix}"] = tp
+            row[f"support_fp_{suffix}"] = fp
+            row[f"support_fn_{suffix}"] = fn
+            row[f"support_tn_{suffix}"] = tn
+            row[f"support_observed_fraction_{suffix}"] = float(obs_count / max(len(obs_eval), 1))
+            row[f"support_simulated_fraction_{suffix}"] = float(pred_count / max(len(pred_eval), 1))
+            row[f"support_fnr_{suffix}"] = float(fn / obs_count) if obs_count > 0.0 else np.nan
+            row[f"support_fpr_{suffix}"] = float(fp / (fp + tn)) if (fp + tn) > 0.0 else np.nan
+            row[f"support_dice_{suffix}"] = float(2.0 * tp / (2.0 * tp + fp + fn)) if (tp + fp + fn) > 0.0 else np.nan
+            row[f"support_tversky_{suffix}"] = float(tp / (tp + 0.3 * fp + 0.7 * fn)) if (tp + fp + fn) > 0.0 else np.nan
+        rows.append(row)
     return rows
 
 
@@ -356,6 +606,42 @@ def _korea_training_tensors(
     xyt = torch.tensor(np.concatenate(xyt_rows, axis=0), dtype=torch.float32, device=device)
     values = torch.tensor(np.concatenate(value_rows, axis=0), dtype=torch.float32, device=device)
     return xyt, values
+
+
+def _korea_anisotropic_pde_residual(
+    model: OriginPINN,
+    xy: torch.Tensor,
+    t: torch.Tensor,
+    *,
+    diffusion_x_scale: float,
+    diffusion_y_scale: float,
+) -> torch.Tensor:
+    xy_req = xy.detach().clone().requires_grad_(True)
+    t_req = t.detach().clone().requires_grad_(True)
+    u = model(xy_req, t_req)
+    ones = torch.ones_like(u)
+    u_t = torch.autograd.grad(u, t_req, ones, create_graph=True)[0]
+    u_xy = torch.autograd.grad(u, xy_req, ones, create_graph=True)[0]
+    u_x = u_xy[:, 0:1]
+    u_y = u_xy[:, 1:2]
+    u_xx = torch.autograd.grad(u_x, xy_req, torch.ones_like(u_x), create_graph=True)[0][:, 0:1]
+    u_yy = torch.autograd.grad(u_y, xy_req, torch.ones_like(u_y), create_graph=True)[0][:, 1:2]
+    diffusion_base = model.diffusion_coefficient(xy_req).clamp_min(1.0e-12)
+    if model.has_spatial_coefficients():
+        diffusion_grad = torch.autograd.grad(
+            diffusion_base,
+            xy_req,
+            torch.ones_like(diffusion_base),
+            create_graph=True,
+        )[0]
+    else:
+        diffusion_grad = torch.zeros_like(xy_req)
+    diffusion_flux = (
+        float(diffusion_x_scale) * (diffusion_base * u_xx + diffusion_grad[:, 0:1] * u_x)
+        + float(diffusion_y_scale) * (diffusion_base * u_yy + diffusion_grad[:, 1:2] * u_y)
+    )
+    reaction = model.reaction_coefficient(xy_req)
+    return u_t - diffusion_flux - reaction * u * (1.0 - u)
 
 
 def predict_korea_pinn_fields(
@@ -396,9 +682,14 @@ def fit_korea_pine_wilt_pinn(
     data_weight: float = 8.0,
     pde_weight: float = 0.05,
     boundary_weight: float = 0.01,
+    initial_condition_weight: float = 16.0,
+    initial_condition_points: int = 2048,
     sea_weight: float = 2.0,
     diffusion: float = 0.0015,
     reaction: float = 0.20,
+    physics_anchor_weight: float = 0.08,
+    coefficient_field_weight: float = 0.02,
+    physics_length_scale_mode: str = "max_extent",
     seed: int = 7,
     device: str | torch.device | None = None,
 ) -> KoreaPineWiltPINNResult:
@@ -423,6 +714,14 @@ def fit_korea_pine_wilt_pinn(
 
     domain = DomainConfig(box=1.0, t_end=t_end, grid=int(grid.density.shape[-1]), truth_steps=0)
     pde = PDEConfig(diffusion=diffusion, reaction=reaction, velocity_x=0.0, velocity_y=0.0, include_advection=False)
+    physics_prior = korea_physics_prior_from_normalized(
+        grid,
+        normalized_diffusion=diffusion,
+        normalized_reaction=reaction,
+        length_scale_mode=physics_length_scale_mode,
+    )
+    diffusion_x_scale = physics_prior.normalized_diffusion_x / max(float(diffusion), 1.0e-12)
+    diffusion_y_scale = physics_prior.normalized_diffusion_y / max(float(diffusion), 1.0e-12)
     seed_cfg = SeedConfig(center_x=0.5, center_y=0.5, sigma=0.12, amplitude=0.25)
     model_cfg = ModelConfig(
         architecture="pirate",
@@ -441,9 +740,18 @@ def fit_korea_pine_wilt_pinn(
         use_traveling_wave_features=False,
         hard_initial_condition=False,
         use_kpp_front_envelope=False,
+        use_spatial_coefficients=True,
+        spatial_coefficient_features=8,
+        spatial_coefficient_sigma=0.65,
+        spatial_coefficient_hidden=32,
+        spatial_coefficient_log_scale=0.35,
     )
     model = OriginPINN(domain, pde, seed_cfg, model_cfg).to(device_obj)
+    grid_xy_np = _normalized_grid_xy(grid)
     xyt, values = _korea_training_tensors(grid, start_year=start_year, device=device_obj)
+    initial_xy = torch.tensor(grid_xy_np, dtype=torch.float32, device=device_obj)
+    initial_values = torch.tensor(grid.density[0].reshape(-1, 1), dtype=torch.float32, device=device_obj)
+    initial_density_weight = 1.0 + 12.0 * initial_values.detach()
     sea_flags = None
     land_xy = None
     if grid.land_mask is not None:
@@ -454,7 +762,7 @@ def fit_korea_pine_wilt_pinn(
             dtype=torch.float32,
             device=device_obj,
         )
-        land_xy = torch.tensor(_normalized_grid_xy(grid)[flat_land], dtype=torch.float32, device=device_obj)
+        land_xy = torch.tensor(grid_xy_np[flat_land], dtype=torch.float32, device=device_obj)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     n_obs = len(xyt)
     history: list[dict[str, float]] = []
@@ -465,6 +773,13 @@ def fit_korea_pine_wilt_pinn(
         pred = model(xyt[idx, :2], xyt[idx, 2:3])
         density_weight = 1.0 + 4.0 * values[idx].detach()
         data_loss = torch.mean(density_weight * (pred - values[idx]) ** 2)
+        if initial_condition_weight > 0.0 and initial_condition_points > 0:
+            ic_idx = torch.randint(0, len(initial_xy), (min(initial_condition_points, len(initial_xy)),), device=device_obj)
+            t0 = torch.zeros((len(ic_idx), 1), dtype=torch.float32, device=device_obj)
+            pred0 = model(initial_xy[ic_idx], t0)
+            ic_loss = torch.mean(initial_density_weight[ic_idx] * (pred0 - initial_values[ic_idx]) ** 2)
+        else:
+            ic_loss = torch.zeros((), device=device_obj)
         if sea_flags is not None:
             sea_batch = sea_flags[idx]
             sea_loss = torch.sum(sea_batch * pred**2) / torch.clamp(sea_batch.sum(), min=1.0)
@@ -477,14 +792,44 @@ def fit_korea_pine_wilt_pinn(
         else:
             xy_col = torch.rand(collocation_points, 2, device=device_obj)
         t_col = torch.rand(collocation_points, 1, device=device_obj) * domain.t_end
-        residual = pde_residual(model, xy_col, t_col)
+        residual = _korea_anisotropic_pde_residual(
+            model,
+            xy_col,
+            t_col,
+            diffusion_x_scale=diffusion_x_scale,
+            diffusion_y_scale=diffusion_y_scale,
+        )
         pde_loss = torch.mean(residual**2)
         if boundary_points > 0:
             bc_loss = boundary_neumann_loss(model, boundary_points, device_obj)
         else:
             bc_loss = torch.zeros((), device=device_obj)
+        if physics_anchor_weight > 0.0:
+            ref_diffusion = torch.tensor(float(diffusion), dtype=torch.float32, device=device_obj).clamp_min(1.0e-12)
+            ref_reaction = torch.tensor(float(reaction), dtype=torch.float32, device=device_obj).clamp_min(1.0e-12)
+            physics_anchor = (
+                torch.log(model.pde.diffusion().clamp_min(1.0e-12) / ref_diffusion).pow(2)
+                + torch.log(model.pde.reaction().clamp_min(1.0e-12) / ref_reaction).pow(2)
+            )
+        else:
+            physics_anchor = torch.zeros((), device=device_obj)
+        if coefficient_field_weight > 0.0 and model.has_spatial_coefficients():
+            coefficient_field_loss = spatial_coefficient_regularization_loss(
+                model,
+                xy_col[: min(len(xy_col), 512)],
+            )
+        else:
+            coefficient_field_loss = torch.zeros((), device=device_obj)
 
-        loss = data_weight * data_loss + pde_weight * pde_loss + boundary_weight * bc_loss + sea_weight * sea_loss
+        loss = (
+            data_weight * data_loss
+            + initial_condition_weight * ic_loss
+            + pde_weight * pde_loss
+            + boundary_weight * bc_loss
+            + sea_weight * sea_loss
+            + physics_anchor_weight * physics_anchor
+            + coefficient_field_weight * coefficient_field_loss
+        )
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
         optimizer.step()
@@ -495,11 +840,17 @@ def fit_korea_pine_wilt_pinn(
                     "epoch": float(epoch),
                     "total": float(loss.detach().cpu()),
                     "data": float(data_loss.detach().cpu()),
+                    "initial_condition": float(ic_loss.detach().cpu()),
                     "pde": float(pde_loss.detach().cpu()),
                     "boundary": float(bc_loss.detach().cpu()),
                     "sea": float(sea_loss.detach().cpu()),
+                    "physics_anchor": float(physics_anchor.detach().cpu()),
+                    "coefficient_field": float(coefficient_field_loss.detach().cpu()),
                     "diffusion": float(model.pde.diffusion().detach().cpu()),
+                    "diffusion_x": float(model.pde.diffusion().detach().cpu()) * float(diffusion_x_scale),
+                    "diffusion_y": float(model.pde.diffusion().detach().cpu()) * float(diffusion_y_scale),
                     "reaction": float(model.pde.reaction().detach().cpu()),
+                    **model.coefficient_stats(xy_col[: min(len(xy_col), 512)]),
                 }
             )
 
@@ -518,11 +869,43 @@ def fit_korea_pine_wilt_pinn(
         status = "diagnostic_only_low_epoch"
     elif mean_l2 > 1.0:
         status = "diagnostic_high_error"
+    normalized_physics = model.physics_dict()
+    diffusion_phys = korea_normalized_to_physical_diffusion(
+        normalized_physics["diffusion"],
+        grid,
+        length_scale_mode=physics_length_scale_mode,
+    )
+    reaction_phys = normalized_physics["reaction"]
+    speed_phys = 2.0 * np.sqrt(max(diffusion_phys * reaction_phys, 0.0))
+    diffusion_x_norm = float(normalized_physics["diffusion"]) * float(diffusion_x_scale)
+    diffusion_y_norm = float(normalized_physics["diffusion"]) * float(diffusion_y_scale)
+    physics = {
+        **normalized_physics,
+        **model.coefficient_stats(initial_xy[: min(len(initial_xy), 2048)]),
+        "normalized_diffusion": float(normalized_physics["diffusion"]),
+        "normalized_diffusion_x": diffusion_x_norm,
+        "normalized_diffusion_y": diffusion_y_norm,
+        "normalized_reaction": float(normalized_physics["reaction"]),
+        "diffusion_km2_per_year": float(diffusion_phys),
+        "reaction_per_year": float(reaction_phys),
+        "front_speed_km_per_year": float(speed_phys),
+        "prior_normalized_diffusion": float(physics_prior.normalized_diffusion),
+        "prior_normalized_diffusion_x": float(physics_prior.normalized_diffusion_x),
+        "prior_normalized_diffusion_y": float(physics_prior.normalized_diffusion_y),
+        "prior_normalized_reaction": float(physics_prior.normalized_reaction),
+        "prior_diffusion_km2_per_year": float(physics_prior.diffusion_km2_per_year),
+        "prior_reaction_per_year": float(physics_prior.reaction_per_year),
+        "prior_front_speed_km_per_year": float(physics_prior.front_speed_km_per_year),
+        "physics_anchor_weight": float(physics_anchor_weight),
+        "coefficient_field_weight": float(coefficient_field_weight),
+        "length_scale_km": float(physics_prior.scale.length_scale_km),
+        "length_scale_mode": physics_prior.scale.length_scale_mode,
+    }
     return KoreaPineWiltPINNResult(
         years=pred_years,
         fields=fields,
         history=history,
         metrics=metrics,
-        physics=model.physics_dict(),
+        physics=physics,
         status=status,
     )

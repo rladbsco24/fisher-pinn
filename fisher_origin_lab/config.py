@@ -4,6 +4,8 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
+from .exact_wave import AZ_DT_1D, AZ_NX_1D, AZ_T_1D, AZ_X_LEFT_1D, AZ_X_RIGHT_1D, az_normalized_diffusion
+
 
 @dataclass(frozen=True)
 class DomainConfig:
@@ -49,6 +51,14 @@ class GeoConfig:
 
 
 @dataclass(frozen=True)
+class BenchmarkConfig:
+    kind: str = "gaussian_seed"
+    x_left: float = AZ_X_LEFT_1D
+    x_right: float = AZ_X_RIGHT_1D
+    wave_x0: float = 0.0
+
+
+@dataclass(frozen=True)
 class ModelConfig:
     architecture: str = "gated_mlp"
     fourier_features: int = 32
@@ -74,6 +84,11 @@ class ModelConfig:
     front_envelope_level: float = 0.03
     front_envelope_margin: float = 0.08
     front_envelope_width: float = 0.04
+    use_spatial_coefficients: bool = False
+    spatial_coefficient_features: int = 8
+    spatial_coefficient_sigma: float = 1.0
+    spatial_coefficient_hidden: int = 32
+    spatial_coefficient_log_scale: float = 0.20
 
 
 @dataclass(frozen=True)
@@ -93,14 +108,18 @@ class LossWeights:
     front_gradient: float = 0.0
     front_speed: float = 0.0
     mass_balance: float = 0.0
+    mass_floor: float = 0.0
     expected_front_pde: float = 0.0
     leading_edge: float = 0.0
     leading_edge_area: float = 0.0
+    front_support_tversky: float = 0.0
     front_contrast: float = 0.0
     front_profile: float = 0.0
     level_set_alignment: float = 0.0
     time_interface: float = 0.0
     rk4_teacher: float = 0.0
+    physics_parameter_anchor: float = 0.0
+    coefficient_field: float = 0.0
     sparse: float = 0.0
 
 
@@ -197,6 +216,7 @@ class ExperimentConfig:
     seed: SeedConfig = SeedConfig()
     observations: ObservationConfig = ObservationConfig()
     geo: GeoConfig = GeoConfig()
+    benchmark: BenchmarkConfig = BenchmarkConfig()
     model: ModelConfig = ModelConfig()
     weights: LossWeights = LossWeights()
     warm_start: WarmStartConfig = WarmStartConfig()
@@ -214,7 +234,7 @@ class ExperimentConfig:
 
     def quick(self) -> "ExperimentConfig":
         return ExperimentConfig(
-            domain=DomainConfig(grid=51, truth_steps=160),
+            domain=DomainConfig(box=self.domain.box, t_end=self.domain.t_end, grid=51, truth_steps=160),
             pde=self.pde,
             seed=self.seed,
             observations=ObservationConfig(
@@ -226,6 +246,7 @@ class ExperimentConfig:
                 validation_fraction=self.observations.validation_fraction,
             ),
             geo=self.geo,
+            benchmark=self.benchmark,
             model=ModelConfig(
                 architecture=self.model.architecture,
                 fourier_features=16,
@@ -253,6 +274,11 @@ class ExperimentConfig:
                 front_envelope_level=self.model.front_envelope_level,
                 front_envelope_margin=self.model.front_envelope_margin,
                 front_envelope_width=self.model.front_envelope_width,
+                use_spatial_coefficients=self.model.use_spatial_coefficients,
+                spatial_coefficient_features=min(self.model.spatial_coefficient_features, 8),
+                spatial_coefficient_sigma=self.model.spatial_coefficient_sigma,
+                spatial_coefficient_hidden=min(self.model.spatial_coefficient_hidden, 24),
+                spatial_coefficient_log_scale=self.model.spatial_coefficient_log_scale,
             ),
             weights=LossWeights(
                 data=self.weights.data,
@@ -270,14 +296,18 @@ class ExperimentConfig:
                 front_gradient=self.weights.front_gradient,
                 front_speed=self.weights.front_speed,
                 mass_balance=self.weights.mass_balance,
+                mass_floor=self.weights.mass_floor,
                 expected_front_pde=self.weights.expected_front_pde,
                 leading_edge=self.weights.leading_edge,
                 leading_edge_area=self.weights.leading_edge_area,
+                front_support_tversky=self.weights.front_support_tversky,
                 front_contrast=self.weights.front_contrast,
                 front_profile=self.weights.front_profile,
                 level_set_alignment=self.weights.level_set_alignment,
                 time_interface=self.weights.time_interface,
                 rk4_teacher=self.weights.rk4_teacher,
+                physics_parameter_anchor=self.weights.physics_parameter_anchor,
+                coefficient_field=self.weights.coefficient_field,
                 sparse=self.weights.sparse,
             ),
             warm_start=self.warm_start,
@@ -397,6 +427,7 @@ class ExperimentConfig:
             seed=self.seed,
             observations=self.observations,
             geo=self.geo,
+            benchmark=self.benchmark,
             model=ModelConfig(
                 architecture=self.model.architecture,
                 fourier_features=self.model.fourier_features,
@@ -422,6 +453,11 @@ class ExperimentConfig:
                 front_envelope_level=self.model.front_envelope_level,
                 front_envelope_margin=self.model.front_envelope_margin,
                 front_envelope_width=self.model.front_envelope_width,
+                use_spatial_coefficients=self.model.use_spatial_coefficients,
+                spatial_coefficient_features=self.model.spatial_coefficient_features,
+                spatial_coefficient_sigma=self.model.spatial_coefficient_sigma,
+                spatial_coefficient_hidden=self.model.spatial_coefficient_hidden,
+                spatial_coefficient_log_scale=self.model.spatial_coefficient_log_scale,
             ),
             weights=LossWeights(
                 data=1.0,
@@ -447,6 +483,8 @@ class ExperimentConfig:
                 level_set_alignment=0.0,
                 time_interface=0.0,
                 rk4_teacher=0.0,
+                physics_parameter_anchor=self.weights.physics_parameter_anchor,
+                coefficient_field=self.weights.coefficient_field,
                 sparse=0.0,
             ),
             warm_start=WarmStartConfig(mode="neutral"),
@@ -468,6 +506,7 @@ class ExperimentConfig:
             seed=base.seed,
             observations=base.observations,
             geo=GeoConfig(enabled=True, mask_kind="box"),
+            benchmark=base.benchmark,
             model=ModelConfig(
                 architecture="pirate",
                 fourier_features=base.model.fourier_features,
@@ -488,11 +527,16 @@ class ExperimentConfig:
                 use_traveling_wave_features=True,
                 use_front_fourier_features=True,
                 hard_initial_condition=True,
-                initial_envelope_tau=0.06,
+                initial_envelope_tau=0.18,
                 use_kpp_front_envelope=True,
                 front_envelope_level=0.03,
                 front_envelope_margin=0.05,
                 front_envelope_width=0.025,
+                use_spatial_coefficients=True,
+                spatial_coefficient_features=8,
+                spatial_coefficient_sigma=0.85,
+                spatial_coefficient_hidden=32,
+                spatial_coefficient_log_scale=0.12,
             ),
             weights=LossWeights(
                 data=1.0,
@@ -509,15 +553,19 @@ class ExperimentConfig:
                 front_pde_gradient=0.5,
                 front_gradient=0.005,
                 front_speed=0.01,
-                mass_balance=0.20,
+                mass_balance=0.35,
+                mass_floor=0.15,
                 expected_front_pde=0.0,
-                leading_edge=0.0,
-                leading_edge_area=0.50,
+                leading_edge=0.20,
+                leading_edge_area=0.75,
+                front_support_tversky=0.25,
                 front_contrast=0.10,
                 front_profile=0.15,
                 level_set_alignment=0.02,
                 time_interface=0.01,
                 rk4_teacher=0.0,
+                physics_parameter_anchor=0.08,
+                coefficient_field=0.03,
                 sparse=1.0e-5,
             ),
             warm_start=base.warm_start,
@@ -526,11 +574,11 @@ class ExperimentConfig:
                 residual_weight_exponent_start=0.0,
                 residual_weight_exponent_end=0.5,
                 residual_curriculum_epochs=max(1, base.train.epochs // 4),
-                pde_loss_warmup_fraction=0.10,
-                front_loss_start_fraction=0.25,
-                front_loss_warmup_fraction=0.35,
-                time_interface_start_fraction=0.45,
-                time_interface_warmup_fraction=0.25,
+                pde_loss_warmup_fraction=0.05,
+                front_loss_start_fraction=0.05,
+                front_loss_warmup_fraction=0.20,
+                time_interface_start_fraction=0.25,
+                time_interface_warmup_fraction=0.20,
                 adaptive_loss_balancing=True,
                 gradient_norm_balancing=True,
                 gradient_norm_balance_every=25,
@@ -568,4 +616,99 @@ class ExperimentConfig:
             out_dir=base.out_dir,
             run_classical_baseline=base.run_classical_baseline,
             baseline_epochs=base.baseline_epochs,
+        )
+
+    def ablowitz_zeppetella_forward(self) -> "ExperimentConfig":
+        """Exact-wave Fisher-KPP benchmark matching the attached parameters.
+
+        The physical equation is u_t = u_xx + u(1-u) on x in [-20, 20] with
+        c = 5/sqrt(6). The PINN domain remains [0, 1]^2, so the diffusion is
+        normalized as D/L^2 while exact initial and boundary targets are
+        evaluated in the physical x-coordinate.
+        """
+
+        truth_steps = int(round(AZ_T_1D / AZ_DT_1D))
+        base = self.geo_spectral_forward()
+        return ExperimentConfig(
+            domain=DomainConfig(box=1.0, t_end=AZ_T_1D, grid=AZ_NX_1D, truth_steps=truth_steps),
+            pde=PDEConfig(
+                diffusion=az_normalized_diffusion(AZ_X_LEFT_1D, AZ_X_RIGHT_1D),
+                reaction=1.0,
+                velocity_x=0.0,
+                velocity_y=0.0,
+                include_advection=False,
+            ),
+            seed=SeedConfig(center_x=0.5, center_y=0.5, sigma=0.08, amplitude=0.5),
+            observations=ObservationConfig(
+                start_time=0.0,
+                frames=7,
+                samples_per_frame=800,
+                noise_std=0.0,
+                focus_fraction=0.25,
+                validation_fraction=0.2,
+            ),
+            geo=GeoConfig(enabled=True, mask_kind="box"),
+            benchmark=BenchmarkConfig(
+                kind="ablowitz_zeppetella",
+                x_left=AZ_X_LEFT_1D,
+                x_right=AZ_X_RIGHT_1D,
+                wave_x0=0.0,
+            ),
+            model=replace(
+                base.model,
+                hard_initial_condition=False,
+                use_kpp_front_envelope=False,
+                use_seed_front_features=False,
+                use_traveling_wave_features=False,
+                use_front_fourier_features=False,
+                use_spatial_coefficients=False,
+                learn_diffusion=False,
+                learn_reaction=False,
+                fourier_sigma=1.2,
+            ),
+            weights=replace(
+                base.weights,
+                data=2.0,
+                pde=1.0,
+                initial_condition=8.0,
+                boundary=4.0,
+                front_speed=0.0,
+                mass_balance=0.0,
+                mass_floor=0.0,
+                leading_edge=0.0,
+                leading_edge_area=0.0,
+                front_support_tversky=0.0,
+                front_contrast=0.0,
+                front_profile=0.0,
+                level_set_alignment=0.0,
+                time_interface=0.0,
+                physics_parameter_anchor=0.0,
+                coefficient_field=0.0,
+            ),
+            warm_start=WarmStartConfig(mode="neutral"),
+            train=replace(
+                base.train,
+                epochs=1200,
+                collocation_points=2048,
+                boundary_points=512,
+                seed_points=1024,
+                observation_batch=2048,
+                time_marching=True,
+                time_slabs=4,
+                time_slab_curriculum=True,
+                time_window_focus_fraction=0.75,
+                time_window_observations=True,
+                pde_loss_warmup_fraction=0.05,
+                front_loss_start_fraction=0.0,
+                front_loss_warmup_fraction=0.0,
+                rk4_teacher_pool=4096,
+                rk4_teacher_batch=512,
+                rk4_pretrain_steps=0,
+                mass_balance_times=0,
+            ),
+            ensemble=self.ensemble,
+            base_seed=self.base_seed,
+            out_dir=Path("runs") / "ablowitz_zeppetella_pinn",
+            run_classical_baseline=False,
+            baseline_epochs=self.baseline_epochs,
         )

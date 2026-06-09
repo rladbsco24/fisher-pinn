@@ -4,9 +4,11 @@ This repository solves Fisher-KPP reaction-diffusion equations with Method of
 Lines, second-order central finite differences in space, and classical RK4 in time.
 It includes both:
 
-- **1D traveling-front Fisher-KPP** with Dirichlet boundaries.
-- **2D square-domain Fisher-KPP** with no-flux boundaries and a Gaussian seed,
-  matching the forward PINN/RK4 comparison problem used in the companion PINN lab.
+- **1D Ablowitz-Zeppetella traveling-wave Fisher-KPP** with time-dependent
+  Dirichlet boundaries.
+- **2D ridge-wave Fisher-KPP** using the same exact wave in `x`, exact
+  time-dependent Dirichlet boundaries, and relative-L2 checks against the
+  analytic solution.
 
 ## Equations
 
@@ -63,6 +65,16 @@ python scripts/run_convergence.py
 ```
 
 This writes `outputs/convergence_summary.csv` with both 1D and 2D relative-L2 checks.
+
+The default short benchmark follows the exact Ablowitz-Zeppetella wave for
+`u_t = u_xx + u(1-u)`:
+
+```text
+c = 5/sqrt(6)
+u(x,t) = (1 + exp((x - c t - x0)/sqrt(6)))^-2
+1D: x in [-20, 20], T=10, Nx=201, dt=0.005
+2D: x,y in [-15, 15], T=3, grid=61x61, dt=0.01
+```
 
 ## Long-Time Method Comparison
 
@@ -315,6 +327,6 @@ before release.
 ## Notes
 
 - Classical RK4 is explicit. The solver reports a practical diffusion-reaction stability estimate.
-- The 2D default uses `D=0.02`, `r=3.0`, `box=1.0`, `T=0.5`, `grid=51`, and `160` RK4 steps.
+- The 2D default uses `D=1`, `r=1`, `x,y in [-15,15]`, `T=3`, `grid=61`, and exact time-dependent Dirichlet boundaries from the Ablowitz-Zeppetella wave.
 - Scalar Fisher-KPP with positive diffusion and logistic reaction follows a maximum-principle/front-propagation regime. The long-time plots therefore show surface, probe, front, and mass trends; they are not intended to reproduce intrinsic damped oscillations unless the PDE/model is changed.
 - `tol` and `max_iter` are retained only for compatibility with implicit-solver experiments; RK4 does not use nonlinear iterations.

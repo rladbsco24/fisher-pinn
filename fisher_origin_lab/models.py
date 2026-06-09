@@ -270,6 +270,41 @@ class NIFPirateNet(nn.Module):
         return 0.5 * (_effective_l1(self.shape_net.out_layer) + _effective_l1(self.parameter_net.out_layer))
 
 
+class SpatialCoefficientField(nn.Module):
+    """Bounded smooth D(x,y), r(x,y) correction initialized as the identity."""
+
+    def __init__(self, domain: DomainConfig, model: ModelConfig) -> None:
+        super().__init__()
+        self.box = float(domain.box)
+        self.use_geo_features = bool(model.use_geo_features)
+        self.log_scale = float(model.spatial_coefficient_log_scale)
+        features = max(1, int(model.spatial_coefficient_features))
+        hidden = max(8, int(model.spatial_coefficient_hidden))
+        self.features = FourierFeatures(2, features, float(model.spatial_coefficient_sigma))
+        in_dim = 2 + 2 * features + (8 if self.use_geo_features else 0)
+        self.net = nn.Sequential(
+            _linear(in_dim, hidden, factorized=False),
+            nn.Tanh(),
+            _linear(hidden, 2, factorized=False),
+        )
+        last = self.net[-1]
+        if isinstance(last, nn.Linear):
+            nn.init.zeros_(last.weight)
+            nn.init.zeros_(last.bias)
+
+    def _features(self, xy: torch.Tensor) -> torch.Tensor:
+        scaled = (xy / self.box).clamp(0.0, 1.0)
+        pieces = [scaled, self.features(scaled)]
+        if self.use_geo_features:
+            pieces.append(square_geo_features(xy, self.box))
+        return torch.cat(pieces, dim=-1)
+
+    def log_multipliers(self, xy: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        raw = self.net(self._features(xy))
+        bounded = self.log_scale * torch.tanh(raw)
+        return bounded[:, 0:1], bounded[:, 1:2]
+
+
 class SourceHead(nn.Module):
     def __init__(self, domain: DomainConfig, seed: SeedConfig) -> None:
         super().__init__()
@@ -397,6 +432,7 @@ class OriginPINN(nn.Module):
             raise ValueError(f"Unknown ModelConfig.architecture={model.architecture!r}")
         self.source = SourceHead(domain, seed)
         self.pde = PDEParameters(pde, model)
+        self.coefficient_field = SpatialCoefficientField(domain, model) if model.use_spatial_coefficients else None
 
     def forward(self, xy: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         if self.use_nif_head:
@@ -522,8 +558,42 @@ class OriginPINN(nn.Module):
         out_layer = self.mlp.out_layer
         return _effective_l1(out_layer)
 
-    def physics_dict(self) -> dict[str, float]:
+    def has_spatial_coefficients(self) -> bool:
+        return self.coefficient_field is not None
+
+    def coefficient_log_fields(self, xy: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        if self.coefficient_field is None:
+            zeros = torch.zeros_like(xy[:, 0:1])
+            return zeros, zeros
+        return self.coefficient_field.log_multipliers(xy)
+
+    def diffusion_coefficient(self, xy: torch.Tensor) -> torch.Tensor:
+        log_diffusion, _ = self.coefficient_log_fields(xy)
+        return self.pde.diffusion().to(dtype=xy.dtype, device=xy.device) * torch.exp(log_diffusion)
+
+    def reaction_coefficient(self, xy: torch.Tensor) -> torch.Tensor:
+        _, log_reaction = self.coefficient_log_fields(xy)
+        return self.pde.reaction().to(dtype=xy.dtype, device=xy.device) * torch.exp(log_reaction)
+
+    def coefficient_stats(self, xy: torch.Tensor) -> dict[str, float]:
+        if self.coefficient_field is None or len(xy) == 0:
+            return {}
+        with torch.no_grad():
+            diffusion = self.diffusion_coefficient(xy)
+            reaction = self.reaction_coefficient(xy)
+            log_diffusion, log_reaction = self.coefficient_log_fields(xy)
         return {
+            "diffusion_field_mean": float(diffusion.mean().detach().cpu()),
+            "diffusion_field_std": float(diffusion.std(unbiased=False).detach().cpu()),
+            "reaction_field_mean": float(reaction.mean().detach().cpu()),
+            "reaction_field_std": float(reaction.std(unbiased=False).detach().cpu()),
+            "coefficient_log_abs_mean": float(
+                0.5 * (log_diffusion.abs().mean() + log_reaction.abs().mean()).detach().cpu()
+            ),
+        }
+
+    def physics_dict(self) -> dict[str, float]:
+        physics = {
             "diffusion": float(self.pde.diffusion().detach().cpu()),
             "reaction": float(self.pde.reaction().detach().cpu()),
             "velocity_x": float(self.pde.velocity[0].detach().cpu()),
@@ -533,3 +603,5 @@ class OriginPINN(nn.Module):
             "source_sigma": float(self.source.sigma().detach().cpu()),
             "source_amplitude": float(self.source.amplitude().detach().cpu()),
         }
+        physics["spatial_coefficients"] = float(1.0 if self.has_spatial_coefficients() else 0.0)
+        return physics

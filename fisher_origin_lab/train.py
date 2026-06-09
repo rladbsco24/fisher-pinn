@@ -17,6 +17,8 @@ from .baselines import (
 from .config import ExperimentConfig
 from .losses import (
     BalancedDecayWeights,
+    ablowitz_zeppetella_dirichlet_loss,
+    ablowitz_zeppetella_initial_condition_loss,
     bounded_residual_weights,
     boundary_neumann_loss,
     causal_weights,
@@ -27,15 +29,18 @@ from .losses import (
     front_local_gradient_residual_loss,
     front_profile_alignment_loss,
     front_level_set_alignment_loss,
+    front_support_tversky_loss,
     front_speed_consistency_loss,
     gradient_residual_loss,
     known_initial_condition_loss,
     leading_edge_floor_loss,
     leading_edge_area_loss,
+    mass_floor_trajectory_loss,
     parabolic_mass_balance_loss,
     pde_residual,
     pde_residual_terms,
     seed_regularization_loss,
+    spatial_coefficient_regularization_loss,
     time_slab_interface_loss,
 )
 from .metrics import origin_error, relative_l2, tensor_center
@@ -51,10 +56,11 @@ from .plotting import (
     save_spacetime_error_figure,
     save_training_diagnostics_figure,
 )
-from .rk4 import forward_fisher_kpp_rk4
+from .rk4 import forward_ablowitz_zeppetella_rk4, forward_fisher_kpp_rk4
 from .samplers import SobolCollocation
 from .shooting import source_shooting_loss
 from .simulate import (
+    forward_ablowitz_zeppetella_exact,
     forward_fisher_kpp,
     interpolate_truth,
     observation_tensors,
@@ -454,13 +460,16 @@ def _combine_loss_terms(
         "front_grad",
         "front_speed",
         "mass",
+        "mass_floor",
         "expected_front_pde",
         "leading_edge",
         "leading_edge_area",
+        "front_support_tversky",
         "front_contrast",
         "front_profile",
         "level_set",
         "time_interface",
+        "coefficient_field",
     }
     active = [(name, weight, loss) for name, weight, loss in terms if weight > 0.0]
     if not active:
@@ -477,6 +486,15 @@ def _combine_loss_terms(
     for name, weight, loss in active:
         total = total + float(weight) * float(adaptive.get(name, 1.0)) * float(grad_adaptive.get(name, 1.0)) * loss
     return total, adaptive, grad_adaptive
+
+
+def _physics_parameter_anchor_loss(model: OriginPINN, device: torch.device) -> torch.Tensor:
+    dtype = next(model.parameters()).dtype
+    diffusion_ref = torch.as_tensor(model.reference_diffusion, dtype=dtype, device=device).clamp_min(1.0e-12)
+    reaction_ref = torch.as_tensor(model.reference_reaction, dtype=dtype, device=device).clamp_min(1.0e-12)
+    diffusion_ratio = model.pde.diffusion().clamp_min(1.0e-12) / diffusion_ref
+    reaction_ratio = model.pde.reaction().clamp_min(1.0e-12) / reaction_ref
+    return torch.log(diffusion_ratio).pow(2) + torch.log(reaction_ratio).pow(2)
 
 
 def _pretrain_on_rk4_teacher(
@@ -529,6 +547,7 @@ def train_single(
 ) -> SingleRunResult:
     seed_everything(run_seed)
     model = OriginPINN(cfg.domain, cfg.pde, cfg.seed, cfg.model).to(device)
+    is_az_benchmark = cfg.benchmark.kind == "ablowitz_zeppetella"
     if cfg.warm_start.mode == "shooting_prefit":
         centroid_cfg = replace(cfg, warm_start=replace(cfg.warm_start, mode="centroid"))
         initial_center = _warm_start_center_from_observations(centroid_cfg, observations_xyt, observations_values)
@@ -646,11 +665,31 @@ def train_single(
         pde_loss_value = torch.sum(time_weights * bins) / time_weights.sum().clamp_min(1.0e-12)
 
         if cfg.weights.boundary > 0.0 and cfg.train.boundary_points > 0:
-            bc_loss = boundary_neumann_loss(model, cfg.train.boundary_points, device)
+            if is_az_benchmark:
+                bc_loss = ablowitz_zeppetella_dirichlet_loss(
+                    model,
+                    cfg.train.boundary_points,
+                    device,
+                    x_left=cfg.benchmark.x_left,
+                    x_right=cfg.benchmark.x_right,
+                    x0=cfg.benchmark.wave_x0,
+                )
+            else:
+                bc_loss = boundary_neumann_loss(model, cfg.train.boundary_points, device)
         else:
             bc_loss = torch.zeros((), device=device)
         if cfg.weights.initial_condition > 0.0 and cfg.train.seed_points > 0:
-            ic_loss = known_initial_condition_loss(model, cfg.seed, cfg.train.seed_points, device)
+            if is_az_benchmark:
+                ic_loss = ablowitz_zeppetella_initial_condition_loss(
+                    model,
+                    cfg.train.seed_points,
+                    device,
+                    x_left=cfg.benchmark.x_left,
+                    x_right=cfg.benchmark.x_right,
+                    x0=cfg.benchmark.wave_x0,
+                )
+            else:
+                ic_loss = known_initial_condition_loss(model, cfg.seed, cfg.train.seed_points, device)
         else:
             ic_loss = torch.zeros((), device=device)
         if (cfg.weights.seed_match > 0.0 or cfg.weights.seed_mass > 0.0) and cfg.train.seed_points > 0:
@@ -785,6 +824,25 @@ def train_single(
             )
         else:
             mass_loss = torch.zeros((), device=device)
+        if cfg.weights.mass_floor > 0.0:
+            mass_floor_loss = mass_floor_trajectory_loss(
+                model,
+                cfg.train.mass_balance_times,
+                cfg.train.mass_balance_grid,
+                device,
+            )
+        else:
+            mass_floor_loss = torch.zeros((), device=device)
+        if cfg.weights.front_support_tversky > 0.0 and cfg.train.leading_edge_area_times > 0:
+            front_support_tversky = front_support_tversky_loss(
+                model,
+                cfg.train.leading_edge_area_times,
+                cfg.train.leading_edge_area_grid,
+                device,
+                temperature=cfg.train.leading_edge_area_temperature,
+            )
+        else:
+            front_support_tversky = torch.zeros((), device=device)
         if cfg.weights.time_interface > 0.0 and cfg.train.time_slabs > 1 and cfg.train.time_interface_points > 0:
             time_interface_loss = time_slab_interface_loss(
                 model,
@@ -795,6 +853,17 @@ def train_single(
             )
         else:
             time_interface_loss = torch.zeros((), device=device)
+        if cfg.weights.physics_parameter_anchor > 0.0:
+            physics_anchor_loss = _physics_parameter_anchor_loss(model, device)
+        else:
+            physics_anchor_loss = torch.zeros((), device=device)
+        if cfg.weights.coefficient_field > 0.0 and model.has_spatial_coefficients():
+            coefficient_field_loss = spatial_coefficient_regularization_loss(
+                model,
+                xy_col[: min(len(xy_col), 512)],
+            )
+        else:
+            coefficient_field_loss = torch.zeros((), device=device)
         sparse_loss = model.sparse_last_layer_l1() if cfg.weights.sparse > 0.0 else torch.zeros((), device=device)
         schedule = _scheduled_loss_scales(cfg, epoch)
         pde_weight = cfg.weights.pde * schedule["pde"]
@@ -822,7 +891,15 @@ def train_single(
                 ("front_profile", cfg.weights.front_profile * front_weight, front_profile),
                 ("level_set", cfg.weights.level_set_alignment * front_weight, level_set_loss),
                 ("mass", cfg.weights.mass_balance * front_weight, mass_loss),
+                ("mass_floor", cfg.weights.mass_floor * front_weight, mass_floor_loss),
+                (
+                    "front_support_tversky",
+                    cfg.weights.front_support_tversky * front_weight,
+                    front_support_tversky,
+                ),
                 ("time_interface", time_interface_weight, time_interface_loss),
+                ("physics_anchor", cfg.weights.physics_parameter_anchor, physics_anchor_loss),
+                ("coefficient_field", cfg.weights.coefficient_field, coefficient_field_loss),
                 ("sparse", cfg.weights.sparse, sparse_loss),
             ],
             loss_balancer,
@@ -894,7 +971,11 @@ def train_single(
                 "front_profile": float(front_profile.detach().cpu()),
                 "level_set": float(level_set_loss.detach().cpu()),
                 "mass": float(mass_loss.detach().cpu()),
+                "mass_floor": float(mass_floor_loss.detach().cpu()),
+                "front_support_tversky": float(front_support_tversky.detach().cpu()),
                 "time_interface": float(time_interface_loss.detach().cpu()),
+                "physics_anchor": float(physics_anchor_loss.detach().cpu()),
+                "coefficient_field": float(coefficient_field_loss.detach().cpu()),
                 "sparse": float(sparse_loss.detach().cpu()),
                 "residual_exponent": float(residual_exponent),
                 "schedule_pde": float(schedule["pde"]),
@@ -910,6 +991,7 @@ def train_single(
                 "origin_error": origin_error(center, cfg.seed),
                 "elapsed_sec": time.time() - start,
             }
+            row.update(model.coefficient_stats(xy_col[: min(len(xy_col), 512)]))
             if validation_loss is not None:
                 row["validation_data"] = validation_loss
                 row["best_validation_data"] = best_validation_loss
@@ -1018,6 +1100,7 @@ def _lbfgs_polish(
 ) -> None:
     opt = torch.optim.LBFGS(model.parameters(), max_iter=cfg.train.lbfgs_steps, tolerance_grad=1.0e-7)
     xy_col, t_col = sampler.sample(min(cfg.train.collocation_points, 2048))
+    is_az_benchmark = cfg.benchmark.kind == "ablowitz_zeppetella"
 
     def closure() -> torch.Tensor:
         opt.zero_grad()
@@ -1037,11 +1120,31 @@ def _lbfgs_polish(
         ) * front_weights.flatten()
         pde_loss_value = torch.mean(point_weights * residual_sq)
         if cfg.weights.boundary > 0.0 and cfg.train.boundary_points > 0:
-            bc_loss = boundary_neumann_loss(model, cfg.train.boundary_points, device)
+            if is_az_benchmark:
+                bc_loss = ablowitz_zeppetella_dirichlet_loss(
+                    model,
+                    min(cfg.train.boundary_points, 512),
+                    device,
+                    x_left=cfg.benchmark.x_left,
+                    x_right=cfg.benchmark.x_right,
+                    x0=cfg.benchmark.wave_x0,
+                )
+            else:
+                bc_loss = boundary_neumann_loss(model, cfg.train.boundary_points, device)
         else:
             bc_loss = torch.zeros((), device=device)
         if cfg.weights.initial_condition > 0.0 and cfg.train.seed_points > 0:
-            ic_loss = known_initial_condition_loss(model, cfg.seed, cfg.train.seed_points, device)
+            if is_az_benchmark:
+                ic_loss = ablowitz_zeppetella_initial_condition_loss(
+                    model,
+                    min(cfg.train.seed_points, 512),
+                    device,
+                    x_left=cfg.benchmark.x_left,
+                    x_right=cfg.benchmark.x_right,
+                    x0=cfg.benchmark.wave_x0,
+                )
+            else:
+                ic_loss = known_initial_condition_loss(model, cfg.seed, cfg.train.seed_points, device)
         else:
             ic_loss = torch.zeros((), device=device)
         if cfg.weights.front_speed > 0.0 and cfg.train.front_speed_points > 0:
@@ -1126,6 +1229,25 @@ def _lbfgs_polish(
             )
         else:
             mass_loss = torch.zeros((), device=device)
+        if cfg.weights.mass_floor > 0.0:
+            mass_floor_loss = mass_floor_trajectory_loss(
+                model,
+                cfg.train.mass_balance_times,
+                cfg.train.mass_balance_grid,
+                device,
+            )
+        else:
+            mass_floor_loss = torch.zeros((), device=device)
+        if cfg.weights.front_support_tversky > 0.0 and cfg.train.leading_edge_area_times > 0:
+            front_support_tversky = front_support_tversky_loss(
+                model,
+                cfg.train.leading_edge_area_times,
+                cfg.train.leading_edge_area_grid,
+                device,
+                temperature=cfg.train.leading_edge_area_temperature,
+            )
+        else:
+            front_support_tversky = torch.zeros((), device=device)
         if cfg.weights.time_interface > 0.0 and cfg.train.time_slabs > 1 and cfg.train.time_interface_points > 0:
             time_interface_loss = time_slab_interface_loss(
                 model,
@@ -1141,6 +1263,17 @@ def _lbfgs_polish(
         else:
             seed_match = torch.zeros((), device=device)
             seed_mass = torch.zeros((), device=device)
+        if cfg.weights.physics_parameter_anchor > 0.0:
+            physics_anchor_loss = _physics_parameter_anchor_loss(model, device)
+        else:
+            physics_anchor_loss = torch.zeros((), device=device)
+        if cfg.weights.coefficient_field > 0.0 and model.has_spatial_coefficients():
+            coefficient_field_loss = spatial_coefficient_regularization_loss(
+                model,
+                xy_col[: min(len(xy_col), 512)],
+            )
+        else:
+            coefficient_field_loss = torch.zeros((), device=device)
         loss = (
             cfg.weights.data * data_loss
             + cfg.weights.pde * pde_loss_value
@@ -1156,7 +1289,11 @@ def _lbfgs_polish(
             + cfg.weights.front_profile * front_profile
             + cfg.weights.level_set_alignment * level_set_loss
             + cfg.weights.mass_balance * mass_loss
+            + cfg.weights.mass_floor * mass_floor_loss
+            + cfg.weights.front_support_tversky * front_support_tversky
             + cfg.weights.time_interface * time_interface_loss
+            + cfg.weights.physics_parameter_anchor * physics_anchor_loss
+            + cfg.weights.coefficient_field * coefficient_field_loss
             + cfg.weights.sparse * model.sparse_last_layer_l1()
         )
         loss.backward()
@@ -1171,7 +1308,16 @@ def run_experiment(cfg: ExperimentConfig) -> dict[str, object]:
     print(f"device={device} out_dir={cfg.out_dir}")
 
     rng = np.random.default_rng(cfg.base_seed)
-    truth = forward_fisher_kpp(cfg.domain, cfg.pde, cfg.seed)
+    is_az_benchmark = cfg.benchmark.kind == "ablowitz_zeppetella"
+    if is_az_benchmark:
+        truth = forward_ablowitz_zeppetella_exact(
+            cfg.domain,
+            x_left=cfg.benchmark.x_left,
+            x_right=cfg.benchmark.x_right,
+            x0=cfg.benchmark.wave_x0,
+        )
+    else:
+        truth = forward_fisher_kpp(cfg.domain, cfg.pde, cfg.seed)
     observations = sample_observations(truth, cfg.domain, cfg.observations, rng)
     train_observations, validation_observations = split_observations(
         observations,
@@ -1190,7 +1336,16 @@ def run_experiment(cfg: ExperimentConfig) -> dict[str, object]:
     )
     if needs_rk4_teacher:
         rk4_start = time.time()
-        rk4_truth = forward_fisher_kpp_rk4(cfg.domain, cfg.pde, cfg.seed)
+        if is_az_benchmark:
+            rk4_truth = forward_ablowitz_zeppetella_rk4(
+                cfg.domain,
+                cfg.pde,
+                x_left=cfg.benchmark.x_left,
+                x_right=cfg.benchmark.x_right,
+                x0=cfg.benchmark.wave_x0,
+            )
+        else:
+            rk4_truth = forward_fisher_kpp_rk4(cfg.domain, cfg.pde, cfg.seed)
         rk4_runtime_sec = time.time() - rk4_start
         teacher_np, teacher_values_np = _sample_rk4_teacher_points(
             rk4_truth,
@@ -1250,7 +1405,16 @@ def run_experiment(cfg: ExperimentConfig) -> dict[str, object]:
     front_geometry = _front_geometry_summary(truth, best.model, cfg, device)
     if rk4_truth is None:
         rk4_start = time.time()
-        rk4_truth = forward_fisher_kpp_rk4(cfg.domain, cfg.pde, cfg.seed)
+        if is_az_benchmark:
+            rk4_truth = forward_ablowitz_zeppetella_rk4(
+                cfg.domain,
+                cfg.pde,
+                x_left=cfg.benchmark.x_left,
+                x_right=cfg.benchmark.x_right,
+                x0=cfg.benchmark.wave_x0,
+            )
+        else:
+            rk4_truth = forward_fisher_kpp_rk4(cfg.domain, cfg.pde, cfg.seed)
         rk4_runtime_sec = time.time() - rk4_start
     else:
         rk4_runtime_sec = float(rk4_runtime_sec or 0.0)

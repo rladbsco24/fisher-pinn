@@ -6,6 +6,7 @@ import torch
 
 from .models import OriginPINN
 from .config import SeedConfig
+from .exact_wave import az_exact_unit_torch
 
 
 def pde_residual(
@@ -40,8 +41,44 @@ def pde_residual_terms(
         adv = model.pde.velocity[0] * u_xy[:, 0:1] + model.pde.velocity[1] * u_xy[:, 1:2]
     else:
         adv = torch.zeros_like(u)
-    residual = u_t + adv - model.pde.diffusion() * lap - model.pde.reaction() * u * (1.0 - u)
+    if model.has_spatial_coefficients():
+        diffusion = model.diffusion_coefficient(xy_req)
+        reaction = model.reaction_coefficient(xy_req)
+        diffusion_grad = grad(diffusion, xy_req, torch.ones_like(diffusion), create_graph=True)[0]
+        diffusion_flux = diffusion * lap + torch.sum(diffusion_grad * u_xy, dim=-1, keepdim=True)
+    else:
+        diffusion_flux = model.pde.diffusion() * lap
+        reaction = model.pde.reaction()
+    residual = u_t + adv - diffusion_flux - reaction * u * (1.0 - u)
     return residual, u, u_xy, xy_req, t_req
+
+
+def spatial_coefficient_regularization_loss(
+    model: OriginPINN,
+    xy: torch.Tensor,
+    smoothness_weight: float = 0.05,
+) -> torch.Tensor:
+    """Keep learned D(x,y), r(x,y) close to a smooth near-constant correction."""
+
+    if not model.has_spatial_coefficients():
+        return torch.zeros((), dtype=xy.dtype, device=xy.device)
+    xy_req = xy.detach().clone().requires_grad_(True)
+    log_diffusion, log_reaction = model.coefficient_log_fields(xy_req)
+    amplitude = torch.mean(log_diffusion.pow(2) + log_reaction.pow(2))
+    grad_log_diffusion = torch.autograd.grad(
+        log_diffusion,
+        xy_req,
+        torch.ones_like(log_diffusion),
+        create_graph=True,
+    )[0]
+    grad_log_reaction = torch.autograd.grad(
+        log_reaction,
+        xy_req,
+        torch.ones_like(log_reaction),
+        create_graph=True,
+    )[0]
+    smoothness = torch.mean(grad_log_diffusion.pow(2) + grad_log_reaction.pow(2))
+    return amplitude + float(smoothness_weight) * smoothness
 
 
 def front_indicator_weights(
@@ -87,7 +124,8 @@ def front_speed_kinematics(
     directional_grad = torch.sum(u_xy * normal, dim=-1, keepdim=True)
     advective_speed = torch.sum(model.pde.velocity.view(1, 2) * normal, dim=-1, keepdim=True)
     kpp_speed = 2.0 * torch.sqrt(
-        model.pde.diffusion().clamp_min(1.0e-10) * model.pde.reaction().clamp_min(1.0e-10)
+        model.diffusion_coefficient(xy_req).clamp_min(1.0e-10)
+        * model.reaction_coefficient(xy_req).clamp_min(1.0e-10)
     )
     target_normal_speed = advective_speed + kpp_speed
     signed_residual = u_t + target_normal_speed * directional_grad
@@ -126,6 +164,32 @@ def boundary_neumann_loss(model: OriginPINN, n: int, device: torch.device) -> to
     return (du[torch.arange(n, device=device), dims] ** 2).mean()
 
 
+def ablowitz_zeppetella_dirichlet_loss(
+    model: OriginPINN,
+    n: int,
+    device: torch.device,
+    *,
+    x_left: float = -20.0,
+    x_right: float = 20.0,
+    x0: float = 0.0,
+) -> torch.Tensor:
+    t = torch.rand(n, 1, device=device) * model.domain.t_end
+    xy = torch.rand(n, 2, device=device) * model.domain.box
+    faces = torch.randint(0, 4, (n,), device=device)
+    left_or_right = faces < 2
+    xy[left_or_right, 0] = faces[left_or_right].float() * model.domain.box
+    xy[~left_or_right, 1] = (faces[~left_or_right].float() - 2.0) * model.domain.box
+    pred = model(xy, t)
+    target = az_exact_unit_torch(
+        xy[:, 0:1] / model.domain.box,
+        t,
+        x_left=x_left,
+        x_right=x_right,
+        x0=x0,
+    )
+    return torch.mean((pred - target) ** 2)
+
+
 def seed_regularization_loss(
     model: OriginPINN,
     n: int,
@@ -160,6 +224,28 @@ def known_initial_condition_loss(
     pred = model(xy, t0)
     dist2 = (xy[:, 0:1] - seed.center_x) ** 2 + (xy[:, 1:2] - seed.center_y) ** 2
     target = seed.amplitude * torch.exp(-dist2 / (2.0 * seed.sigma**2))
+    return torch.mean((pred - target) ** 2)
+
+
+def ablowitz_zeppetella_initial_condition_loss(
+    model: OriginPINN,
+    n: int,
+    device: torch.device,
+    *,
+    x_left: float = -20.0,
+    x_right: float = 20.0,
+    x0: float = 0.0,
+) -> torch.Tensor:
+    xy = torch.rand(n, 2, device=device) * model.domain.box
+    t0 = torch.zeros(n, 1, device=device)
+    pred = model(xy, t0)
+    target = az_exact_unit_torch(
+        xy[:, 0:1] / model.domain.box,
+        t0,
+        x_left=x_left,
+        x_right=x_right,
+        x0=x0,
+    )
     return torch.mean((pred - target) ** 2)
 
 
@@ -490,6 +576,87 @@ def leading_edge_area_loss(
         hinge_terms.append(torch.relu(float(level) - kth_values).pow(2).mean())
     quantile_hinge = torch.stack(hinge_terms).mean() if hinge_terms else torch.zeros((), device=device)
     return area_loss + 4.0 * quantile_hinge
+
+
+def front_support_tversky_loss(
+    model: OriginPINN,
+    n_times: int,
+    grid: int,
+    device: torch.device,
+    *,
+    levels: tuple[float, ...] = (0.05, 0.10),
+    temperature: float = 0.015,
+    false_positive_weight: float = 0.30,
+    false_negative_weight: float = 0.70,
+    focal_gamma: float = 1.0,
+) -> torch.Tensor:
+    """Foreground-biased soft Tversky loss on the expected leading-edge support.
+
+    The target support comes from the linearized Fisher-KPP leading edge, not an
+    RK4 truth field. Penalizing false negatives more than false positives makes
+    the all-background/all-zero solution expensive in the sparse-front regime.
+    """
+
+    if n_times <= 0 or grid <= 1 or not levels:
+        return torch.zeros((), device=device)
+    dtype = next(model.parameters()).dtype
+    xs = torch.linspace(0.0, model.domain.box, grid, dtype=dtype, device=device)
+    x, y = torch.meshgrid(xs, xs, indexing="ij")
+    xy_one = torch.stack([x.reshape(-1), y.reshape(-1)], dim=1)
+    times = torch.linspace(0.0, model.domain.t_end, n_times, dtype=dtype, device=device).reshape(-1, 1)
+    xy = xy_one.repeat(n_times, 1)
+    t = times.repeat_interleave(grid * grid, dim=0)
+    pred = model(xy, t).reshape(n_times, grid * grid, 1)
+    target_field = linearized_kpp_gaussian(model, xy, t).detach().reshape(n_times, grid * grid, 1)
+    temp = max(float(temperature), 1.0e-4)
+    alpha = max(float(false_positive_weight), 1.0e-6)
+    beta = max(float(false_negative_weight), 1.0e-6)
+    gamma = max(float(focal_gamma), 1.0e-6)
+    eps = torch.as_tensor(1.0e-6, dtype=dtype, device=device)
+    losses = []
+    for level in levels:
+        pred_support = torch.sigmoid((pred - float(level)) / temp)
+        target_support = torch.sigmoid((target_field - float(level)) / temp)
+        true_positive = torch.sum(pred_support * target_support, dim=1)
+        false_positive = torch.sum(pred_support * (1.0 - target_support), dim=1)
+        false_negative = torch.sum((1.0 - pred_support) * target_support, dim=1)
+        score = (true_positive + eps) / (true_positive + alpha * false_positive + beta * false_negative + eps)
+        losses.append((1.0 - score.clamp(0.0, 1.0)).pow(gamma).mean())
+    return torch.stack(losses).mean()
+
+
+def mass_floor_trajectory_loss(
+    model: OriginPINN,
+    n_times: int,
+    grid: int,
+    device: torch.device,
+    *,
+    floor_fraction: float = 0.35,
+    upper_fraction: float = 1.75,
+) -> torch.Tensor:
+    """One-sided integral mass trajectory guard against zero-field collapse.
+
+    Fisher-KPP has growth from a known nonzero seed. The linearized leading-edge
+    mass is used only as a lower-envelope reference; this avoids forcing exact
+    RK4 values while making near-zero global predictions costly.
+    """
+
+    if n_times <= 0 or grid <= 1:
+        return torch.zeros((), device=device)
+    dtype = next(model.parameters()).dtype
+    xs = torch.linspace(0.0, model.domain.box, grid, dtype=dtype, device=device)
+    x, y = torch.meshgrid(xs, xs, indexing="ij")
+    xy_one = torch.stack([x.reshape(-1), y.reshape(-1)], dim=1)
+    times = torch.linspace(0.0, model.domain.t_end, n_times, dtype=dtype, device=device).reshape(-1, 1)
+    xy = xy_one.repeat(n_times, 1)
+    t = times.repeat_interleave(grid * grid, dim=0)
+    pred_mass = model(xy, t).reshape(n_times, grid * grid, 1).mean(dim=1)
+    target_mass = linearized_kpp_gaussian(model, xy, t).detach().reshape(n_times, grid * grid, 1).mean(dim=1)
+    lower = (float(floor_fraction) * target_mass).clamp_min(1.0e-6)
+    upper = (float(upper_fraction) * target_mass).clamp_min(1.0e-6)
+    lower_loss = torch.relu((lower - pred_mass) / lower).pow(2)
+    upper_loss = torch.relu((pred_mass - upper) / upper).pow(2)
+    return torch.mean(lower_loss + 0.25 * upper_loss)
 
 
 def front_area_contrast_loss(

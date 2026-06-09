@@ -20,6 +20,9 @@ from fisher_origin_lab.korea_data import (
     build_density_grid,
     compare_observed_and_simulated,
     fit_korea_pine_wilt_pinn,
+    korea_equivalent_dr_pairs,
+    korea_physics_prior_from_normalized,
+    korea_physics_prior_from_physical,
     load_korea_pine_wilt_points,
     load_manifest,
     simulate_density_rk4,
@@ -438,7 +441,17 @@ def _save_metric_figure(path: Path, rows: list[dict[str, float | int]]) -> None:
 
 
 def _write_metric_csv(path: Path, rows: list[dict[str, float | int]]) -> None:
-    fields = ["year", "observed_mean", "simulated_mean", "relative_l2", "correlation"]
+    preferred = [
+        "year",
+        "observed_mean",
+        "simulated_mean",
+        "mean_absolute_error",
+        "mass_absolute_error",
+        "mass_relative_error",
+        "relative_l2",
+        "correlation",
+    ]
+    fields = _ordered_fieldnames(rows, preferred)
     with path.open("w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fields)
         writer.writeheader()
@@ -446,11 +459,63 @@ def _write_metric_csv(path: Path, rows: list[dict[str, float | int]]) -> None:
 
 
 def _write_baseline_metric_csv(path: Path, rows: list[dict[str, float | int | str]]) -> None:
-    fields = ["method", "year", "observed_mean", "simulated_mean", "relative_l2", "correlation"]
+    preferred = [
+        "method",
+        "year",
+        "observed_mean",
+        "simulated_mean",
+        "mean_absolute_error",
+        "mass_absolute_error",
+        "mass_relative_error",
+        "relative_l2",
+        "correlation",
+    ]
+    fields = _ordered_fieldnames(rows, preferred)
     with path.open("w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fields)
         writer.writeheader()
         writer.writerows(rows)
+
+
+def _ordered_fieldnames(rows: list[dict], preferred: list[str]) -> list[str]:
+    keys: set[str] = set()
+    for row in rows:
+        keys.update(str(key) for key in row.keys())
+    ordered = [key for key in preferred if key in keys]
+    ordered.extend(sorted(key for key in keys if key not in set(ordered)))
+    return ordered
+
+
+def _mean_metric(rows: list[dict[str, float | int | str]], key: str) -> float | None:
+    values = []
+    for row in rows:
+        value = row.get(key)
+        if value is None:
+            continue
+        try:
+            value_f = float(value)
+        except (TypeError, ValueError):
+            continue
+        if np.isfinite(value_f):
+            values.append(value_f)
+    return float(np.mean(values)) if values else None
+
+
+def _method_summary(rows: list[dict[str, float | int | str]]) -> dict[str, float | None]:
+    return {
+        "mean_relative_l2_observed_years": _mean_metric(rows, "relative_l2"),
+        "mean_correlation_observed_years": _mean_metric(rows, "correlation"),
+        "mean_mass_absolute_error": _mean_metric(rows, "mass_absolute_error"),
+        "mean_mass_relative_error": _mean_metric(rows, "mass_relative_error"),
+        "mean_support_fnr_005": _mean_metric(rows, "support_fnr_005"),
+        "mean_support_fnr_010": _mean_metric(rows, "support_fnr_010"),
+        "mean_support_fpr_005": _mean_metric(rows, "support_fpr_005"),
+        "mean_support_fpr_010": _mean_metric(rows, "support_fpr_010"),
+        "mean_support_dice_005": _mean_metric(rows, "support_dice_005"),
+        "mean_support_dice_010": _mean_metric(rows, "support_dice_010"),
+        "mean_support_tversky_005": _mean_metric(rows, "support_tversky_005"),
+        "mean_support_tversky_010": _mean_metric(rows, "support_tversky_010"),
+    }
 
 
 def run(args: argparse.Namespace) -> dict[str, object]:
@@ -466,12 +531,38 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         capacity_percentile=args.capacity_percentile,
         smooth_passes=args.smooth_passes,
     )
+    parameterization = str(getattr(args, "parameterization", "physical")).lower()
+    length_scale_mode = str(getattr(args, "physics_length_scale", "max_extent"))
+    if parameterization == "physical":
+        physics_prior = korea_physics_prior_from_physical(
+            grid,
+            diffusion_km2_per_year=float(getattr(args, "diffusion_km2_per_year", 15.5)),
+            reaction_per_year=float(getattr(args, "reaction_per_year", getattr(args, "reaction", 0.70))),
+            length_scale_mode=length_scale_mode,
+        )
+        diffusion = physics_prior.normalized_diffusion
+        reaction = physics_prior.normalized_reaction
+    elif parameterization == "normalized":
+        diffusion = float(args.diffusion)
+        reaction = float(args.reaction)
+        physics_prior = korea_physics_prior_from_normalized(
+            grid,
+            normalized_diffusion=diffusion,
+            normalized_reaction=reaction,
+            length_scale_mode=length_scale_mode,
+        )
+    else:
+        raise ValueError("parameterization must be either 'physical' or 'normalized'.")
+    pinn_initial_reaction = getattr(args, "pinn_initial_reaction", None)
+    if pinn_initial_reaction is None:
+        pinn_initial_reaction = reaction
     sim_years, sim_fields = simulate_density_rk4(
         grid.density[0],
         start_year=int(grid.years[0]),
         end_year=args.end_year,
-        diffusion=args.diffusion,
-        reaction=args.reaction,
+        diffusion=physics_prior.normalized_diffusion_x,
+        diffusion_y=physics_prior.normalized_diffusion_y,
+        reaction=reaction,
         steps_per_year=args.steps_per_year,
         land_mask=grid.land_mask,
     )
@@ -491,9 +582,14 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             data_weight=getattr(args, "pinn_data_weight", 8.0),
             pde_weight=getattr(args, "pinn_pde_weight", 0.05),
             boundary_weight=getattr(args, "pinn_boundary_weight", 0.01),
+            initial_condition_weight=getattr(args, "pinn_initial_condition_weight", 16.0),
+            initial_condition_points=getattr(args, "pinn_initial_condition_points", 2048),
             sea_weight=getattr(args, "pinn_sea_weight", 2.0),
-            diffusion=args.diffusion,
-            reaction=getattr(args, "pinn_initial_reaction", 0.20),
+            diffusion=diffusion,
+            reaction=float(pinn_initial_reaction),
+            physics_anchor_weight=getattr(args, "pinn_physics_anchor_weight", 0.08),
+            coefficient_field_weight=getattr(args, "pinn_coefficient_field_weight", 0.02),
+            physics_length_scale_mode=length_scale_mode,
             seed=getattr(args, "seed", 7),
         )
         baseline_rows.extend(dict(method="pinn", **row) for row in pinn_result.metrics)
@@ -517,6 +613,27 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     if pinn_result is not None:
         _save_pinn_baseline_figure(out_dir / "pinn_baseline_observed_years.png", grid, pinn_result.years, pinn_result.fields)
 
+    rk4_summary = _method_summary([row for row in baseline_rows if row["method"] == "rk4"])
+    pinn_rows = [row for row in baseline_rows if row["method"] == "pinn"]
+    baseline_protocol = {
+        "methods": ["rk4"] + (["pinn"] if pinn_result is not None else []),
+        "initial_condition": "observed_density_2016",
+        "same_initial_density": True,
+        "same_observed_year_metrics": True,
+        "grid_size": int(args.grid_size),
+        "land_mask_enabled": grid.land_mask is not None,
+        "sea_cells_forced_zero": grid.land_mask is not None,
+        "parameterization": parameterization,
+        "length_scale_mode": physics_prior.scale.length_scale_mode,
+        "normalized_diffusion_scalar": float(physics_prior.normalized_diffusion),
+        "normalized_diffusion_x": float(physics_prior.normalized_diffusion_x),
+        "normalized_diffusion_y": float(physics_prior.normalized_diffusion_y),
+        "normalized_reaction": float(physics_prior.normalized_reaction),
+        "diffusion_km2_per_year": float(physics_prior.diffusion_km2_per_year),
+        "reaction_per_year": float(physics_prior.reaction_per_year),
+        "steps_per_year": int(args.steps_per_year),
+        "end_year": int(args.end_year),
+    }
     summary = {
         "dataset": manifest["dataset"],
         "records": int(len(points.year)),
@@ -529,17 +646,41 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             "land_cells": int(np.sum(grid.land_mask)) if grid.land_mask is not None else int(grid.density.shape[-1] * grid.density.shape[-2]),
             "sea_cells": int(grid.land_mask.size - np.sum(grid.land_mask)) if grid.land_mask is not None else 0,
         },
-        "diffusion": float(args.diffusion),
-        "reaction": float(args.reaction),
+        "parameterization": parameterization,
+        "physics_prior": {
+            "diffusion_km2_per_year": float(physics_prior.diffusion_km2_per_year),
+            "reaction_per_year": float(physics_prior.reaction_per_year),
+            "front_speed_km_per_year": float(physics_prior.front_speed_km_per_year),
+            "normalized_diffusion": float(physics_prior.normalized_diffusion),
+            "normalized_diffusion_x": float(physics_prior.normalized_diffusion_x),
+            "normalized_diffusion_y": float(physics_prior.normalized_diffusion_y),
+            "normalized_reaction": float(physics_prior.normalized_reaction),
+            "length_scale_mode": physics_prior.scale.length_scale_mode,
+            "length_scale_km": float(physics_prior.scale.length_scale_km),
+            "width_km": float(physics_prior.scale.width_km),
+            "height_km": float(physics_prior.scale.height_km),
+        },
+        "diffusion": float(diffusion),
+        "diffusion_x": float(physics_prior.normalized_diffusion_x),
+        "diffusion_y": float(physics_prior.normalized_diffusion_y),
+        "reaction": float(reaction),
+        "diffusion_km2_per_year": float(physics_prior.diffusion_km2_per_year),
+        "reaction_per_year": float(physics_prior.reaction_per_year),
+        "front_speed_km_per_year": float(physics_prior.front_speed_km_per_year),
         "steps_per_year": int(args.steps_per_year),
         "end_year": int(args.end_year),
-        "mean_relative_l2_observed_years": float(np.nanmean([row["relative_l2"] for row in rows])),
-        "mean_correlation_observed_years": float(np.nanmean([row["correlation"] for row in rows])),
+        "mean_relative_l2_observed_years": rk4_summary["mean_relative_l2_observed_years"],
+        "mean_correlation_observed_years": rk4_summary["mean_correlation_observed_years"],
         "baselines": {
-            "rk4": {
-                "mean_relative_l2_observed_years": float(np.nanmean([row["relative_l2"] for row in rows])),
-                "mean_correlation_observed_years": float(np.nanmean([row["correlation"] for row in rows])),
-            }
+            "rk4": rk4_summary,
+        },
+        "baseline_protocol": baseline_protocol,
+        "physics_identifiability": {
+            "main_identifiability_issue": "The leading Fisher-KPP front speed depends on 2*sqrt(D*r), so field data are needed to separate D and r beyond the product.",
+            "equivalent_front_speed_pairs": korea_equivalent_dr_pairs(
+                diffusion_km2_per_year=float(physics_prior.diffusion_km2_per_year),
+                reaction_per_year=float(physics_prior.reaction_per_year),
+            ),
         },
         "outputs": [
             "korea_pine_wilt_metrics.csv",
@@ -554,13 +695,17 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         "map_gif": map_gif_info,
     }
     if pinn_result is not None:
+        pinn_summary = _method_summary(pinn_rows)
         summary["baselines"]["pinn"] = {
             "status": pinn_result.status,
             "epochs": int(getattr(args, "pinn_epochs", 120)),
             "physics": pinn_result.physics,
             "sea_weight": float(getattr(args, "pinn_sea_weight", 2.0)),
-            "mean_relative_l2_observed_years": float(np.nanmean([row["relative_l2"] for row in pinn_result.metrics])),
-            "mean_correlation_observed_years": float(np.nanmean([row["correlation"] for row in pinn_result.metrics])),
+            "initial_condition_weight": float(getattr(args, "pinn_initial_condition_weight", 16.0)),
+            "initial_condition_points": int(getattr(args, "pinn_initial_condition_points", 2048)),
+            "physics_anchor_weight": float(getattr(args, "pinn_physics_anchor_weight", 0.08)),
+            "coefficient_field_weight": float(getattr(args, "pinn_coefficient_field_weight", 0.02)),
+            **pinn_summary,
             "history": pinn_result.history,
         }
         summary["outputs"].append("pinn_baseline_observed_years.png")
@@ -577,8 +722,12 @@ def main() -> None:
     parser.add_argument("--pad-m", type=float, default=15_000.0)
     parser.add_argument("--capacity-percentile", type=float, default=99.0)
     parser.add_argument("--smooth-passes", type=int, default=1)
-    parser.add_argument("--diffusion", type=float, default=0.0015)
-    parser.add_argument("--reaction", type=float, default=0.70)
+    parser.add_argument("--parameterization", choices=["physical", "normalized"], default="physical")
+    parser.add_argument("--physics-length-scale", choices=["max_extent", "mean_extent", "geometric_mean_extent", "x_extent", "y_extent"], default="max_extent")
+    parser.add_argument("--diffusion-km2-per-year", type=float, default=15.5)
+    parser.add_argument("--reaction-per-year", type=float, default=0.70)
+    parser.add_argument("--diffusion", type=float, default=0.0015, help="Normalized diffusion used only with --parameterization normalized.")
+    parser.add_argument("--reaction", type=float, default=0.70, help="Normalized reaction used only with --parameterization normalized.")
     parser.add_argument("--steps-per-year", type=int, default=80)
     parser.add_argument("--end-year", type=int, default=2030)
     parser.add_argument("--output-dir", type=Path, default=Path("runs") / "korea_pine_wilt_csv_simulation")
@@ -591,8 +740,12 @@ def main() -> None:
     parser.add_argument("--pinn-data-weight", type=float, default=8.0)
     parser.add_argument("--pinn-pde-weight", type=float, default=0.05)
     parser.add_argument("--pinn-boundary-weight", type=float, default=0.01)
+    parser.add_argument("--pinn-initial-condition-weight", type=float, default=16.0)
+    parser.add_argument("--pinn-initial-condition-points", type=int, default=2048)
     parser.add_argument("--pinn-sea-weight", type=float, default=2.0)
-    parser.add_argument("--pinn-initial-reaction", type=float, default=0.20)
+    parser.add_argument("--pinn-initial-reaction", type=float, default=None)
+    parser.add_argument("--pinn-physics-anchor-weight", type=float, default=0.08)
+    parser.add_argument("--pinn-coefficient-field-weight", type=float, default=0.02)
     parser.add_argument("--map-gif-fps", type=float, default=1.2)
     parser.add_argument("--map-gif-max-frames", type=int, default=15)
     parser.add_argument("--seed", type=int, default=7)

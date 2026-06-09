@@ -2,6 +2,7 @@
 
 from .solver import (
     apply_dirichlet_bc,
+    apply_dirichlet_bc_2d_from_exact,
     apply_neumann_bc_2d,
     area_fraction_2d,
     backward_euler_step,
@@ -17,6 +18,7 @@ from .solver import (
     relative_l2,
     rk4_step,
     rk4_step_2d,
+    rk4_step_2d_dirichlet_exact,
     solve_1d_method,
     solve_long_time_curve,
     solve_rk4,
@@ -26,6 +28,7 @@ from .solver import (
 
 __all__ = [
     "apply_dirichlet_bc",
+    "apply_dirichlet_bc_2d_from_exact",
     "apply_neumann_bc_2d",
     "area_fraction_2d",
     "backward_euler_step",
@@ -41,6 +44,7 @@ __all__ = [
     "relative_l2",
     "rk4_step",
     "rk4_step_2d",
+    "rk4_step_2d_dirichlet_exact",
     "solve_1d_method",
     "solve_long_time_curve",
     "solve_rk4",

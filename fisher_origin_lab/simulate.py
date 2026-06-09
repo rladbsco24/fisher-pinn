@@ -6,6 +6,7 @@ import numpy as np
 import torch
 
 from .config import DomainConfig, ObservationConfig, PDEConfig, SeedConfig
+from .exact_wave import az_exact_unit_numpy
 
 
 @dataclass(frozen=True)
@@ -92,6 +93,24 @@ def forward_fisher_kpp(
             times.append((step + 1) * dt)
 
     return TruthData(xs=xs, times=np.array(times), fields=np.array(fields))
+
+
+def forward_ablowitz_zeppetella_exact(
+    domain: DomainConfig,
+    *,
+    x_left: float = -20.0,
+    x_right: float = 20.0,
+    x0: float = 0.0,
+    snapshots: int = 80,
+) -> TruthData:
+    xs = np.linspace(0.0, domain.box, domain.grid)
+    times = np.linspace(0.0, domain.t_end, max(2, int(snapshots) + 1))
+    x_unit = xs / max(domain.box, 1.0e-12)
+    fields = []
+    for t in times:
+        profile = az_exact_unit_numpy(x_unit, float(t), x_left=x_left, x_right=x_right, x0=x0)
+        fields.append(np.repeat(profile[:, None], len(xs), axis=1))
+    return TruthData(xs=xs, times=np.asarray(times), fields=np.asarray(fields))
 
 
 def interpolate_truth(truth: TruthData, xyt: np.ndarray) -> np.ndarray:

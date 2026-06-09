@@ -31,11 +31,15 @@ from fisher_origin_lab.curve_trend import (
 from fisher_origin_lab.korea_data import (
     build_density_grid,
     fit_korea_pine_wilt_pinn,
+    korea_physics_prior_from_normalized,
+    korea_physics_prior_from_physical,
     load_korea_pine_wilt_points,
     load_manifest,
     simulate_density_rk4,
 )
 from fisher_origin_lab.losses import (
+    ablowitz_zeppetella_dirichlet_loss,
+    ablowitz_zeppetella_initial_condition_loss,
     expected_front_gradient_residual_loss,
     expected_front_pde_loss,
     expected_front_samples,
@@ -43,16 +47,20 @@ from fisher_origin_lab.losses import (
     front_level_set_alignment_loss,
     front_local_gradient_residual_loss,
     front_profile_alignment_loss,
+    front_support_tversky_loss,
     front_speed_consistency_loss,
     front_speed_kinematics,
     known_initial_condition_loss,
     leading_edge_area_loss,
     leading_edge_floor_loss,
+    mass_floor_trajectory_loss,
     parabolic_mass_balance_loss,
     pde_residual,
+    spatial_coefficient_regularization_loss,
     time_slab_interface_loss,
 )
 from fisher_origin_lab.models import OriginPINN
+from fisher_origin_lab.rk4 import forward_ablowitz_zeppetella_rk4
 from fisher_origin_lab.plotting import (
     save_observation_coverage_figure,
     save_pinn_evolution_gif,
@@ -268,13 +276,44 @@ def test_geo_spectral_forward_model_terms_are_finite() -> None:
     pred = model(xy, t)
     residual = pde_residual(model, xy, t)
     front_grad = front_local_gradient_residual_loss(model, xy, t, max_points=6)
+    coefficient_loss = spatial_coefficient_regularization_loss(model, xy)
     sparse = model.sparse_last_layer_l1()
     assert pred.shape == (12, 1)
     assert residual.shape == (12, 1)
     assert torch.isfinite(pred).all()
     assert torch.isfinite(residual).all()
     assert torch.isfinite(front_grad)
+    assert torch.isfinite(coefficient_loss)
     assert torch.isfinite(sparse)
+    assert model.has_spatial_coefficients()
+    assert model.coefficient_stats(xy)["coefficient_log_abs_mean"] >= 0.0
+
+
+def test_ablowitz_zeppetella_forward_preset_matches_exact_wave() -> None:
+    cfg = ExperimentConfig().ablowitz_zeppetella_forward().quick()
+    assert cfg.benchmark.kind == "ablowitz_zeppetella"
+    assert cfg.pde.include_advection is False
+    assert np.isclose(cfg.pde.reaction, 1.0)
+    assert np.isclose(cfg.pde.diffusion, 1.0 / 40.0**2)
+    model = OriginPINN(cfg.domain, cfg.pde, cfg.seed, cfg.model)
+    xy = torch.rand(16, 2)
+    t = torch.rand(16, 1) * cfg.domain.t_end
+    residual = pde_residual(model, xy, t)
+    ic = ablowitz_zeppetella_initial_condition_loss(model, 16, torch.device("cpu"))
+    bc = ablowitz_zeppetella_dirichlet_loss(model, 16, torch.device("cpu"))
+    assert residual.shape == (16, 1)
+    assert torch.isfinite(residual).all()
+    assert torch.isfinite(ic)
+    assert torch.isfinite(bc)
+
+
+def test_ablowitz_zeppetella_rk4_truth_shape_and_error() -> None:
+    cfg = ExperimentConfig().ablowitz_zeppetella_forward().quick()
+    truth = forward_ablowitz_zeppetella_rk4(cfg.domain, cfg.pde, snapshots=3, steps=80)
+    assert truth.fields.shape[1:] == (cfg.domain.grid, cfg.domain.grid)
+    assert np.isfinite(truth.fields).all()
+    assert truth.fields.min() >= 0.0
+    assert truth.fields.max() <= 1.0
 
 
 def test_nif_pirate_model_terms_are_finite() -> None:
@@ -325,9 +364,11 @@ def test_expected_front_losses_are_finite() -> None:
     pde_loss = expected_front_pde_loss(model, 16, torch.device("cpu"))
     floor_loss = leading_edge_floor_loss(model, 16, torch.device("cpu"))
     area_loss = leading_edge_area_loss(model, n_times=3, grid=8, device=torch.device("cpu"))
+    support_loss = front_support_tversky_loss(model, n_times=3, grid=8, device=torch.device("cpu"))
     contrast_loss = front_area_contrast_loss(model, n_times=3, grid=8, device=torch.device("cpu"))
     profile_loss = front_profile_alignment_loss(model, n=24, device=torch.device("cpu"))
     level_set_loss = front_level_set_alignment_loss(model, n=16, device=torch.device("cpu"))
+    mass_floor_loss = mass_floor_trajectory_loss(model, n_times=3, grid=8, device=torch.device("cpu"))
     front_gpinn_loss = expected_front_gradient_residual_loss(model, n=16, device=torch.device("cpu"))
     interface_loss = time_slab_interface_loss(model, n=16, device=torch.device("cpu"), slabs=3)
     assert xy.shape == (16, 2)
@@ -337,9 +378,11 @@ def test_expected_front_losses_are_finite() -> None:
     assert torch.isfinite(pde_loss)
     assert torch.isfinite(floor_loss)
     assert torch.isfinite(area_loss)
+    assert torch.isfinite(support_loss)
     assert torch.isfinite(contrast_loss)
     assert torch.isfinite(profile_loss)
     assert torch.isfinite(level_set_loss)
+    assert torch.isfinite(mass_floor_loss)
     assert torch.isfinite(front_gpinn_loss)
     assert torch.isfinite(interface_loss)
 
@@ -390,6 +433,23 @@ def test_korea_pine_wilt_compact_dataset_and_rk4_smoke(tmp_path) -> None:
     assert grid.land_mask.any()
     assert (~grid.land_mask).any()
     assert np.all(grid.density[:, ~grid.land_mask] == 0.0)
+    physical_prior = korea_physics_prior_from_physical(
+        grid,
+        diffusion_km2_per_year=15.5,
+        reaction_per_year=0.70,
+    )
+    assert physical_prior.normalized_diffusion > 0.0
+    assert physical_prior.normalized_diffusion_x > 0.0
+    assert physical_prior.normalized_diffusion_y > 0.0
+    assert physical_prior.normalized_reaction == 0.70
+    assert np.isclose(
+        physical_prior.diffusion_km2_per_year,
+        korea_physics_prior_from_normalized(
+            grid,
+            normalized_diffusion=physical_prior.normalized_diffusion,
+            normalized_reaction=physical_prior.normalized_reaction,
+        ).diffusion_km2_per_year,
+    )
 
     years, fields = simulate_density_rk4(
         grid.density[0],
@@ -414,6 +474,7 @@ def test_korea_pine_wilt_compact_dataset_and_rk4_smoke(tmp_path) -> None:
         batch_size=128,
         collocation_points=8,
         boundary_points=4,
+        initial_condition_points=32,
         device=torch.device("cpu"),
     )
     assert pinn.years.tolist() == [2016, 2017]
@@ -422,6 +483,17 @@ def test_korea_pine_wilt_compact_dataset_and_rk4_smoke(tmp_path) -> None:
     assert pinn.status == "diagnostic_only_low_epoch"
     assert np.isfinite(pinn.fields).all()
     assert np.all(pinn.fields[:, ~grid.land_mask] == 0.0)
+    assert "initial_condition" in pinn.history[-1]
+    assert np.isfinite(pinn.history[-1]["initial_condition"])
+    assert "physics_anchor" in pinn.history[-1]
+    assert np.isfinite(pinn.history[-1]["physics_anchor"])
+    assert "coefficient_field" in pinn.history[-1]
+    assert np.isfinite(pinn.history[-1]["coefficient_field"])
+    assert "diffusion_km2_per_year" in pinn.physics
+    assert "normalized_diffusion_x" in pinn.physics
+    assert "normalized_diffusion_y" in pinn.physics
+    assert "coefficient_field_weight" in pinn.physics
+    assert "prior_diffusion_km2_per_year" in pinn.physics
 
     gif_info = _save_korea_map_baseline_gif(
         tmp_path / "korea_map_baselines.gif",
@@ -454,6 +526,9 @@ def test_geo_spectral_forward_profile_extends_korea_setup() -> None:
     assert cfg.model.use_front_fourier_features is True
     assert cfg.model.front_fourier_features > 0
     assert cfg.model.hard_initial_condition is True
+    assert cfg.model.use_spatial_coefficients is True
+    assert cfg.model.spatial_coefficient_log_scale > 0.0
+    assert cfg.model.initial_envelope_tau > 0.10
     assert cfg.model.use_kpp_front_envelope is True
     assert cfg.weights.initial_condition > 0.0
     assert cfg.weights.boundary > 0.0
@@ -461,11 +536,15 @@ def test_geo_spectral_forward_profile_extends_korea_setup() -> None:
     assert cfg.weights.front_gradient > 0.0
     assert cfg.weights.front_speed > 0.0
     assert cfg.weights.mass_balance > 0.0
+    assert cfg.weights.mass_floor > 0.0
     assert cfg.weights.expected_front_pde == 0.0
-    assert cfg.weights.leading_edge == 0.0
+    assert cfg.weights.leading_edge > 0.0
     assert cfg.weights.leading_edge_area > 0.0
+    assert cfg.weights.front_support_tversky > 0.0
     assert cfg.weights.level_set_alignment > 0.0
     assert cfg.weights.time_interface > 0.0
+    assert cfg.weights.physics_parameter_anchor > 0.0
+    assert cfg.weights.coefficient_field > 0.0
     assert cfg.weights.sparse > 0.0
     assert cfg.train.adaptive_loss_balancing is True
     assert cfg.train.gradient_norm_balancing is True
@@ -493,6 +572,7 @@ def test_geo_spectral_forward_profile_extends_korea_setup() -> None:
     assert cfg.train.residual_weight_exponent_start < cfg.train.residual_weight_exponent_end
     assert cfg.train.pde_loss_warmup_fraction > 0.0
     assert cfg.train.front_loss_start_fraction > 0.0
+    assert cfg.train.front_loss_start_fraction <= cfg.train.pde_loss_warmup_fraction
     assert cfg.train.front_loss_warmup_fraction > 0.0
     assert cfg.train.time_interface_start_fraction > cfg.train.front_loss_start_fraction
     assert cfg.train.time_interface_warmup_fraction > 0.0
@@ -566,6 +646,11 @@ def test_forward_ablation_cases_report_front_metrics() -> None:
     assert "korea_style_forward" in names
     assert "geo_front_area" in names
     assert "geo_levelset_time_slab" in names
+    assert "geo_no_mass_floor" in names
+    assert "geo_no_support_tversky" in names
+    assert "geo_no_physics_anchor" in names
+    assert "geo_no_spatial_coefficients" in names
+    assert "geo_no_collapse_guards" in names
     assert "geo_no_tw_front_area" in names
     assert "geo_rk4_teacher_front_area" in names
     assert "geo_rk4_late_teacher_front_area" in names
@@ -584,6 +669,10 @@ def test_forward_ablation_cases_report_front_metrics() -> None:
     assert any(case["cfg"].model.architecture == "gated_mlp" for case in cases)
     assert any(case["cfg"].model.use_traveling_wave_features is False for case in cases)
     assert any(case["cfg"].weights.rk4_teacher > 0.0 for case in cases)
+    assert any(case["cfg"].weights.mass_floor == 0.0 for case in cases)
+    assert any(case["cfg"].weights.front_support_tversky == 0.0 for case in cases)
+    assert any(case["cfg"].weights.physics_parameter_anchor == 0.0 for case in cases)
+    assert any(case["cfg"].model.use_spatial_coefficients is False for case in cases)
     assert any(case["cfg"].train.rk4_teacher_late_fraction > 0.0 for case in cases)
     assert any(case["cfg"].train.rk4_pretrain_steps > 0 for case in cases)
     assert any(case["cfg"].train.time_marching for case in cases)

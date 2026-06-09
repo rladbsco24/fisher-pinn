@@ -22,6 +22,8 @@ from fisher_kpp_rk4.config import (
     Nx,
     T,
     T_2D,
+    ablowitz_zeppetella_exact,
+    ablowitz_zeppetella_exact_2d,
     dt,
     dt_2d,
     dx,
@@ -56,12 +58,14 @@ def run_1d() -> dict[str, np.ndarray]:
         initial_condition=initial_condition,
         left_bc=left_bc,
         right_bc=right_bc,
-        save_interval=5.0,
+        save_interval=1.0,
+        exact_solution=ablowitz_zeppetella_exact,
     )
-    c_min = 2.0 * np.sqrt(D * r)
-    c_num = estimate_front_speed(result["times"], result["fronts"], t_min=5.0, x_max=0.85 * L)
-    print(f"Theoretical minimal KPP speed c* = {c_min:.6g}")
-    print(f"Estimated front speed before boundary interaction = {c_num:.6g}")
+    c_exact = 5.0 / np.sqrt(6.0)
+    c_num = estimate_front_speed(result["times"], result["fronts"], t_min=1.0, x_max=x[-1])
+    print(f"Ablowitz-Zeppetella exact speed c = {c_exact:.6g}")
+    print(f"Estimated front speed = {c_num:.6g}")
+    print(f"Final relative L2 vs exact = {float(result['relative_l2_final']):.3e}")
 
     np.savez(OUTPUT_DIR / "fisher_kpp_rk4_1d_results.npz", **result, D=D, r=r, L=L, T=T, dx=dx, dt=dt)
     return result
@@ -83,10 +87,13 @@ def run_2d() -> dict[str, np.ndarray]:
         r=r_2D,
         initial_condition=initial_condition_2d,
         save_interval=0.05,
+        boundary_condition="dirichlet_exact",
+        exact_solution=ablowitz_zeppetella_exact_2d,
     )
     print(f"Final mean mass = {result['mass'][-1]:.6g}")
     print(f"Final area u>=0.05 = {result['area_ge_0.05'][-1]:.6g}")
     print(f"Final area u>=0.10 = {result['area_ge_0.10'][-1]:.6g}")
+    print(f"Final relative L2 vs exact = {float(result['relative_l2_final']):.3e}")
 
     np.savez(OUTPUT_DIR / "fisher_kpp_rk4_2d_results.npz", **result, D=D_2D, r=r_2D, box=BOX_2D, T=T_2D, dx=dx_2d, dt=dt_2d)
     return result
@@ -168,4 +175,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
