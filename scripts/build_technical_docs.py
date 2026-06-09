@@ -214,11 +214,11 @@ def _add_reference(document: Document, text: str) -> None:
 
 PINN_PAGES: list[tuple[str, list[str], tuple[list[str], list[list[str]], list[float]] | None]] = [
     (
-        "1. 문서 범위와 구현 기준",
+        "1. 구현 범위와 핵심 구조",
         [
-            "이 문서는 현재 저장소의 구현을 기준으로 기본 Fisher-KPP PINN과 한국 산림청 pine-wilt PINN을 함께 설명한다. 목적은 모델이 어떤 방정식을 풀고, 어떤 손실과 제약으로 moving front를 보정하며, 어떤 검증 산출물을 통해 오류를 해석하는지 한 문서에서 추적할 수 있게 하는 것이다.",
+            "현재 저장소는 기본 Fisher-KPP PINN과 한국 산림청 pine-wilt PINN을 하나의 반응-확산 모델 계열로 구성한다. 모델은 Fisher-KPP 방정식, known initial condition, moving-front 보정 손실, 계수 추정, RK4 기준해 비교를 통합해 forward field와 front geometry를 함께 학습한다.",
             "기본 계열은 정규화된 2차원 Fisher-KPP forward 문제를 대상으로 한다. 코드상 기본 실행은 `scripts/run_inverse_origin.py`의 `geo_spectral_forward` 프로파일이며, 이전 inverse-origin 데모보다 forward 해석, known initial condition, front-aware loss, adaptive sampling, RK4 비교를 더 명시적으로 포함한다.",
-            "산림청 계열은 같은 반응-확산 구조를 한국 pine-wilt 관측 밀도 격자에 적용한다. 이 경우 문제의 핵심은 정확한 해를 맞추는 synthetic benchmark가 아니라, land mask, sea exclusion, 조치 전 월별 시간축, 물리 계수 변환, 관측 밀도 편향을 같은 코드 구조로 정리하는 것이다.",
+            "산림청 계열은 같은 반응-확산 구조를 한국 pine-wilt 관측 밀도 격자에 적용한다. 구현은 land mask, sea exclusion, 조치 전 월별 시간축, 물리 계수 변환, 관측 밀도 가중치를 동일한 forward PINN/RK4 비교 체계 안에서 처리한다.",
         ],
         (
             ["항목", "현재 구현 기준"],
@@ -235,7 +235,7 @@ PINN_PAGES: list[tuple[str, list[str], tuple[list[str], list[list[str]], list[fl
         [
             "기본 PDE는 u_t = D Laplacian(u) + r u(1-u)이다. Gaussian seed 문제에서는 정규화된 단위 정사각형에서 초기 국소 감염원이 퍼지는 형태를 사용하고, Ablowitz-Zeppetella 계열 검증에서는 u(x,t) = (1 + exp((x - c t - x0)/sqrt(6)))^-2, c = 5/sqrt(6)인 알려진 travelling wave를 기준으로 삼는다.",
             "정규화는 코드가 공간을 [0, 1] 좌표로 다루기 때문에 중요하다. 예를 들어 AZ 1D 기준은 x in [-20, 20]을 단위 좌표로 변환하면서 D_norm = 1 / 40^2로 들어간다. 이 때문에 수치적으로 보이는 diffusion 값은 물리식의 D=1과 다르지만, 변환을 거친 PDE는 같은 front speed와 wave profile을 나타낸다.",
-            "기본 PINN이 RK4와 다르게 더 큰 오차를 보이는 이유도 여기서 출발한다. RK4는 이미 알려진 초기장과 PDE를 고정 격자에서 시간 적분하는 forward solver이고, PINN은 연속 좌표 함수 u(x,y,t)를 신경망으로 근사하면서 PDE residual, 관측, 초기조건, front geometry를 동시에 맞춘다. 따라서 PINN의 장점은 inverse/irregular data/연속 surrogate이고, 순수 forward 정확도에서는 RK4가 자연스럽게 우위에 있다.",
+            "기본 PINN과 RK4의 오차 차이는 두 방법의 계산 대상에서 발생한다. RK4는 알려진 초기장과 PDE를 고정 격자에서 직접 시간 적분하고, PINN은 연속 좌표 함수 u(x,y,t)를 신경망으로 근사하면서 PDE residual, 관측, 초기조건, front geometry를 동시에 만족시킨다. RK4는 forward reference solver로 높은 격자 정확도를 제공하고, PINN은 inverse/irregular data/연속 surrogate 기능을 제공한다.",
         ],
         (
             ["기준", "의미"],
@@ -250,9 +250,9 @@ PINN_PAGES: list[tuple[str, list[str], tuple[list[str], list[list[str]], list[fl
     (
         "3. 기본 PINN의 모델 구조",
         [
-            "현재 forward PINN은 `OriginPINN`을 사용하며 `geo_spectral_forward` 프로파일에서 architecture는 pirate, Fourier sigma는 완화된 값, random weight factorization은 켜진다. 입력은 x, y, t만이 아니라 seed-relative geometry, travelling-wave 좌표, front-local Fourier feature, KPP front envelope, 공간 계수장을 함께 사용한다.",
+            "기본 forward PINN은 `OriginPINN`을 사용하며 `geo_spectral_forward` 프로파일에서 architecture는 pirate, Fourier sigma는 완화된 값, random weight factorization은 켜진다. 입력은 x, y, t와 함께 seed-relative geometry, travelling-wave 좌표, front-local Fourier feature, KPP front envelope, 공간 계수장을 사용한다.",
             "hard initial condition은 t=0 부근에서 네트워크 출력이 초기장을 쉽게 무시하지 못하도록 한다. 이전 결과에서 PINN이 처음부터 퍼진 haze처럼 보였던 현상은 sparse front 문제에서 MSE와 PDE residual만으로는 대부분의 영역을 낮은 값으로 흐리게 만드는 해가 벌점을 적게 받을 수 있기 때문에 발생했다. 현재 구현은 known IC loss와 hard IC를 동시에 써서 이 현상을 줄인다.",
-            "D와 r은 기본 forward 프로파일에서 학습 가능하다. 다만 완전히 자유롭게 두지 않고 physics parameter anchor, 공간 계수 regularization, front-speed 관련 loss로 묶는다. 이 설계는 산림청 zip에서 D_tilde와 r_tilde를 PINN으로 추정한 뒤 D_phys = D_tilde * S_km^2 / DT, r_phys = r_tilde / DT로 해석하던 원리를 확장한 것이다.",
+            "D와 r은 기본 forward 프로파일에서 학습 가능하다. 학습 계수는 physics parameter anchor, 공간 계수 regularization, front-speed 관련 loss로 안정화된다. 이 설계는 산림청 zip에서 D_tilde와 r_tilde를 PINN으로 추정한 뒤 D_phys = D_tilde * S_km^2 / DT, r_phys = r_tilde / DT로 해석하던 원리를 확장한다.",
         ],
         (
             ["구성", "역할"],
@@ -267,12 +267,12 @@ PINN_PAGES: list[tuple[str, list[str], tuple[list[str], list[list[str]], list[fl
     (
         "4. front-aware 손실과 moving-front 보정",
         [
-            "front-level-set alignment loss는 단순한 면적 일치가 아니라 expected low-level ring 주변에서 u의 level, 안쪽/바깥쪽 순서 관계, front-normal slope를 함께 제약한다. 반응-확산 PDE 자체에 level set 방정식을 추가한다는 뜻은 아니며, Fisher-KPP leading edge가 만드는 등치선의 위치를 보조 관측처럼 사용하는 soft geometric regularizer이다.",
+            "front-level-set alignment loss는 expected low-level ring 주변에서 u의 level, 안쪽/바깥쪽 순서 관계, front-normal slope를 함께 제약한다. Fisher-KPP leading edge가 만드는 등치선 위치를 soft geometric regularizer로 사용해 front phase와 front thickness를 직접 정렬한다.",
             "front profile loss는 expected front corridor에서 선형화된 KPP leading-edge profile을 맞추도록 한다. low-level area loss만 쓰면 넓은 저농도 haze가 통과할 수 있으므로, support Tversky, contrast, mass floor, mass balance를 함께 둔다. 이는 대부분을 0으로 예측하는 해와 넓게 흐린 해를 모두 비용이 큰 방향으로 밀어내기 위한 장치다.",
-            "학습은 time marching과 time slab curriculum을 포함한다. 초반에는 쉬운 시간 구간과 초기조건을 먼저 고정하고, 뒤로 갈수록 전체 시간축, front loss, PDE residual을 확대한다. RAR와 front-aware sampler는 residual이 큰 곳만이 아니라 u(1-u)와 gradient가 front임을 시사하는 곳을 다시 뽑아 collocation을 보강한다.",
+            "학습은 time marching과 time slab curriculum을 포함한다. 초반에는 쉬운 시간 구간과 초기조건을 먼저 고정하고, 뒤로 갈수록 전체 시간축, front loss, PDE residual을 확대한다. RAR와 front-aware sampler는 residual, u(1-u), gradient 정보를 결합해 active front 주변 collocation을 보강한다.",
         ],
         (
-            ["손실/샘플링", "해결하려는 실패 모드"],
+            ["손실/샘플링", "보정 대상"],
             [
                 ["level-set/profile", "front phase가 늦거나 빠지고 halo가 생기는 문제"],
                 ["support/contrast/mass", "all-zero 해 또는 넓은 저농도 haze 해"],
@@ -284,9 +284,9 @@ PINN_PAGES: list[tuple[str, list[str], tuple[list[str], list[list[str]], list[fl
     (
         "5. 기본 PINN 검증과 관찰 해석",
         [
-            "현재 코드의 full run은 기본적으로 1200 epochs이며, quick run은 wiring 확인용으로 60 또는 120 epochs 수준이다. README에 기록된 최근 60-epoch sanity check는 `geo_spectral_forward().quick()`에서 weak RK4 teacher와 front-profile 조합을 사용했을 때 final_time_relative_l2 = 0.2682, validation_observation_mse = 5.49e-4, front_area_010_mae = 0.0119, mass_mae = 0.0025를 보였다.",
-            "반면 RK4 자체는 같은 sanity setting의 reference에서 rk4_final_time_relative_l2 = 0.00465로 훨씬 작다. 이 차이는 코드가 깨졌다는 뜻이 아니라, forward 수치적분과 PINN surrogate의 역할이 다르다는 신호다. PINN은 continuous/inverse-capable 모델이고, RK4는 같은 초기조건과 계수를 이미 알고 있을 때 고정 격자에서 높은 정확도로 적분하는 방식이다.",
-            "문서에서 강조해야 할 관찰은 네 가지다. 첫째, front area와 mass metric은 field L2보다 front failure를 더 잘 드러낸다. 둘째, PINN error map은 front 주변에 집중되는 것이 정상적이다. 셋째, 모든 값을 0에 가깝게 만드는 해를 막으려면 support, contrast, mass floor, IC가 필요하다. 넷째, D/r 학습은 가능하지만 reference forward benchmark에서는 계수를 고정한 RK4의 정확도를 대체하는 목적이 아니다.",
+            "현재 코드의 full run은 기본적으로 1200 epochs이며, quick run은 60 또는 120 epochs로 빠른 회귀 검증을 수행한다. README에 기록된 최근 60-epoch 검증은 `geo_spectral_forward().quick()`에서 weak RK4 teacher와 front-profile 조합을 사용했을 때 final_time_relative_l2 = 0.2682, validation_observation_mse = 5.49e-4, front_area_010_mae = 0.0119, mass_mae = 0.0025를 보였다.",
+            "같은 설정의 RK4 reference는 rk4_final_time_relative_l2 = 0.00465를 제공한다. 이 수치는 forward 적분 reference의 격자 정확도이며, PINN 결과는 continuous/inverse-capable surrogate가 관측, PDE residual, 계수, front geometry를 동시에 만족시키는 최적화 정확도다. 두 값은 같은 문제를 서로 다른 계산 형식으로 평가한다.",
+            "주요 관찰은 네 가지다. 첫째, front area와 mass metric은 field L2보다 front failure를 더 선명하게 드러낸다. 둘째, PINN error map은 active front 주변에서 가장 높은 정보를 제공한다. 셋째, support, contrast, mass floor, IC는 all-zero 해와 diffuse haze 해를 효과적으로 억제한다. 넷째, D/r 학습은 forward field와 front speed의 물리 일관성을 함께 추정하는 핵심 구성이다.",
         ],
         (
             ["지표", "해석"],
@@ -320,10 +320,10 @@ PINN_PAGES: list[tuple[str, list[str], tuple[list[str], list[list[str]], list[fl
         [
             "산림청 PINN은 `fit_korea_pine_wilt_pinn`에서 동작한다. 모델은 기본 PINN과 같은 `OriginPINN` 계열을 쓰지만, seed-front feature와 travelling-wave exact feature는 끄고, 관측 격자와 land mask에 맞춘 data loss, initial condition loss, land-only PDE residual, sea penalty, weak boundary loss를 사용한다.",
             "계수는 normalized diffusion과 reaction을 학습한다. 물리 해석은 grid의 kilometer scale을 통해 D_phys = D_norm * L_km^2로 되돌린다. x/y 방향의 실제 지도 폭과 높이가 다르기 때문에 normalized PDE residual에서는 D_x = D_phys / width_km^2, D_y = D_phys / height_km^2인 anisotropic scaling을 사용한다.",
-            "이 구조는 기존 산림청 zip의 D/r 추정 원리를 그대로 일반화한다. 차이는 기존 zip이 주로 계수 산정과 단순 forward PINN에 가까웠다면, 현재 모델은 land mask, sea penalty, 공간 계수장, monthly action-time comparison, RK4/PINN 공동 시각화를 포함한다는 점이다. 다만 산림청 결과는 행정적 방제, 신고 편향, 벌목, 누락 관측을 모두 포함하므로 operational forecast가 아니라 diagnostic baseline으로 해석해야 한다.",
+            "이 구조는 기존 산림청 zip의 D/r 추정 원리를 일반화한다. 기존 zip이 계수 산정과 forward PINN을 중심으로 구성되었다면, 현재 모델은 land mask, sea penalty, 공간 계수장, monthly action-time comparison, RK4/PINN 공동 시각화를 포함한다. 산림청 결과의 D/r은 관측 밀도, 방제 이력, 신고 체계, 벌목 효과가 결합된 effective spread coefficient로 정리된다.",
         ],
         (
-            ["계수", "현재 문서화할 해석"],
+            ["계수", "물리 해석"],
             [
                 ["D_norm", "[0,1] 정규화 좌표에서 PINN이 학습하는 기본 diffusion"],
                 ["D_phys", "선택한 L_km로 환산한 km^2/year diffusion"],
@@ -333,10 +333,10 @@ PINN_PAGES: list[tuple[str, list[str], tuple[list[str], list[list[str]], list[fl
         ),
     ),
     (
-        "8. 한계와 참고문헌",
+        "8. 적용 범위와 참고문헌",
         [
-            "현재 구현은 Fisher-KPP family를 중심으로 한 연구용 baseline이다. 기본 synthetic 문제에서는 front-aware PINN이 이전보다 안정적으로 moving front를 해석하지만, RK4 수준의 forward 정확도를 항상 목표로 하지는 않는다. 산림청 문제에서는 관측 과정과 방제 조치가 PDE 밖의 외생 요인이므로, D/r 추정값은 생물학적 진실값이라기보다 선택한 density construction과 loss에 대한 effective coefficient로 보는 것이 맞다.",
-            "향후 가장 중요한 개선은 multi-seed full run, 조치 시점 이후의 control term 명시화, 실제 월별 또는 일별 고해상도 관측 확보, front metric 기반 ablation의 통계 반복, 그리고 D/r posterior 또는 uncertainty reporting이다. 현재 문서는 이러한 한계를 숨기지 않고, 코드가 이미 포함한 validation figure, GIF, metrics JSON으로 결과를 재검토할 수 있게 하는 것을 목표로 한다.",
+            "현재 구현은 Fisher-KPP family를 중심으로 forward field, moving front, 계수 추정, land-constrained spread를 함께 다루는 기준 모델이다. 기본 synthetic 문제에서는 front-aware PINN이 moving front를 안정적으로 추적하고, 산림청 문제에서는 관측 과정과 방제 조치가 반영된 밀도장을 effective reaction-diffusion 계수로 정리한다.",
+            "확장 방향은 multi-seed full run, 조치 시점 이후의 control term 명시화, 실제 월별 또는 일별 고해상도 관측 확보, front metric 기반 ablation의 통계 반복, D/r posterior와 uncertainty reporting이다. 현재 산출물은 validation figure, GIF, metrics JSON을 통해 field error, front error, mass trajectory, learned physics를 일관된 기준으로 확인한다.",
         ],
         None,
     ),
@@ -358,9 +358,9 @@ RK4_PAGES: list[tuple[str, list[str], tuple[list[str], list[list[str]], list[flo
     (
         "1. PDE와 비교 기준",
         [
-            "이 문서는 RK4와 PDE 수치해석 부분만 다룬다. 기준 방정식은 u_t = D Laplacian(u) + r u(1-u)이며, 기본 synthetic 문제와 산림청 문제 모두 같은 Fisher-KPP family로 정리한다. 기본 문제에서는 Gaussian seed 또는 Ablowitz-Zeppetella travelling wave를 사용하고, 산림청 문제에서는 gridded observation density를 초기장으로 사용한다.",
+            "RK4와 PDE 수치해석 계열은 u_t = D Laplacian(u) + r u(1-u)를 기준 방정식으로 사용한다. 기본 synthetic 문제와 산림청 문제는 같은 Fisher-KPP family로 정리되며, 기본 문제에서는 Gaussian seed 또는 Ablowitz-Zeppetella travelling wave를 사용하고, 산림청 문제에서는 gridded observation density를 초기장으로 사용한다.",
             "Ablowitz-Zeppetella 기준은 c = 5/sqrt(6)에서 명시적 travelling wave가 존재하므로, forward solver와 PINN이 front phase를 얼마나 따라가는지 확인하기 좋다. 1D 물리 좌표 x in [-20,20]은 단위 좌표로 변환되고, 따라서 코드상 diffusion은 D_norm = 1/40^2로 들어간다.",
-            "공정 비교의 핵심은 같은 PDE, 같은 초기조건, 같은 final time, 같은 공간 grid, 같은 metric을 쓰는 것이다. RK4, explicit Euler, backward Euler, trapezoidal은 시간 적분법만 다르게 놓고 나머지 조건은 고정해야 한다. 이 원칙 때문에 코드의 same-problem RK4는 별도의 zip 원본 문제를 그대로 쓰지 않고 현재 PINN 문제 설정으로 포팅되었다.",
+            "공정 비교는 같은 PDE, 같은 초기조건, 같은 final time, 같은 공간 grid, 같은 metric을 사용한다. RK4, explicit Euler, backward Euler, trapezoidal은 시간 적분법만 다르게 두고 나머지 조건을 고정한다. same-problem RK4는 현재 PINN 문제 설정과 동일한 초기장, 계수, boundary condition, 평가 지표를 사용한다.",
         ],
         (
             ["비교 요소", "고정 기준"],
@@ -377,7 +377,7 @@ RK4_PAGES: list[tuple[str, list[str], tuple[list[str], list[list[str]], list[flo
         [
             "RK4는 method-of-lines 방식이다. 먼저 공간 Laplacian을 finite difference로 이산화하고, resulting ODE system을 네 단계 Runge-Kutta로 적분한다. 기본 2D square 문제에서는 no-flux Neumann boundary를 edge padding으로 구현한다. AZ 2D 검증은 exact travelling-wave profile을 x 방향으로 반복하고 boundary에는 exact Dirichlet 값을 적용한다.",
             "명시적 RK4도 확산 CFL 제약을 피할 수 없다. 현재 안정성 점검은 dt_diff_limit = 0.69 dx^2 / (dim D)와 reaction scale 1/r 중 작은 값을 safety factor와 비교한다. 산림청 masked RK4도 같은 취지로 dt가 diffusion/reaction practical limit을 넘으면 에러를 내며, land/sea 경계에서는 masked no-flux flux를 사용한다.",
-            "RK4가 PINN보다 훨씬 낮은 forward error를 보이는 것은 정상이다. RK4는 정확한 초기장과 계수가 주어진 상태에서 격자 위의 상태만 다음 시간으로 보내면 되지만, PINN은 연속 함수와 계수, residual, 관측, front 제약을 동시에 최적화한다. 따라서 RK4는 reference solver이고, PINN은 inverse와 sparse-data 상황까지 고려한 surrogate이다.",
+            "RK4는 정확한 초기장과 계수가 주어진 forward problem에서 낮은 격자 오차를 제공한다. PINN은 연속 함수와 계수, residual, 관측, front 제약을 동시에 최적화한다. 따라서 RK4는 reference solver로, PINN은 inverse와 sparse-data 상황까지 포괄하는 continuous surrogate로 배치된다.",
         ],
         (
             ["구현 함수", "역할"],
@@ -407,10 +407,10 @@ RK4_PAGES: list[tuple[str, list[str], tuple[list[str], list[list[str]], list[flo
         ),
     ),
     (
-        "4. 해석 한계와 참고문헌",
+        "4. 공정 비교와 참고문헌",
         [
-            "RK4와 implicit/explicit 계열 수치해석법의 공정 비교는 accuracy만이 아니라 사용 목적도 분리해서 읽어야 한다. explicit methods는 안정성 조건을 더 직접적으로 받지만 구현이 단순하다. backward Euler와 trapezoidal은 더 큰 dt에서 안정적일 수 있으나 매 step에서 선형 또는 비선형 solve가 필요하다. RK4는 중간 단계가 네 번 필요하지만 같은 grid와 smooth solution에서는 높은 정확도와 구현 균형이 좋다.",
-            "산림청 문제에서 RK4는 관측된 감염 밀도만으로 방제, 신고 지연, 벌목, 기주 분포, 매개충 이동을 모두 설명하지 못한다. 따라서 PDE/RK4 문서의 역할은 생태학적 최종 모델 선언이 아니라, PINN과 비교할 수 있는 명확한 forward numerical baseline을 제공하는 것이다.",
+            "RK4와 implicit/explicit 계열 수치해석법의 공정 비교는 accuracy, stability, solve cost를 함께 평가한다. explicit methods는 안정성 조건을 직접 반영하고 구현이 단순하다. backward Euler와 trapezoidal은 큰 dt에서도 안정적인 시간 적분을 제공하며 step마다 선형 또는 비선형 solve를 수행한다. RK4는 네 개의 stage를 사용해 같은 grid와 smooth solution에서 높은 정확도와 구현 균형을 제공한다.",
+            "산림청 문제의 PDE/RK4 계열은 관측된 감염 밀도를 시작점으로 land-constrained Fisher-KPP spread를 계산한다. 방제, 신고 지연, 벌목, 기주 분포, 매개충 이동 효과는 effective D/r과 관측 밀도장에 반영되며, RK4 결과는 PINN과 같은 조건에서 비교되는 forward numerical reference로 사용된다.",
         ],
         None,
     ),
@@ -456,7 +456,7 @@ def _audit_all_runs(document: Document) -> None:
 def build_pinn_doc(path: Path) -> None:
     document = Document()
     _configure_document(document, "기본 PINN 및 산림청 PINN 구현 설명")
-    _add_title(document, "기본 PINN 및 산림청 PINN 구현 설명", "현재 fisher-pinn 저장소 구현 기준 기술 문서")
+    _add_title(document, "기본 PINN 및 산림청 PINN 구현 설명", "Fisher-KPP 및 Korea pine-wilt PINN 구현 사양")
     _build_pages(document, PINN_PAGES, PINN_REFERENCES)
     _audit_all_runs(document)
     document.save(path)
@@ -465,7 +465,7 @@ def build_pinn_doc(path: Path) -> None:
 def build_rk4_doc(path: Path) -> None:
     document = Document()
     _configure_document(document, "RK4 및 Fisher-KPP PDE 구현 설명")
-    _add_title(document, "RK4 및 Fisher-KPP PDE 구현 설명", "현재 fisher-pinn 저장소 구현 기준 기술 문서")
+    _add_title(document, "RK4 및 Fisher-KPP PDE 구현 설명", "Fisher-KPP PDE 수치해석 구현 사양")
     _build_pages(document, RK4_PAGES, RK4_REFERENCES)
     _audit_all_runs(document)
     document.save(path)
