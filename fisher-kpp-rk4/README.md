@@ -53,10 +53,14 @@ Results are saved under `outputs/`:
 
 - `fisher_kpp_rk4_1d_results.npz`
 - `fisher_kpp_rk4_2d_results.npz`
+- `fisher_kpp_rk4_2d_report_visualization.npz`
 - `snapshots_1d.png`
 - `front_position_1d.png`
 - `snapshots_2d.png`
 - `front_area_mass_2d.png`
+- `centerline_2d_exact_wave.png`
+- `surface_2d_exact_wave_t00.png`, `surface_2d_exact_wave_t02.png`, ..., `surface_2d_exact_wave_t08.png`
+- `absolute_error_2d_surface_t00.png`, `absolute_error_2d_surface_t02.png`, ..., `absolute_error_2d_surface_t08.png`
 
 ## Run as Notebook
 
@@ -90,6 +94,14 @@ Initial conditions and all Dirichlet boundary values are taken from the same
 exact solution. The RK4 method, finite-difference stencil, and comparison
 metrics are unchanged; only the benchmark problem definition is set to the
 formal exact-wave regime above.
+
+The script also exports the report-style 2D figures used for visual inspection:
+the centerline \(u(x,0,t)\), five 3D solution surfaces, and five 3D
+absolute-error surfaces at \(t=0,2,4,6,8\). This extended visualization uses the
+same generalized Fisher-KPP equation, grid, time step, exact initial condition,
+and exact Dirichlet boundaries as the 2D benchmark; it only extends the final
+visualized time to \(T=8\) so the moving front and error surfaces match the
+report figures.
 
 ## Long-Time Method Comparison
 

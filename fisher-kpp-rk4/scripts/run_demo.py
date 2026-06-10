@@ -40,6 +40,7 @@ from fisher_kpp_rk4.config import (
 )
 
 OUTPUT_DIR = PROJECT_ROOT / "outputs"
+REPORT_2D_TIMES = (0.0, 2.0, 4.0, 6.0, 8.0)
 
 
 def run_1d() -> dict[str, np.ndarray]:
@@ -97,6 +98,143 @@ def run_2d() -> dict[str, np.ndarray]:
 
     np.savez(OUTPUT_DIR / "fisher_kpp_rk4_2d_results.npz", **result, D=D_2D, r=r_2D, box=BOX_2D, T=T_2D, dx=dx_2d, dt=dt_2d)
     return result
+
+
+def run_2d_report_visualization() -> dict[str, np.ndarray]:
+    """Solve the 2D exact-wave regime through t=8 for report-style 3D figures."""
+
+    t_final = float(max(REPORT_2D_TIMES))
+    nt = int(round(t_final / dt_2d))
+    result = solve_rk4_2d(
+        x=x_2d,
+        y=y_2d,
+        dt=dt_2d,
+        Nt=nt,
+        D=D_2D,
+        r=r_2D,
+        initial_condition=initial_condition_2d,
+        save_interval=2.0,
+        boundary_condition="dirichlet_exact",
+        exact_solution=generalized_fisher_kpp_exact_2d,
+    )
+    np.savez(
+        OUTPUT_DIR / "fisher_kpp_rk4_2d_report_visualization.npz",
+        **result,
+        D=D_2D,
+        r=r_2D,
+        box=BOX_2D,
+        T=t_final,
+        dx=dx_2d,
+        dt=dt_2d,
+    )
+    return result
+
+
+def _nearest_snapshot_index(times: np.ndarray, target: float) -> int:
+    return int(np.argmin(np.abs(np.asarray(times, dtype=np.float64) - float(target))))
+
+
+def _save_3d_surface(
+    path: Path,
+    xx: np.ndarray,
+    yy: np.ndarray,
+    zz: np.ndarray,
+    *,
+    title: str,
+    zlabel: str,
+    vmin: float,
+    vmax: float,
+    cmap: str = "viridis",
+) -> None:
+    import matplotlib.pyplot as plt
+    from matplotlib import colors
+
+    fig = plt.figure(figsize=(6.8, 4.8), constrained_layout=True)
+    ax = fig.add_subplot(111, projection="3d")
+    norm = colors.Normalize(vmin=vmin, vmax=vmax)
+    surf = ax.plot_surface(
+        xx,
+        yy,
+        zz,
+        cmap=cmap,
+        norm=norm,
+        linewidth=0.0,
+        antialiased=True,
+        rstride=1,
+        cstride=1,
+    )
+    ax.set_title(title, fontsize=10)
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
+    ax.set_zlabel(zlabel, labelpad=5)
+    ax.view_init(elev=28, azim=-58)
+    ax.set_xlim(float(xx.min()), float(xx.max()))
+    ax.set_ylim(float(yy.min()), float(yy.max()))
+    ax.set_zlim(vmin, vmax)
+    cbar = fig.colorbar(surf, ax=ax, shrink=0.72, pad=0.08)
+    cbar.set_label(zlabel, fontsize=8)
+    fig.savefig(path, dpi=180)
+    plt.close(fig)
+
+
+def save_2d_report_figures(result_2d_report: dict[str, np.ndarray]) -> None:
+    """Save the centerline and 3D surface/error figures used in the RK4 report."""
+
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:
+        print("matplotlib not installed; skipped 2D report plots.")
+        return
+
+    xx, yy = np.meshgrid(result_2d_report["x"], result_2d_report["y"], indexing="ij")
+    times = np.asarray(result_2d_report["times"], dtype=np.float64)
+    snapshots = np.asarray(result_2d_report["snapshots"], dtype=np.float64)
+    y_mid_idx = len(result_2d_report["y"]) // 2
+
+    plt.figure(figsize=(7.0, 4.2))
+    for target in REPORT_2D_TIMES:
+        idx = _nearest_snapshot_index(times, target)
+        plt.plot(result_2d_report["x"], snapshots[idx, :, y_mid_idx], label=f"t = {times[idx]:.0f}")
+    plt.xlabel("x")
+    plt.ylabel("u(x,0,t)")
+    plt.ylim(-0.03, 1.03)
+    plt.grid(alpha=0.35)
+    plt.legend(fontsize=8)
+    plt.title("2D generalized Fisher-KPP centerline over time")
+    plt.tight_layout()
+    plt.savefig(OUTPUT_DIR / "centerline_2d_exact_wave.png", dpi=200)
+    plt.close()
+
+    for target in REPORT_2D_TIMES:
+        idx = _nearest_snapshot_index(times, target)
+        t_value = float(times[idx])
+        numerical = snapshots[idx]
+        exact = np.asarray(generalized_fisher_kpp_exact_2d(xx, yy, t_value), dtype=np.float64)
+        abs_error = np.abs(numerical - exact)
+        tag = f"t{int(round(t_value)):02d}"
+        _save_3d_surface(
+            OUTPUT_DIR / f"surface_2d_exact_wave_{tag}.png",
+            xx,
+            yy,
+            numerical,
+            title=f"2D generalized Fisher-KPP 3D Surface at t = {t_value:.0f}",
+            zlabel="u(x,y,t)",
+            vmin=0.0,
+            vmax=1.0,
+        )
+        error_vmax = max(float(np.nanmax(abs_error)), 1.0e-12)
+        _save_3d_surface(
+            OUTPUT_DIR / f"absolute_error_2d_surface_{tag}.png",
+            xx,
+            yy,
+            abs_error,
+            title=f"Absolute Error 3D Surface at t = {t_value:.0f}",
+            zlabel="absolute error",
+            vmin=0.0,
+            vmax=error_vmax,
+        )
+
+    print("Saved report-style 2D centerline, 3D surface, and 3D absolute-error figures.")
 
 
 def save_plots(result_1d: dict[str, np.ndarray], result_2d: dict[str, np.ndarray]) -> None:
@@ -169,7 +307,9 @@ def main() -> None:
     OUTPUT_DIR.mkdir(exist_ok=True)
     result_1d = run_1d()
     result_2d = run_2d()
+    result_2d_report = run_2d_report_visualization()
     save_plots(result_1d, result_2d)
+    save_2d_report_figures(result_2d_report)
     print("Saved NPZ results under outputs/.")
 
 

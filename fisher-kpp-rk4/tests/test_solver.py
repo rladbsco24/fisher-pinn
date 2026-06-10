@@ -239,3 +239,29 @@ def test_notebook_code_cells_are_parseable() -> None:
                 if not line.lstrip().startswith(("%", "!"))
             )
             ast.parse(source, filename=f"{notebook.name}:cell{idx}")
+
+
+def test_required_2d_report_figures_are_wired_into_script_and_notebook() -> None:
+    required_names = [
+        "centerline_2d_exact_wave.png",
+        "surface_2d_exact_wave_t00.png",
+        "surface_2d_exact_wave_t02.png",
+        "surface_2d_exact_wave_t04.png",
+        "surface_2d_exact_wave_t06.png",
+        "surface_2d_exact_wave_t08.png",
+        "absolute_error_2d_surface_t00.png",
+        "absolute_error_2d_surface_t02.png",
+        "absolute_error_2d_surface_t04.png",
+        "absolute_error_2d_surface_t06.png",
+        "absolute_error_2d_surface_t08.png",
+    ]
+    script_source = (REPO_ROOT / "scripts" / "run_demo.py").read_text(encoding="utf-8")
+    notebook_source = (REPO_ROOT / "notebooks" / "fisher_kpp_rk4_demo.ipynb").read_text(encoding="utf-8")
+    preview_source = (REPO_ROOT.parent / "docs" / "figure_previews" / "README.md").read_text(encoding="utf-8")
+    for source in (script_source, notebook_source):
+        assert "REPORT_2D_TIMES" in source
+        assert "surface_2d_exact_wave_" in source
+        assert "absolute_error_2d_surface_" in source
+        assert "centerline_2d_exact_wave.png" in source
+    for name in required_names:
+        assert f"rk4_report_{name}" in preview_source

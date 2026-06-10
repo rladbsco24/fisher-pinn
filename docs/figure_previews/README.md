@@ -15,6 +15,34 @@ Geo-Spectral PINN and Korea pine-wilt PINN previews were refreshed from full
 
 ![2D front area and mass](rk4_demo_front_area_mass_2d.png)
 
+## RK4 2D Exact-Wave 3D Report Figures
+
+These are the required generalized Fisher-KPP 2D RK4 report figures at
+`t = 0, 2, 4, 6, 8`. They use the exact traveling-wave initial condition and
+time-dependent Dirichlet boundary values.
+
+![2D exact-wave centerline](rk4_report_centerline_2d_exact_wave.png)
+
+![2D RK4 surface t=0](rk4_report_surface_2d_exact_wave_t00.png)
+
+![2D RK4 surface t=2](rk4_report_surface_2d_exact_wave_t02.png)
+
+![2D RK4 surface t=4](rk4_report_surface_2d_exact_wave_t04.png)
+
+![2D RK4 surface t=6](rk4_report_surface_2d_exact_wave_t06.png)
+
+![2D RK4 surface t=8](rk4_report_surface_2d_exact_wave_t08.png)
+
+![2D RK4 absolute-error surface t=0](rk4_report_absolute_error_2d_surface_t00.png)
+
+![2D RK4 absolute-error surface t=2](rk4_report_absolute_error_2d_surface_t02.png)
+
+![2D RK4 absolute-error surface t=4](rk4_report_absolute_error_2d_surface_t04.png)
+
+![2D RK4 absolute-error surface t=6](rk4_report_absolute_error_2d_surface_t06.png)
+
+![2D RK4 absolute-error surface t=8](rk4_report_absolute_error_2d_surface_t08.png)
+
 ## Long-Time Fisher-KPP Integrator Comparison
 
 ![Long-time RK4 surface](rk4_long_time_surface.png)
