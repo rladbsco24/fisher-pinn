@@ -285,7 +285,7 @@ PINN_PAGES: list[tuple[str, list[str], tuple[list[str], list[list[str]], list[fl
         "5. 기본 PINN 검증, 주요 문제, 해결 방안",
         [
             "현재 코드의 full run은 기본적으로 1200 epochs이며, quick run은 60 또는 120 epochs로 빠른 회귀 검증을 수행한다. 최근 수정 전 full run은 D = 0.01959, r = 3.01315처럼 물리 계수는 목표값에 가깝게 맞췄지만 final-time relative L2 = 0.4135로 RK4 reference의 0.00147과는 큰 차이를 남겼다. 이 결과는 PINN이 계수와 질량을 맞추더라도 moving front의 phase와 final field shape를 별도로 제어해야 함을 보여준다.",
-            "가장 최근에 확인된 직접적인 학습 절차 문제는 best checkpoint 선택 기준이었다. 기존 구현은 validation observation MSE만 기준으로 모델을 복원했기 때문에, 1200 epochs를 학습하고도 epoch 1의 낮은 관측점 MSE checkpoint가 최종 모델로 선택될 수 있었다. 이 문제는 validation MSE, late-time RK4 teacher proxy, PDE residual, known initial condition, front proxy, mass proxy를 함께 보는 composite checkpoint score와 최소 checkpoint epoch 조건으로 수정했다.",
+            "가장 최근에 확인된 직접적인 학습 절차 문제는 best checkpoint 선택 기준이었다. 기존 구현은 validation observation MSE만 기준으로 모델을 복원했기 때문에, 1200 epochs를 학습하고도 epoch 1의 낮은 관측점 MSE checkpoint가 최종 모델로 선택될 수 있었다. 이 문제는 validation MSE, late-time physics proxy, PDE residual, known initial condition, front proxy, mass proxy를 함께 보는 composite checkpoint score와 최소 checkpoint epoch 조건으로 수정했다.",
             "주요 관찰은 front area와 mass metric이 field L2보다 front failure를 더 선명하게 드러낸다는 점이다. error map은 active front 주변에서 가장 높은 정보를 제공하며, support, contrast, mass floor, IC는 all-zero 해와 diffuse haze 해를 억제한다. D/r 학습은 forward field와 front speed의 물리 일관성을 함께 추정하는 핵심 구성이지만, Fisher-KPP front speed가 주로 2 sqrt(D r)에 의해 정해지므로 계수 식별성과 field profile 정렬은 별도 검증으로 관리한다.",
         ],
         (
@@ -297,7 +297,7 @@ PINN_PAGES: list[tuple[str, list[str], tuple[list[str], list[list[str]], list[fl
                 ["front phase error", "moving front가 조금만 어긋나도 relative L2가 크게 증가", "level-set alignment, front-normal profile, time marching 적용"],
                 ["twin-trap error band", "front 안쪽과 바깥쪽 순서 관계가 약하고 halo가 남음", "inside/outside hinge, normal-slope, front-aware sampling 적용"],
                 ["D/r 식별성", "front speed는 D와 r의 곱에 민감하고 개별 계수는 약하게 식별됨", "physics anchor, coefficient regularization, learned physics reporting 적용"],
-                ["RK4와 큰 정확도 차이", "PINN은 연속 surrogate 최적화이고 RK4는 고정 격자 forward 적분", "RK4 reference, weak teacher, final-field/front/mass 공동 검증 적용"],
+                ["RK4와 큰 정확도 차이", "PINN은 연속 surrogate 최적화이고 RK4는 고정 격자 forward 적분", "RK4 reference, discrete RK4 consistency, final-field/front/mass 공동 검증 적용"],
             ],
             [1.45, 2.55, 3.25],
         ),
@@ -328,7 +328,7 @@ PINN_PAGES: list[tuple[str, list[str], tuple[list[str], list[list[str]], list[fl
         "7. 해결 방안의 구현 반영",
         [
             "해결 방안은 loss를 단순히 늘리는 방식이 아니라, 실패 모드와 직접 연결되는 제약을 추가하는 방식으로 구성했다. known initial condition과 hard IC는 초기장 붕괴를 막고, level-set/profile/support loss는 front 위치와 두께를 직접 제어한다. mass floor와 mass trajectory는 all-zero collapse를 막으며, coefficient anchor와 spatial coefficient regularization은 D/r 학습의 식별성을 안정화한다.",
-            "checkpoint 수정은 학습 결과 해석에서 가장 중요한 절차 개선이다. 기존 validation MSE 단독 기준은 sparse observation 환경에서 초기 모델을 과대평가할 수 있었다. 새 기준은 validation MSE, late-time RK4 teacher proxy, PDE residual, IC, front proxy, mass proxy를 log-scale composite score로 합산하고, 최소 epoch 이후의 모델만 checkpoint 후보로 삼는다.",
+            "checkpoint 수정은 학습 결과 해석에서 가장 중요한 절차 개선이다. 기존 validation MSE 단독 기준은 sparse observation 환경에서 초기 모델을 과대평가할 수 있었다. 새 기준은 validation MSE, late-time physics proxy, PDE residual, IC, front proxy, mass proxy를 log-scale composite score로 합산하고, 최소 epoch 이후의 모델만 checkpoint 후보로 삼는다.",
             "time marching과 time-slab curriculum은 parabolic PDE에서 초반 시간 오차가 후반 front 전체로 전파되는 문제를 줄이기 위한 장치다. 전체 시간 구간을 한 번에 강제하지 않고, 초기장과 쉬운 시간 구간을 먼저 안정화한 뒤 후반 front를 학습한다. front-aware RAR는 residual이 큰 영역뿐 아니라 u(1-u)와 gradient가 큰 active front 주변 collocation을 보강한다.",
             "새로 추가한 discrete RK4 consistency loss는 RK4 결과장을 정답 label로 주입하지 않고, 모델이 예측한 u(t)를 Fisher-KPP PDE의 한 RK4 step으로 전개한 값과 모델의 u(t+dt)를 맞춘다. 이는 discrete-time PINN 계열의 시간 전개 제약을 차용한 것이며, 연속 AD residual만으로 약했던 moving-front phase 누적 오차를 직접 줄이기 위한 공정한 physics loss이다.",
             "산림청 코드에서는 물리 제약을 지도 도메인에 맞게 바꿨다. 바다는 diffusion이 일어날 수 없는 영역으로 처리하고, RK4는 masked no-flux diffusion을 사용하며, PINN은 land-only collocation과 sea exclusion penalty를 사용한다. raw CSV가 있을 때는 조치 시작 전 월별 시간축을 구성해 방제 이후 동역학과 자연 확산 동역학을 섞지 않도록 한다.",
@@ -342,7 +342,7 @@ PINN_PAGES: list[tuple[str, list[str], tuple[list[str], list[list[str]], list[fl
                 ["Support Tversky", "front_support_tversky_loss", "false negative support 누락 감소"],
                 ["Mass guards", "mass_floor_trajectory_loss, parabolic_mass_balance_loss", "감염 총량 보존과 all-zero 방지"],
                 ["Discrete RK4 consistency", "discrete_rk4_consistency_loss", "RK4 label 없이 시간 전개 일관성 강화"],
-                ["Weak RK4 teacher", "rk4_pretrain, rk4_teacher proxy", "초기 최적화와 late front 안정화"],
+                ["RK4 teacher ablation", "rk4_pretrain, rk4_teacher proxy", "default off; 비교 및 ablation 전용"],
                 ["Land/sea constraints", "land mask, sea penalty, masked RK4", "한국 지도에서 바다 확산 금지"],
             ],
             [1.75, 3.20, 2.30],

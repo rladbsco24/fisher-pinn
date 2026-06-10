@@ -112,6 +112,8 @@ class LossWeights:
     expected_front_pde: float = 0.0
     leading_edge: float = 0.0
     leading_edge_area: float = 0.0
+    leading_edge_distribution: float = 0.0
+    radial_symmetry: float = 0.0
     front_support_tversky: float = 0.0
     front_contrast: float = 0.0
     front_profile: float = 0.0
@@ -129,6 +131,68 @@ class WarmStartConfig:
     # Options: "drift_corrected", "centroid", "neutral", "shooting_prefit".
     # "drift_corrected" is valid only when drift is treated as known.
     mode: str = "drift_corrected"
+
+
+def shared_geo_forward_model_config(
+    *,
+    hidden: int = 96,
+    layers: int = 5,
+    fourier_features: int = 32,
+    fourier_sigma: float = 1.0,
+    front_fourier_features: int = 16,
+    front_fourier_sigma: float = 1.5,
+    nif_rank: int = 24,
+    learn_diffusion: bool = True,
+    learn_reaction: bool = True,
+    learn_drift: bool = False,
+    use_seed_front_features: bool = True,
+    use_traveling_wave_features: bool = True,
+    use_front_fourier_features: bool = True,
+    hard_initial_condition: bool = True,
+    initial_envelope_tau: float = 0.18,
+    use_kpp_front_envelope: bool = True,
+    front_envelope_level: float = 0.03,
+    front_envelope_margin: float = 0.05,
+    front_envelope_width: float = 0.025,
+    use_spatial_coefficients: bool = True,
+    spatial_coefficient_features: int = 8,
+    spatial_coefficient_sigma: float = 0.85,
+    spatial_coefficient_hidden: int = 32,
+    spatial_coefficient_log_scale: float = 0.12,
+) -> ModelConfig:
+    """Shared forward PINN backbone for synthetic and Korea pine-wilt runs."""
+
+    return ModelConfig(
+        architecture="pirate",
+        fourier_features=int(fourier_features),
+        fourier_sigma=float(fourier_sigma),
+        front_fourier_features=int(front_fourier_features),
+        front_fourier_sigma=float(front_fourier_sigma),
+        hidden=int(hidden),
+        layers=int(layers),
+        nif_rank=int(nif_rank),
+        use_random_weight_factorization=True,
+        learn_diffusion=bool(learn_diffusion),
+        learn_reaction=bool(learn_reaction),
+        learn_drift=bool(learn_drift),
+        use_source_envelope=False,
+        use_geo_features=True,
+        spatial_fourier_only=True,
+        use_seed_front_features=bool(use_seed_front_features),
+        use_traveling_wave_features=bool(use_traveling_wave_features),
+        use_front_fourier_features=bool(use_front_fourier_features),
+        hard_initial_condition=bool(hard_initial_condition),
+        initial_envelope_tau=float(initial_envelope_tau),
+        use_kpp_front_envelope=bool(use_kpp_front_envelope),
+        front_envelope_level=float(front_envelope_level),
+        front_envelope_margin=float(front_envelope_margin),
+        front_envelope_width=float(front_envelope_width),
+        use_spatial_coefficients=bool(use_spatial_coefficients),
+        spatial_coefficient_features=int(spatial_coefficient_features),
+        spatial_coefficient_sigma=float(spatial_coefficient_sigma),
+        spatial_coefficient_hidden=int(spatial_coefficient_hidden),
+        spatial_coefficient_log_scale=float(spatial_coefficient_log_scale),
+    )
 
 
 @dataclass(frozen=True)
@@ -189,6 +253,10 @@ class TrainConfig:
     leading_edge_area_times: int = 5
     leading_edge_area_grid: int = 32
     leading_edge_area_temperature: float = 0.015
+    leading_edge_distribution_times: int = 5
+    leading_edge_distribution_grid: int = 32
+    radial_symmetry_groups: int = 0
+    radial_symmetry_angles: int = 8
     front_contrast_times: int = 5
     front_contrast_grid: int = 32
     front_profile_points: int = 256
@@ -313,6 +381,8 @@ class ExperimentConfig:
                 expected_front_pde=self.weights.expected_front_pde,
                 leading_edge=self.weights.leading_edge,
                 leading_edge_area=self.weights.leading_edge_area,
+                leading_edge_distribution=self.weights.leading_edge_distribution,
+                radial_symmetry=self.weights.radial_symmetry,
                 front_support_tversky=self.weights.front_support_tversky,
                 front_contrast=self.weights.front_contrast,
                 front_profile=self.weights.front_profile,
@@ -377,6 +447,12 @@ class ExperimentConfig:
                 leading_edge_area_times=min(self.train.leading_edge_area_times, 4),
                 leading_edge_area_grid=min(self.train.leading_edge_area_grid, 24),
                 leading_edge_area_temperature=self.train.leading_edge_area_temperature,
+                leading_edge_distribution_times=min(self.train.leading_edge_distribution_times, 4),
+                leading_edge_distribution_grid=min(self.train.leading_edge_distribution_grid, 24),
+                radial_symmetry_groups=min(self.train.radial_symmetry_groups, 64)
+                if self.train.radial_symmetry_groups > 0
+                else 0,
+                radial_symmetry_angles=min(max(self.train.radial_symmetry_angles, 4), 8),
                 front_contrast_times=min(self.train.front_contrast_times, 4),
                 front_contrast_grid=min(self.train.front_contrast_grid, 24),
                 front_profile_points=min(self.train.front_profile_points, 128),
@@ -499,6 +575,8 @@ class ExperimentConfig:
                 expected_front_pde=0.0,
                 leading_edge=0.0,
                 leading_edge_area=0.0,
+                leading_edge_distribution=0.0,
+                radial_symmetry=0.0,
                 front_contrast=0.0,
                 front_profile=0.0,
                 level_set_alignment=0.0,
@@ -529,22 +607,17 @@ class ExperimentConfig:
             observations=base.observations,
             geo=GeoConfig(enabled=True, mask_kind="box"),
             benchmark=base.benchmark,
-            model=ModelConfig(
-                architecture="pirate",
+            model=shared_geo_forward_model_config(
+                hidden=base.model.hidden,
+                layers=base.model.layers,
                 fourier_features=base.model.fourier_features,
                 fourier_sigma=1.0,
                 front_fourier_features=16,
                 front_fourier_sigma=1.5,
-                hidden=base.model.hidden,
-                layers=base.model.layers,
                 nif_rank=24,
-                use_random_weight_factorization=True,
                 learn_diffusion=True,
                 learn_reaction=True,
                 learn_drift=False,
-                use_source_envelope=False,
-                use_geo_features=True,
-                spatial_fourier_only=True,
                 use_seed_front_features=True,
                 use_traveling_wave_features=True,
                 use_front_fourier_features=True,
@@ -580,13 +653,15 @@ class ExperimentConfig:
                 expected_front_pde=0.0,
                 leading_edge=0.25,
                 leading_edge_area=0.90,
+                leading_edge_distribution=0.0,
+                radial_symmetry=0.0,
                 front_support_tversky=0.45,
                 front_contrast=0.12,
                 front_profile=0.25,
                 level_set_alignment=0.05,
                 time_interface=0.01,
                 discrete_rk4=0.08,
-                rk4_teacher=0.01,
+                rk4_teacher=0.0,
                 physics_parameter_anchor=0.20,
                 coefficient_field=0.05,
                 sparse=1.0e-5,
@@ -616,6 +691,10 @@ class ExperimentConfig:
                 leading_edge_area_times=5,
                 leading_edge_area_grid=32,
                 leading_edge_area_temperature=0.015,
+                leading_edge_distribution_times=5,
+                leading_edge_distribution_grid=32,
+                radial_symmetry_groups=128,
+                radial_symmetry_angles=8,
                 front_contrast_times=5,
                 front_contrast_grid=32,
                 front_profile_points=256,
@@ -628,7 +707,7 @@ class ExperimentConfig:
                 time_slab_overlap=0.08,
                 time_slab_curriculum=True,
                 time_window_focus_fraction=0.65,
-                time_window_teacher=True,
+                time_window_teacher=False,
                 time_window_observations=True,
                 observation_batch=512,
                 time_interface_points=256,
@@ -636,11 +715,11 @@ class ExperimentConfig:
                 discrete_rk4_times=3,
                 discrete_rk4_grid=20,
                 discrete_rk4_dt_fraction=0.05,
-                rk4_teacher_pool=8192,
-                rk4_teacher_batch=512,
+                rk4_teacher_pool=0,
+                rk4_teacher_batch=0,
                 rk4_teacher_late_fraction=0.50,
-                rk4_pretrain_steps=max(1, base.train.epochs // 12),
-                rk4_pretrain_batch=512,
+                rk4_pretrain_steps=0,
+                rk4_pretrain_batch=0,
                 rk4_pretrain_lr=1.0e-3,
             ),
             ensemble=base.ensemble,
@@ -709,6 +788,8 @@ class ExperimentConfig:
                 mass_floor=0.0,
                 leading_edge=0.0,
                 leading_edge_area=0.0,
+                leading_edge_distribution=0.0,
+                radial_symmetry=0.0,
                 front_support_tversky=0.0,
                 front_contrast=0.0,
                 front_profile=0.0,

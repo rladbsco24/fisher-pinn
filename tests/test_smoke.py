@@ -23,7 +23,15 @@ from scripts.run_korea_pine_wilt_simulation import _save_korea_map_baseline_gif
 from PIL import Image
 
 from fisher_origin_lab.ablation_visuals import save_feature_pair_error_map, save_feature_pair_evolution_gif
-from fisher_origin_lab.config import DomainConfig, ExperimentConfig, ModelConfig, PDEConfig, SeedConfig, WarmStartConfig
+from fisher_origin_lab.config import (
+    DomainConfig,
+    ExperimentConfig,
+    ModelConfig,
+    PDEConfig,
+    SeedConfig,
+    WarmStartConfig,
+    shared_geo_forward_model_config,
+)
 from fisher_origin_lab.curve_trend import (
     CurvePINNConfig,
     CurveTrendConfig,
@@ -65,10 +73,12 @@ from fisher_origin_lab.losses import (
     front_speed_kinematics,
     known_initial_condition_loss,
     leading_edge_area_loss,
+    leading_edge_distribution_loss,
     leading_edge_floor_loss,
     mass_floor_trajectory_loss,
     parabolic_mass_balance_loss,
     pde_residual,
+    radial_symmetry_loss,
     spatial_coefficient_regularization_loss,
     time_slab_interface_loss,
 )
@@ -385,6 +395,8 @@ def test_expected_front_losses_are_finite() -> None:
     pde_loss = expected_front_pde_loss(model, 16, torch.device("cpu"))
     floor_loss = leading_edge_floor_loss(model, 16, torch.device("cpu"))
     area_loss = leading_edge_area_loss(model, n_times=3, grid=8, device=torch.device("cpu"))
+    distribution_loss = leading_edge_distribution_loss(model, n_times=3, grid=8, device=torch.device("cpu"))
+    symmetry_loss = radial_symmetry_loss(model, groups=4, angles=5, device=torch.device("cpu"))
     support_loss = front_support_tversky_loss(model, n_times=3, grid=8, device=torch.device("cpu"))
     contrast_loss = front_area_contrast_loss(model, n_times=3, grid=8, device=torch.device("cpu"))
     profile_loss = front_profile_alignment_loss(model, n=24, device=torch.device("cpu"))
@@ -400,6 +412,8 @@ def test_expected_front_losses_are_finite() -> None:
     assert torch.isfinite(pde_loss)
     assert torch.isfinite(floor_loss)
     assert torch.isfinite(area_loss)
+    assert torch.isfinite(distribution_loss)
+    assert torch.isfinite(symmetry_loss)
     assert torch.isfinite(support_loss)
     assert torch.isfinite(contrast_loss)
     assert torch.isfinite(profile_loss)
@@ -617,11 +631,13 @@ def test_geo_spectral_forward_profile_extends_korea_setup() -> None:
     assert cfg.weights.expected_front_pde == 0.0
     assert cfg.weights.leading_edge > 0.0
     assert cfg.weights.leading_edge_area > 0.0
+    assert cfg.weights.leading_edge_distribution == 0.0
+    assert cfg.weights.radial_symmetry == 0.0
     assert cfg.weights.front_support_tversky > 0.0
     assert cfg.weights.level_set_alignment > 0.0
     assert cfg.weights.time_interface > 0.0
     assert cfg.weights.discrete_rk4 > 0.0
-    assert cfg.weights.rk4_teacher > 0.0
+    assert cfg.weights.rk4_teacher == 0.0
     assert cfg.weights.physics_parameter_anchor > 0.0
     assert cfg.weights.coefficient_field > 0.0
     assert cfg.weights.sparse > 0.0
@@ -638,21 +654,25 @@ def test_geo_spectral_forward_profile_extends_korea_setup() -> None:
     assert cfg.train.expected_front_speed_factor > 0.0
     assert cfg.train.leading_edge_area_times > 0
     assert cfg.train.leading_edge_area_grid > 1
+    assert cfg.train.leading_edge_distribution_times > 0
+    assert cfg.train.leading_edge_distribution_grid > 1
+    assert cfg.train.radial_symmetry_groups > 0
+    assert cfg.train.radial_symmetry_angles >= 4
     assert cfg.train.front_gradient_expected_points > 0
     assert cfg.train.time_marching is True
     assert cfg.train.time_slabs > 1
     assert cfg.train.time_slab_curriculum is True
     assert cfg.train.time_window_focus_fraction < 1.0
-    assert cfg.train.time_window_teacher is True
+    assert cfg.train.time_window_teacher is False
     assert cfg.train.time_window_observations is True
     assert cfg.train.observation_batch > 0
     assert cfg.train.time_interface_points > 0
     assert cfg.train.discrete_rk4_times > 0
     assert cfg.train.discrete_rk4_grid > 2
     assert cfg.train.discrete_rk4_dt_fraction > 0.0
-    assert cfg.train.rk4_teacher_pool > 0
-    assert cfg.train.rk4_teacher_batch > 0
-    assert cfg.train.rk4_pretrain_steps > 0
+    assert cfg.train.rk4_teacher_pool == 0
+    assert cfg.train.rk4_teacher_batch == 0
+    assert cfg.train.rk4_pretrain_steps == 0
     assert cfg.train.residual_curriculum_epochs > 0
     assert cfg.train.residual_weight_exponent_start < cfg.train.residual_weight_exponent_end
     assert cfg.train.pde_loss_warmup_fraction > 0.0
@@ -664,6 +684,44 @@ def test_geo_spectral_forward_profile_extends_korea_setup() -> None:
     assert cfg.train.rar_residual_weight > 0.0
     assert cfg.train.rar_gradient_weight > 0.0
     assert cfg.train.rar_activity_weight > 0.0
+
+
+def test_shared_forward_model_factory_specializes_korea_without_changing_backbone() -> None:
+    baseline = ExperimentConfig().geo_spectral_forward().model
+    korea = shared_geo_forward_model_config(
+        hidden=48,
+        layers=3,
+        fourier_features=16,
+        front_fourier_features=0,
+        use_seed_front_features=False,
+        use_traveling_wave_features=False,
+        use_front_fourier_features=False,
+        hard_initial_condition=False,
+        use_kpp_front_envelope=False,
+        spatial_coefficient_sigma=0.65,
+        spatial_coefficient_log_scale=0.35,
+    )
+    shared_attrs = [
+        "architecture",
+        "use_random_weight_factorization",
+        "learn_diffusion",
+        "learn_reaction",
+        "learn_drift",
+        "use_source_envelope",
+        "use_geo_features",
+        "spatial_fourier_only",
+        "use_spatial_coefficients",
+        "spatial_coefficient_features",
+        "spatial_coefficient_hidden",
+    ]
+    for attr in shared_attrs:
+        assert getattr(korea, attr) == getattr(baseline, attr)
+    assert baseline.use_seed_front_features is True
+    assert korea.use_seed_front_features is False
+    assert baseline.hard_initial_condition is True
+    assert korea.hard_initial_condition is False
+    assert baseline.use_kpp_front_envelope is True
+    assert korea.use_kpp_front_envelope is False
 
 
 def test_front_aware_adaptive_sampler_refreshes_anchors() -> None:
@@ -736,6 +794,7 @@ def test_forward_ablation_cases_report_front_metrics() -> None:
     assert "geo_no_physics_anchor" in names
     assert "geo_no_spatial_coefficients" in names
     assert "geo_no_discrete_rk4" in names
+    assert "geo_no_radial_symmetry" in names
     assert "geo_no_collapse_guards" in names
     assert "geo_no_tw_front_area" in names
     assert "geo_rk4_teacher_front_area" in names
@@ -744,6 +803,7 @@ def test_forward_ablation_cases_report_front_metrics() -> None:
     assert "geo_nif_front_area" in names
     assert "geo_gated_front_area" in names
     assert any(case["cfg"].weights.leading_edge_area > 0.0 for case in cases)
+    assert any(case["cfg"].weights.radial_symmetry > 0.0 for case in cases)
     assert any(case["cfg"].weights.front_contrast > 0.0 for case in cases)
     assert any(case["cfg"].weights.front_profile > 0.0 for case in cases)
     assert any(case["cfg"].weights.level_set_alignment > 0.0 for case in cases)
@@ -760,6 +820,7 @@ def test_forward_ablation_cases_report_front_metrics() -> None:
     assert any(case["cfg"].weights.physics_parameter_anchor == 0.0 for case in cases)
     assert any(case["cfg"].model.use_spatial_coefficients is False for case in cases)
     assert any(case["cfg"].weights.discrete_rk4 == 0.0 for case in cases)
+    assert any(case["cfg"].weights.radial_symmetry == 0.0 for case in cases)
     assert any(case["cfg"].train.rk4_teacher_late_fraction > 0.0 for case in cases)
     assert any(case["cfg"].train.rk4_pretrain_steps > 0 for case in cases)
     assert any(case["cfg"].train.time_marching for case in cases)
@@ -796,6 +857,8 @@ def test_feature_validation_pairs_and_visual_exports(tmp_path) -> None:
     assert "adaptive_balancing" in names
     assert "spatial_coefficients" in names
     assert "discrete_rk4_consistency" in names
+    assert "leading_edge_distribution" in names
+    assert "radial_symmetry" in names
     assert "rk4_teacher" in names
     assert all("without" in pair and "with" in pair for pair in pairs)
 

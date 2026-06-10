@@ -138,6 +138,36 @@ def make_feature_validation_pairs(base: ExperimentConfig) -> list[dict[str, Any]
         ),
     )
 
+    distribution_without = replace(
+        base,
+        weights=replace(base.weights, leading_edge_distribution=0.0),
+        train=replace(base.train, leading_edge_distribution_times=0, leading_edge_distribution_grid=0),
+    )
+    distribution_with = replace(
+        base,
+        weights=replace(base.weights, leading_edge_distribution=max(base.weights.leading_edge_distribution, 0.20)),
+        train=replace(
+            base.train,
+            leading_edge_distribution_times=max(base.train.leading_edge_distribution_times, 4),
+            leading_edge_distribution_grid=max(base.train.leading_edge_distribution_grid, 24),
+        ),
+    )
+
+    radial_without = replace(
+        base,
+        weights=replace(base.weights, radial_symmetry=0.0),
+        train=replace(base.train, radial_symmetry_groups=0),
+    )
+    radial_with = replace(
+        base,
+        weights=replace(base.weights, radial_symmetry=max(base.weights.radial_symmetry, 0.20)),
+        train=replace(
+            base.train,
+            radial_symmetry_groups=max(base.train.radial_symmetry_groups, 64),
+            radial_symmetry_angles=max(base.train.radial_symmetry_angles, 6),
+        ),
+    )
+
     teacher_without = replace(
         base,
         weights=replace(base.weights, rk4_teacher=0.0),
@@ -201,6 +231,18 @@ def make_feature_validation_pairs(base: ExperimentConfig) -> list[dict[str, Any]
             "Discrete-time RK4 self-consistency without using RK4 solution labels.",
             _variant("without_discrete_rk4_consistency", discrete_without, "discrete RK4 physics off", "continuous AD residual only"),
             _variant("with_discrete_rk4_consistency", discrete_with, "discrete RK4 physics on", "self-consistent RK4 time step loss"),
+        ),
+        _pair(
+            "leading_edge_distribution",
+            "Analytic Fisher-KPP leading-edge distribution and moment guard.",
+            _variant("without_leading_edge_distribution", distribution_without, "distribution guard off", "no leading-edge moment guard"),
+            _variant("with_leading_edge_distribution", distribution_with, "distribution guard on", "leading-edge moment guard enabled"),
+        ),
+        _pair(
+            "radial_symmetry",
+            "Radial symmetry regularization for the isotropic Gaussian moving-front benchmark.",
+            _variant("without_radial_symmetry", radial_without, "radial symmetry off", "angular variance unconstrained"),
+            _variant("with_radial_symmetry", radial_with, "radial symmetry on", "fixed-radius angular variance penalty"),
         ),
         _pair(
             "rk4_teacher",

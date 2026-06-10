@@ -314,7 +314,8 @@ folder contains `feature_error_map_comparison.png`, `feature_evolution_compariso
 `feature_evolution_comparison_preview.png`, and `comparison_manifest.json`. The paired
 features currently cover level-set alignment, time marching, moving-front features,
 mass/support guards, front-speed/gPINN losses, adaptive balancing, spatial coefficients,
-and the weak RK4 teacher.
+discrete RK4 consistency, leading-edge distribution, radial symmetry, and the optional
+RK4 teacher ablation.
 
 Current 60-epoch quick check on one seed with the PirateNet/RWF default, scaled
 traveling-wave features, and front-aware RAR gives `final_time_relative_l2 = 0.3600`,
@@ -329,25 +330,21 @@ weaker on this setup (`final_time_relative_l2 = 0.5401`,
 `mass_mae = 0.0040`), so it remains an explicit ablation until multi-seed tuning supports
 promoting it.
 
-The current 60-epoch weak-RK4-teacher/front-profile sanity check
-(`geo_spectral_forward().quick()`, `rk4_teacher=0.005`, 2048 teacher points,
-batch 256) gives `final_time_relative_l2 = 0.2682`,
-`pinn_vs_rk4_final_relative_l2 = 0.2693`,
-`validation_observation_mse = 5.49e-4`, `front_area_005_mae = 0.0185`,
-`front_area_010_mae = 0.0119`, and `mass_mae = 0.0025`. The new
-front-normal profile loss targets the leading-edge profile around the expected
-low-level front, which improves front-area and mass diagnostics relative to the
-previous no-profile check (`5.57e-4`, `0.0195`, `0.0120`, `0.0026`) while leaving
-final-field L2 in the same range. RK4 itself remains the much more accurate
-same-problem numerical baseline (`rk4_final_time_relative_l2 = 0.00465`).
+The current default `geo_spectral_forward()` profile is intentionally RK4-teacher-free:
+`rk4_teacher=0`, no RK4 pretraining, and no time-window teacher labels. The default
+instead uses known/hard initial-condition constraints, moving-front geometry losses,
+front-aware sampling, discrete RK4 consistency as a physics transition loss, and a
+tighter parabolic mass envelope. A 40-epoch quick check on the Gaussian moving-front
+case improved final-time relative L2 from `1.3894` to `0.8284`, validation observation
+MSE from `8.37e-3` to `2.84e-3`, and mass MAE from `0.0201` to `0.00342`. RK4 remains
+the much more accurate same-problem numerical reference on this quick check
+(`rk4_final_time_relative_l2 = 0.00465`), so the PINN/RK4 gap is still an active model
+improvement target rather than a solved accuracy claim.
 
-The first 60-epoch check of the cumulative `geo_levelset_time_slab` ablation
-(`level_set_alignment=0.03`, 50% time-window collocation focus, 50% global replay,
-weak RK4 teacher) gives `final_time_relative_l2 = 0.2830`,
-`validation_observation_mse = 6.00e-4`, `front_area_005_mae = 0.0435`,
-`front_area_010_mae = 0.0121`, and `mass_mae = 0.0037`. It is now stable, but it still
-does not beat the tighter-envelope weak-RK4 case on all-purpose field/front/mass
-accuracy. Treat it as a domain-decomposition/front-geometry ablation.
+Leading-edge distribution and radial-symmetry losses are implemented as explicit
+ON/OFF validation features, but their default weights are zero. Early quick checks made
+them worse on the Gaussian front regime, so they stay as research ablations until
+multi-seed evidence supports promoting either loss.
 
 ## Colab Notebook
 

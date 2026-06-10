@@ -100,6 +100,8 @@ def make_forward_cases(base: ExperimentConfig) -> list[dict[str, Any]]:
             expected_front_pde=0.0,
             leading_edge=0.0,
             front_gradient=0.0,
+            leading_edge_distribution=0.0,
+            radial_symmetry=0.0,
             level_set_alignment=0.0,
             time_interface=0.0,
         ),
@@ -122,6 +124,8 @@ def make_forward_cases(base: ExperimentConfig) -> list[dict[str, Any]]:
             front_profile=0.0,
             expected_front_pde=0.0,
             leading_edge=0.0,
+            leading_edge_distribution=0.0,
+            radial_symmetry=0.0,
             level_set_alignment=0.0,
             time_interface=0.0,
         ),
@@ -150,6 +154,20 @@ def make_forward_cases(base: ExperimentConfig) -> list[dict[str, Any]]:
         weights=replace(base.weights, discrete_rk4=0.0),
         train=replace(base.train, discrete_rk4_times=0, discrete_rk4_grid=0),
     )
+    geo_no_radial_symmetry = replace(
+        base,
+        weights=replace(base.weights, radial_symmetry=0.0),
+        train=replace(base.train, radial_symmetry_groups=0),
+    )
+    geo_radial_symmetry = replace(
+        base,
+        weights=replace(base.weights, radial_symmetry=max(base.weights.radial_symmetry, 0.15)),
+        train=replace(
+            base.train,
+            radial_symmetry_groups=max(base.train.radial_symmetry_groups, 64),
+            radial_symmetry_angles=max(base.train.radial_symmetry_angles, 6),
+        ),
+    )
     geo_no_collapse_guards = replace(
         base,
         weights=replace(
@@ -159,6 +177,8 @@ def make_forward_cases(base: ExperimentConfig) -> list[dict[str, Any]]:
             physics_parameter_anchor=0.0,
             leading_edge=0.0,
             leading_edge_area=0.0,
+            leading_edge_distribution=0.0,
+            radial_symmetry=0.0,
         ),
     )
     geo_levelset_time_slab = replace(
@@ -167,7 +187,6 @@ def make_forward_cases(base: ExperimentConfig) -> list[dict[str, Any]]:
             base.weights,
             level_set_alignment=max(base.weights.level_set_alignment, 0.06),
             time_interface=max(base.weights.time_interface, 0.03),
-            rk4_teacher=max(base.weights.rk4_teacher, 0.005),
         ),
         train=replace(
             base.train,
@@ -181,8 +200,6 @@ def make_forward_cases(base: ExperimentConfig) -> list[dict[str, Any]]:
             time_slab_curriculum=True,
             time_window_focus_fraction=0.5,
             time_window_teacher=False,
-            rk4_teacher_pool=max(base.train.rk4_teacher_pool, 4096),
-            rk4_teacher_batch=max(base.train.rk4_teacher_batch, 512),
         ),
     )
     geo_rk4_teacher_front_area = replace(
@@ -244,6 +261,8 @@ def make_forward_cases(base: ExperimentConfig) -> list[dict[str, Any]]:
         _case("geo_no_physics_anchor", geo_no_physics_anchor, "Ablates the weak D/r parameter anchor used during coefficient learning."),
         _case("geo_no_spatial_coefficients", geo_no_spatial_coefficients, "Ablates the smooth spatial D(x,y), r(x,y) coefficient correction field."),
         _case("geo_no_discrete_rk4", geo_no_discrete_rk4, "Ablates the self-consistent discrete RK4 time-marching physics loss."),
+        _case("geo_no_radial_symmetry", geo_no_radial_symmetry, "Ablates radial symmetry regularization for the isotropic Gaussian-front benchmark."),
+        _case("geo_radial_symmetry", geo_radial_symmetry, "Enables radial symmetry regularization for the isotropic Gaussian-front benchmark."),
         _case("geo_no_collapse_guards", geo_no_collapse_guards, "Removes mass floor, support Tversky, parameter anchor, and leading-edge guards together."),
         _case("geo_levelset_time_slab", geo_levelset_time_slab, "Front level-set alignment plus causal time-slab windowing."),
         _case("geo_rk4_teacher_front_area", geo_rk4_teacher_front_area, "Weak RK4 pseudo-label regularizer for solver-assisted PINN training."),

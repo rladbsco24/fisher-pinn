@@ -727,6 +727,116 @@ def front_support_tversky_loss(
     return torch.stack(losses).mean()
 
 
+def leading_edge_distribution_loss(
+    model: OriginPINN,
+    n_times: int,
+    grid: int,
+    device: torch.device,
+    *,
+    active_floor: float = 0.005,
+    background_margin: float = 0.015,
+) -> torch.Tensor:
+    """Weak one-sided distribution guard from the linearized Fisher-KPP edge.
+
+    The sparse-observation moving-front runs can match area and mass while
+    placing density in the wrong region. This loss does not use RK4 labels. It
+    uses the heat-kernel leading-edge approximation only as a coarse envelope:
+    it penalizes density outside the expected support and excessive mass/spread,
+    while centroid moments keep the front anchored spatially. It intentionally
+    avoids full-field value matching, which is too strong for nonlinear KPP.
+    """
+
+    if n_times <= 0 or grid <= 1:
+        return torch.zeros((), device=device)
+    dtype = next(model.parameters()).dtype
+    xs = torch.linspace(0.0, model.domain.box, grid, dtype=dtype, device=device)
+    x, y = torch.meshgrid(xs, xs, indexing="ij")
+    xy_one = torch.stack([x.reshape(-1), y.reshape(-1)], dim=1)
+    xy_scaled = (xy_one / max(float(model.domain.box), 1.0e-12)).reshape(1, grid * grid, 2)
+    times = torch.linspace(0.0, model.domain.t_end, n_times, dtype=dtype, device=device).reshape(-1, 1)
+    xy = xy_one.repeat(n_times, 1)
+    t = times.repeat_interleave(grid * grid, dim=0)
+    pred = model(xy, t).reshape(n_times, grid * grid, 1)
+    target = linearized_kpp_gaussian(model, xy, t).detach().reshape(n_times, grid * grid, 1)
+
+    active = (target > float(active_floor)).float()
+    local_upper = (1.35 * target + float(background_margin)).clamp_max(1.0)
+    envelope_loss = torch.mean(torch.relu(pred - local_upper).pow(2))
+    background_loss = torch.mean((1.0 - active) * torch.relu(pred - float(background_margin)).pow(2))
+
+    eps = torch.as_tensor(1.0e-8, dtype=dtype, device=device)
+    pred_mass = pred.mean(dim=1).clamp_min(eps)
+    target_mass = target.mean(dim=1).clamp_min(eps)
+    mass_upper = (1.35 * target_mass).clamp_min(eps)
+    mass_loss = torch.mean(torch.relu((pred_mass - mass_upper) / mass_upper).pow(2).clamp_max(25.0))
+
+    pred_sum = pred.sum(dim=1).clamp_min(eps)
+    target_sum = target.sum(dim=1).clamp_min(eps)
+    pred_center = torch.sum(pred * xy_scaled, dim=1) / pred_sum
+    target_center = torch.sum(target * xy_scaled, dim=1) / target_sum
+    center_loss = torch.mean((pred_center - target_center).pow(2))
+
+    pred_r2 = torch.sum(pred * (xy_scaled - pred_center[:, None, :]).pow(2).sum(dim=2, keepdim=True), dim=1) / pred_sum
+    target_r2 = torch.sum(
+        target * (xy_scaled - target_center[:, None, :]).pow(2).sum(dim=2, keepdim=True),
+        dim=1,
+    ) / target_sum
+    radius_upper = (1.75 * target_r2).clamp_min(1.0e-5)
+    radius_lower = (0.45 * target_r2).clamp_min(1.0e-5)
+    radius_loss = torch.mean(
+        (
+            torch.relu((pred_r2 - radius_upper) / radius_upper)
+            + 0.25 * torch.relu((radius_lower - pred_r2) / radius_lower)
+        )
+        .pow(2)
+        .clamp_max(25.0)
+    )
+
+    return envelope_loss + 0.50 * background_loss + 0.08 * mass_loss + center_loss + 0.04 * radius_loss
+
+
+def radial_symmetry_loss(
+    model: OriginPINN,
+    groups: int,
+    angles: int,
+    device: torch.device,
+    *,
+    t_low: float = 0.0,
+    t_high: float | None = None,
+) -> torch.Tensor:
+    """Enforce radial symmetry for the synthetic isotropic Gaussian-front run.
+
+    For an isotropic Fisher-KPP equation with a Gaussian initial condition and no
+    drift, the solution is approximately radial around the seed before boundary
+    effects dominate. Penalizing angular variance at fixed radius/time directly
+    suppresses spiral or spoke artifacts without using a numerical reference.
+    """
+
+    if groups <= 0 or angles < 3:
+        return torch.zeros((), device=device)
+    dtype = next(model.parameters()).dtype
+    center = model.seed_center.to(dtype=dtype, device=device).view(1, 2)
+    boundary_distance = torch.min(torch.cat([center, model.domain.box - center], dim=1)).clamp_min(1.0e-4)
+    max_radius = 0.95 * boundary_distance
+    low = max(0.0, min(float(t_low), model.domain.t_end))
+    high = model.domain.t_end if t_high is None else max(0.0, min(float(t_high), model.domain.t_end))
+    if high < low:
+        low, high = high, low
+    t = low + torch.rand(groups, 1, dtype=dtype, device=device) * max(high - low, 1.0e-8)
+    radius = torch.sqrt(torch.rand(groups, 1, dtype=dtype, device=device)) * max_radius
+    base_angles = torch.linspace(0.0, 2.0 * math.pi, angles + 1, dtype=dtype, device=device)[:-1].view(1, angles, 1)
+    phase = 2.0 * math.pi * torch.rand(groups, 1, 1, dtype=dtype, device=device)
+    theta = base_angles + phase
+    directions = torch.cat([torch.cos(theta), torch.sin(theta)], dim=2)
+    xy = center.view(1, 1, 2) + radius.view(groups, 1, 1) * directions
+    xy = xy.reshape(groups * angles, 2)
+    tt = t.repeat_interleave(angles, dim=0)
+    pred = model(xy, tt).reshape(groups, angles, 1)
+    mean = pred.mean(dim=1, keepdim=True)
+    activity = (0.05 + mean.detach() * (1.0 - mean.detach())).clamp(0.05, 0.30)
+    return torch.mean(activity * (pred - mean).pow(2))
+
+
 def mass_floor_trajectory_loss(
     model: OriginPINN,
     n_times: int,
@@ -734,13 +844,13 @@ def mass_floor_trajectory_loss(
     device: torch.device,
     *,
     floor_fraction: float = 0.35,
-    upper_fraction: float = 1.75,
+    upper_fraction: float = 1.15,
 ) -> torch.Tensor:
-    """One-sided integral mass trajectory guard against zero-field collapse.
+    """Integral mass trajectory envelope against collapse and diffuse overgrowth.
 
     Fisher-KPP has growth from a known nonzero seed. The linearized leading-edge
-    mass is used only as a lower-envelope reference; this avoids forcing exact
-    RK4 values while making near-zero global predictions costly.
+    mass is used only as a coarse envelope reference; this avoids forcing exact
+    RK4 values while making near-zero and globally overgrown predictions costly.
     """
 
     if n_times <= 0 or grid <= 1:
@@ -758,7 +868,7 @@ def mass_floor_trajectory_loss(
     upper = (float(upper_fraction) * target_mass).clamp_min(1.0e-6)
     lower_loss = torch.relu((lower - pred_mass) / lower).pow(2)
     upper_loss = torch.relu((pred_mass - upper) / upper).pow(2)
-    return torch.mean(lower_loss + 0.25 * upper_loss)
+    return torch.mean(lower_loss + upper_loss)
 
 
 def front_area_contrast_loss(

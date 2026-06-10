@@ -40,10 +40,12 @@ from .losses import (
     known_initial_condition_loss,
     leading_edge_floor_loss,
     leading_edge_area_loss,
+    leading_edge_distribution_loss,
     mass_floor_trajectory_loss,
     parabolic_mass_balance_loss,
     pde_residual,
     pde_residual_terms,
+    radial_symmetry_loss,
     seed_regularization_loss,
     spatial_coefficient_regularization_loss,
     time_slab_interface_loss,
@@ -684,6 +686,8 @@ def _combine_loss_terms(
         "expected_front_pde",
         "leading_edge",
         "leading_edge_area",
+        "leading_edge_distribution",
+        "radial_symmetry",
         "front_support_tversky",
         "front_contrast",
         "front_profile",
@@ -1091,6 +1095,30 @@ def train_single(
             )
         else:
             leading_edge_area = torch.zeros((), device=device)
+        if (
+            cfg.weights.leading_edge_distribution > 0.0
+            and cfg.train.leading_edge_distribution_times > 0
+            and cfg.train.leading_edge_distribution_grid > 1
+        ):
+            leading_edge_distribution = leading_edge_distribution_loss(
+                model,
+                cfg.train.leading_edge_distribution_times,
+                cfg.train.leading_edge_distribution_grid,
+                device,
+            )
+        else:
+            leading_edge_distribution = torch.zeros((), device=device)
+        if cfg.weights.radial_symmetry > 0.0 and cfg.train.radial_symmetry_groups > 0:
+            radial_symmetry = radial_symmetry_loss(
+                model,
+                cfg.train.radial_symmetry_groups,
+                cfg.train.radial_symmetry_angles,
+                device,
+                t_low=window_t_low,
+                t_high=window_t_high,
+            )
+        else:
+            radial_symmetry = torch.zeros((), device=device)
         if cfg.weights.front_contrast > 0.0 and cfg.train.front_contrast_times > 0:
             front_contrast = front_area_contrast_loss(
                 model,
@@ -1220,6 +1248,12 @@ def train_single(
                 ("expected_front_pde", cfg.weights.expected_front_pde * front_weight, expected_front_loss),
                 ("leading_edge", cfg.weights.leading_edge * front_weight, leading_edge_loss),
                 ("leading_edge_area", cfg.weights.leading_edge_area * front_weight, leading_edge_area),
+                (
+                    "leading_edge_distribution",
+                    cfg.weights.leading_edge_distribution * front_weight,
+                    leading_edge_distribution,
+                ),
+                ("radial_symmetry", cfg.weights.radial_symmetry * front_weight, radial_symmetry),
                 ("front_contrast", cfg.weights.front_contrast * front_weight, front_contrast),
                 ("front_profile", cfg.weights.front_profile * front_weight, front_profile),
                 ("level_set", cfg.weights.level_set_alignment * front_weight, level_set_loss),
@@ -1339,6 +1373,8 @@ def train_single(
                 "expected_front_pde": float(expected_front_loss.detach().cpu()),
                 "leading_edge": float(leading_edge_loss.detach().cpu()),
                 "leading_edge_area": float(leading_edge_area.detach().cpu()),
+                "leading_edge_distribution": float(leading_edge_distribution.detach().cpu()),
+                "radial_symmetry": float(radial_symmetry.detach().cpu()),
                 "front_contrast": float(front_contrast.detach().cpu()),
                 "front_profile": float(front_profile.detach().cpu()),
                 "level_set": float(level_set_loss.detach().cpu()),
@@ -1616,6 +1652,28 @@ def _lbfgs_polish(
             )
         else:
             leading_edge_area = torch.zeros((), device=device)
+        if (
+            cfg.weights.leading_edge_distribution > 0.0
+            and cfg.train.leading_edge_distribution_times > 0
+            and cfg.train.leading_edge_distribution_grid > 1
+        ):
+            leading_edge_distribution = leading_edge_distribution_loss(
+                model,
+                cfg.train.leading_edge_distribution_times,
+                cfg.train.leading_edge_distribution_grid,
+                device,
+            )
+        else:
+            leading_edge_distribution = torch.zeros((), device=device)
+        if cfg.weights.radial_symmetry > 0.0 and cfg.train.radial_symmetry_groups > 0:
+            radial_symmetry = radial_symmetry_loss(
+                model,
+                cfg.train.radial_symmetry_groups,
+                cfg.train.radial_symmetry_angles,
+                device,
+            )
+        else:
+            radial_symmetry = torch.zeros((), device=device)
         if cfg.weights.front_contrast > 0.0 and cfg.train.front_contrast_times > 0:
             front_contrast = front_area_contrast_loss(
                 model,
@@ -1730,6 +1788,8 @@ def _lbfgs_polish(
             + cfg.weights.expected_front_pde * expected_front_loss
             + cfg.weights.leading_edge * leading_edge_loss
             + cfg.weights.leading_edge_area * leading_edge_area
+            + cfg.weights.leading_edge_distribution * leading_edge_distribution
+            + cfg.weights.radial_symmetry * radial_symmetry
             + cfg.weights.front_contrast * front_contrast
             + cfg.weights.front_profile * front_profile
             + cfg.weights.level_set_alignment * level_set_loss
