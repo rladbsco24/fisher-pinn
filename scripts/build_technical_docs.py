@@ -473,6 +473,7 @@ RK4_PAGES = [
         [
             "1D 결과에서 front가 오른쪽으로 이동하고 final relative L2가 작은 값으로 유지되면, 중심차분 공간 이산화와 RK4 시간 적분이 Ablowitz-Zeppetella travelling wave의 phase와 profile을 함께 포착하고 있음을 의미한다. 격자를 세분화하면 중심차분의 2차 공간 정확도에 따라 오차가 감소하는 경향을 보이며, dt를 충분히 줄인 조건에서는 공간 오차가 전체 오차를 지배한다.",
             "2D 결과에서 tanh front가 대각선 방향으로 이동하고 exact final field와 수치해의 차이가 작으면, Kronecker 형태의 2D Laplacian stencil과 stage별 exact Dirichlet 처리가 정상적으로 작동한다고 해석한다. 2D 문제는 내부 격자점 수가 (Nx - 2)(Ny - 2)에 비례하므로 격자 세분화는 정확도 향상과 계산비 증가를 동시에 유발한다.",
+            "시간 수렴 차수는 exact solution 대비 오차가 아니라 같은 공간 격자에서 매우 작은 시간간격으로 계산한 reference solution과의 final-time relative L2 차이로 측정한다. 1D에서는 Nx = 201, dt_ref = 0.00125를 기준으로 dt = 0.02, 0.01, 0.005, 0.0025 해를 비교하고, 2D에서는 Nx = Ny = 121, dt_ref = 0.0025를 기준으로 dt = 0.02, 0.01, 0.005 해를 비교한다. 관측 시간 수렴차수는 p_i = log(E_i/E_{i+1}) / log(dt_i/dt_{i+1})로 계산한다. 현재 실행 결과 1D는 약 4.57, 4.25, 4.21, 2D는 약 4.34, 4.24의 차수를 보여 classical RK4의 4차 시간 정확도와 일치한다.",
             "보고서와 notebook의 핵심 표기는 PDE, 정확해, 초기조건, boundary condition, 공간 이산화, RK4 stage 적용 순서, 안정성 판정, 오차 지표의 순서로 구성한다. 이는 사진의 설명 흐름을 따르되, 연구 재현성을 위해 모든 상수와 비교 기준을 명시한 형식이다. 본 문서의 수식과 코드 설정은 fisher-kpp-rk4 패키지의 현재 기본값과 일치한다.",
             "이 기준은 RK4를 다른 방법으로 대체하지 않는다. 변경된 것은 검증 regime이며, solver는 여전히 method-of-lines, second-order central finite difference, classical RK4를 사용한다. 따라서 기존 RK4 결과와 새 결과의 차이는 수치법 변경이 아니라 정확해를 갖는 Fisher-KPP benchmark로 문제 설정을 정렬한 데서 발생한다.",
         ],
@@ -486,6 +487,7 @@ RK4_REFERENCES = [
     "Ablowitz, Mark J., and Anthony Zeppetella. 1979. “Explicit Solutions of Fisher’s Equation for a Special Wave Speed.” Bulletin of Mathematical Biology 41: 835–840.",
     "Butcher, John C. 2016. Numerical Methods for Ordinary Differential Equations. 3rd ed. Chichester: Wiley.",
     "Morton, K. W., and D. F. Mayers. 2005. Numerical Solution of Partial Differential Equations: An Introduction. 2nd ed. Cambridge: Cambridge University Press.",
+    "Zhou, Hanyu, and Yu-Xin Ren. 2024. “High-Order Accurate Implicit Scheme Based on Temporal Reconstruction for Solving Compressible Navier-Stokes Equations.” In Proceedings of the 12th International Conference on Computational Fluid Dynamics, Kobe, Japan.",
 ]
 
 

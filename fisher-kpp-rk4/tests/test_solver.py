@@ -271,8 +271,10 @@ def test_required_rk4_grid_tables_are_wired_into_script_and_notebook() -> None:
     required_names = [
         "rk4_1d_spatial_comparison.png",
         "rk4_1d_time_comparison.png",
+        "rk4_1d_temporal_reference_convergence.png",
         "rk4_2d_spatial_comparison.png",
         "rk4_2d_time_comparison.png",
+        "rk4_2d_temporal_reference_convergence.png",
     ]
     script_source = (REPO_ROOT / "scripts" / "run_convergence.py").read_text(encoding="utf-8")
     notebook_source = (REPO_ROOT / "notebooks" / "fisher_kpp_rk4_demo.ipynb").read_text(encoding="utf-8")
@@ -283,6 +285,8 @@ def test_required_rk4_grid_tables_are_wired_into_script_and_notebook() -> None:
     assert "stability_safe" not in script_source
     assert '"min_U"' in script_source
     assert '"mean_U"' in script_source
+    assert "Reference_Relative_L2_Error" in script_source
+    assert "Observed_Time_Order" in script_source
     for name in required_names:
         assert name in script_source
         assert name in notebook_source

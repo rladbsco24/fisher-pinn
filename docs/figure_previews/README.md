@@ -25,9 +25,13 @@ Fisher-KPP wave with RK4 in time.
 
 ![1D RK4 time-step comparison table](rk4_table_1d_time_comparison.png)
 
+![1D RK4 temporal reference convergence table](rk4_table_1d_temporal_reference_convergence.png)
+
 ![2D RK4 spatial comparison table](rk4_table_2d_spatial_comparison.png)
 
 ![2D RK4 time-step comparison table](rk4_table_2d_time_comparison.png)
+
+![2D RK4 temporal reference convergence table](rk4_table_2d_temporal_reference_convergence.png)
 
 ## RK4 2D Exact-Wave 3D Report Figures
 

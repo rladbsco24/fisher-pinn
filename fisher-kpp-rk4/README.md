@@ -77,8 +77,10 @@ This writes RK4-based 1D/2D spatial-grid and time-step comparison tables under
 
 - `rk4_1d_spatial_comparison.{csv,md,png}`
 - `rk4_1d_time_comparison.{csv,md,png}`
+- `rk4_1d_temporal_reference_convergence.{csv,md,png}`
 - `rk4_2d_spatial_comparison.{csv,md,png}`
 - `rk4_2d_time_comparison.{csv,md,png}`
+- `rk4_2d_temporal_reference_convergence.{csv,md,png}`
 - `rk4_grid_comparison_tables.md`
 
 The table columns mirror the report-style pandas output used in the numerical
@@ -88,6 +90,12 @@ RK4-only columns. The 1D PNG tables keep the DataFrame index column, while the
 2D PNG tables start directly at `Nx`, matching the reference table format. For
 the 2D `Nx=Ny=121` time-step comparison, `dt=0.04` is excluded because it is
 outside the explicit RK4 diffusion stability estimate.
+
+The temporal reference convergence tables keep the same spatial grid and compare
+coarser time-step solutions against a refined same-grid reference solution:
+`dt_ref=0.00125` for 1D and `dt_ref=0.0025` for 2D. The reported observed order is
+`log(E_i/E_{i+1}) / log(dt_i/dt_{i+1})`, where `E_i` is the relative L2 difference
+between the coarser final-time field and the refined reference field.
 
 The default short benchmark follows the exact traveling-wave regimes used for
 direct numerical verification:

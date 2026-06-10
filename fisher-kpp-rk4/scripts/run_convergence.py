@@ -13,7 +13,7 @@ SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from fisher_kpp_rk4 import solve_rk4, solve_rk4_2d
+from fisher_kpp_rk4 import relative_l2, solve_rk4, solve_rk4_2d
 from fisher_kpp_rk4.config import (
     D,
     D_2D,
@@ -40,8 +40,10 @@ TABLE_DIR = OUTPUT_DIR / "tables"
 REQUIRED_TABLE_PNGS = [
     "rk4_1d_spatial_comparison.png",
     "rk4_1d_time_comparison.png",
+    "rk4_1d_temporal_reference_convergence.png",
     "rk4_2d_spatial_comparison.png",
     "rk4_2d_time_comparison.png",
+    "rk4_2d_temporal_reference_convergence.png",
 ]
 
 ONE_D_COLUMNS = [
@@ -72,6 +74,34 @@ TWO_D_COLUMNS = [
     "max_U",
     "mean_U",
     "Exact_Relative_L2_Error",
+]
+
+ONE_D_TEMPORAL_REFERENCE_COLUMNS = [
+    "dim",
+    "method",
+    "Nx",
+    "dx",
+    "dt",
+    "dt_ref",
+    "Nt",
+    "T",
+    "runtime_sec",
+    "Reference_Relative_L2_Error",
+    "Observed_Time_Order",
+]
+
+TWO_D_TEMPORAL_REFERENCE_COLUMNS = [
+    "Nx",
+    "Ny",
+    "dx",
+    "dy",
+    "dt",
+    "dt_ref",
+    "Nt",
+    "T",
+    "runtime_sec",
+    "Reference_Relative_L2_Error",
+    "Observed_Time_Order",
 ]
 
 
@@ -152,7 +182,138 @@ def run_case_2d(grid: int, dt: float) -> dict[str, object]:
     }
 
 
+def _observed_orders(rows: list[dict[str, object]], *, error_key: str) -> list[dict[str, object]]:
+    for idx, row in enumerate(rows):
+        order: float | None = None
+        if idx + 1 < len(rows):
+            coarse_error = float(row[error_key])
+            fine_error = float(rows[idx + 1][error_key])
+            coarse_dt = float(row["dt"])
+            fine_dt = float(rows[idx + 1]["dt"])
+            if coarse_error > 0.0 and fine_error > 0.0 and coarse_dt > fine_dt:
+                order = float(np.log(coarse_error / fine_error) / np.log(coarse_dt / fine_dt))
+        row["Observed_Time_Order"] = order
+    return rows
+
+
+def run_temporal_reference_1d(
+    *,
+    nx: int = 201,
+    dt_values: tuple[float, ...] = (0.02, 0.01, 0.005, 0.0025),
+    dt_ref: float = 0.00125,
+) -> list[dict[str, object]]:
+    x = np.linspace(x_left, x_right, nx)
+    nt_ref, dt_ref_eff = _round_dt(T, dt_ref)
+    ref = solve_rk4(
+        x=x,
+        dt=dt_ref_eff,
+        Nt=nt_ref,
+        D=D,
+        r=r,
+        initial_condition=initial_condition,
+        left_bc=left_bc,
+        right_bc=right_bc,
+        save_interval=T,
+        exact_solution=ablowitz_zeppetella_exact,
+    )
+    ref_final = np.asarray(ref["u_final"], dtype=np.float64)
+    rows: list[dict[str, object]] = []
+    for dt in dt_values:
+        nt, dt_eff = _round_dt(T, dt)
+        start = time.perf_counter()
+        sol = solve_rk4(
+            x=x,
+            dt=dt_eff,
+            Nt=nt,
+            D=D,
+            r=r,
+            initial_condition=initial_condition,
+            left_bc=left_bc,
+            right_bc=right_bc,
+            save_interval=T,
+            exact_solution=ablowitz_zeppetella_exact,
+        )
+        runtime = time.perf_counter() - start
+        final = np.asarray(sol["u_final"], dtype=np.float64)
+        rows.append(
+            {
+                "dim": "1D",
+                "method": "rk4",
+                "Nx": int(nx),
+                "dx": float(x[1] - x[0]),
+                "dt": float(dt_eff),
+                "dt_ref": float(dt_ref_eff),
+                "Nt": int(nt),
+                "T": float(T),
+                "runtime_sec": float(runtime),
+                "Reference_Relative_L2_Error": float(relative_l2(final, ref_final)),
+                "Observed_Time_Order": None,
+            }
+        )
+    return _observed_orders(rows, error_key="Reference_Relative_L2_Error")
+
+
+def run_temporal_reference_2d(
+    *,
+    grid: int = 121,
+    dt_values: tuple[float, ...] = (0.02, 0.01, 0.005),
+    dt_ref: float = 0.0025,
+) -> list[dict[str, object]]:
+    x = np.linspace(x_left_2d, x_right_2d, grid)
+    y = np.linspace(y_bottom_2d, y_top_2d, grid)
+    nt_ref, dt_ref_eff = _round_dt(T_2D, dt_ref)
+    ref = solve_rk4_2d(
+        x=x,
+        y=y,
+        dt=dt_ref_eff,
+        Nt=nt_ref,
+        D=D_2D,
+        r=r_2D,
+        initial_condition=initial_condition_2d,
+        save_interval=T_2D,
+        boundary_condition="dirichlet_exact",
+        exact_solution=generalized_fisher_kpp_exact_2d,
+    )
+    ref_final = np.asarray(ref["u_final"], dtype=np.float64)
+    rows: list[dict[str, object]] = []
+    for dt in dt_values:
+        nt, dt_eff = _round_dt(T_2D, dt)
+        start = time.perf_counter()
+        sol = solve_rk4_2d(
+            x=x,
+            y=y,
+            dt=dt_eff,
+            Nt=nt,
+            D=D_2D,
+            r=r_2D,
+            initial_condition=initial_condition_2d,
+            save_interval=T_2D,
+            boundary_condition="dirichlet_exact",
+            exact_solution=generalized_fisher_kpp_exact_2d,
+        )
+        runtime = time.perf_counter() - start
+        final = np.asarray(sol["u_final"], dtype=np.float64)
+        rows.append(
+            {
+                "Nx": int(grid),
+                "Ny": int(grid),
+                "dx": float(x[1] - x[0]),
+                "dy": float(y[1] - y[0]),
+                "dt": float(dt_eff),
+                "dt_ref": float(dt_ref_eff),
+                "Nt": int(nt),
+                "T": float(T_2D),
+                "runtime_sec": float(runtime),
+                "Reference_Relative_L2_Error": float(relative_l2(final, ref_final)),
+                "Observed_Time_Order": None,
+            }
+        )
+    return _observed_orders(rows, error_key="Reference_Relative_L2_Error")
+
+
 def _format_value(value: object) -> str:
+    if value is None:
+        return ""
     if isinstance(value, bool):
         return "True" if value else "False"
     if isinstance(value, (int, np.integer)):
@@ -180,7 +341,7 @@ def _display_float(column: str, value: object, places_by_column: dict[str, int])
         return f"{number:.6f}"
     if column == "T":
         return f"{number:.1f}"
-    if column in {"dx", "dy", "dt"}:
+    if column in {"dx", "dy", "dt", "dt_ref"}:
         return f"{number:.{places_by_column.get(column, 3)}f}"
     if column in {"min_u", "mean_u", "min_U", "max_U", "mean_U"}:
         return f"{number:.6f}"
@@ -190,12 +351,16 @@ def _display_float(column: str, value: object, places_by_column: dict[str, int])
         return f"{number:.6f}"
     if column in {"AZ_Relative_L2_Error", "Exact_Relative_L2_Error"}:
         return f"{number:.6f}"
+    if column == "Reference_Relative_L2_Error":
+        return f"{number:.6e}"
+    if column == "Observed_Time_Order":
+        return "" if not np.isfinite(number) else f"{number:.3f}"
     return _format_value(number)
 
 
 def _display_frame_rows(rows: list[dict[str, object]], columns: list[str]) -> list[dict[str, str]]:
     places_by_column: dict[str, int] = {}
-    for column in ("dx", "dy", "dt"):
+    for column in ("dx", "dy", "dt", "dt_ref"):
         values = [float(row[column]) for row in rows if column in row]
         if values:
             places_by_column[column] = max(1, max(_decimal_places(value, max_places=6) for value in values))
@@ -204,7 +369,9 @@ def _display_frame_rows(rows: list[dict[str, object]], columns: list[str]) -> li
         formatted_row: dict[str, str] = {}
         for column in columns:
             value = row.get(column, "")
-            if isinstance(value, bool):
+            if value is None:
+                formatted_row[column] = ""
+            elif isinstance(value, bool):
                 formatted_row[column] = "True" if value else "False"
             elif isinstance(value, (int, np.integer)):
                 formatted_row[column] = str(int(value))
@@ -362,16 +529,32 @@ def main() -> None:
 
     one_d_spatial = [run_case_1d(nx=nx, dt=0.005) for nx in (101, 201, 401)]
     one_d_time = [run_case_1d(nx=201, dt=dt_value) for dt_value in (0.02, 0.01, 0.005, 0.0025)]
+    one_d_temporal_reference = run_temporal_reference_1d()
     two_d_spatial = [run_case_2d(grid=grid, dt=0.01) for grid in (41, 61, 81)]
     # With Nx=Ny=121, dt=0.04 is outside the explicit RK4 diffusion limit. The
     # time table therefore drops that unavailable row instead of replacing it.
     two_d_time = [run_case_2d(grid=121, dt=dt_value) for dt_value in (0.02, 0.01, 0.005)]
+    two_d_temporal_reference = run_temporal_reference_2d()
 
     bundles = [
         ("rk4_1d_spatial_comparison", "1D spatial comparison", one_d_spatial, ONE_D_COLUMNS, True),
         ("rk4_1d_time_comparison", "1D time comparison", one_d_time, ONE_D_COLUMNS, True),
+        (
+            "rk4_1d_temporal_reference_convergence",
+            "1D temporal reference convergence",
+            one_d_temporal_reference,
+            ONE_D_TEMPORAL_REFERENCE_COLUMNS,
+            True,
+        ),
         ("rk4_2d_spatial_comparison", "2D spatial comparison", two_d_spatial, TWO_D_COLUMNS, False),
         ("rk4_2d_time_comparison", "2D time comparison", two_d_time, TWO_D_COLUMNS, False),
+        (
+            "rk4_2d_temporal_reference_convergence",
+            "2D temporal reference convergence",
+            two_d_temporal_reference,
+            TWO_D_TEMPORAL_REFERENCE_COLUMNS,
+            False,
+        ),
     ]
     for name, title, rows, columns, show_index in bundles:
         _write_table_bundle(name, title, rows, columns, show_index=show_index)
