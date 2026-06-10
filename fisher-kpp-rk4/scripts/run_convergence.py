@@ -13,7 +13,7 @@ SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from fisher_kpp_rk4 import check_rk4_stability, solve_rk4, solve_rk4_2d
+from fisher_kpp_rk4 import solve_rk4, solve_rk4_2d
 from fisher_kpp_rk4.config import (
     D,
     D_2D,
@@ -37,42 +37,12 @@ from fisher_kpp_rk4.config import (
 
 OUTPUT_DIR = PROJECT_ROOT / "outputs"
 TABLE_DIR = OUTPUT_DIR / "tables"
-RK4_STAGES_PER_STEP = 4.0
 REQUIRED_TABLE_PNGS = [
     "rk4_1d_spatial_comparison.png",
     "rk4_1d_time_comparison.png",
     "rk4_2d_spatial_comparison.png",
     "rk4_2d_time_comparison.png",
 ]
-PNG_COLUMN_LABELS = {
-    "runtime_sec": "runtime\n(sec)",
-    "rk4_stages_per_step": "RK4\nstages",
-    "stability_safe": "stable",
-    "min_u": "min u",
-    "max_u": "max u",
-    "mean_u": "mean u",
-    "AZ_Relative_L2_Error": "AZ rel.\nL2 error",
-    "Exact_Relative_L2_Error": "exact rel.\nL2 error",
-}
-PNG_COLUMN_WEIGHTS = {
-    "dim": 0.58,
-    "method": 0.70,
-    "Nx": 0.58,
-    "Ny": 0.58,
-    "dx": 0.70,
-    "dy": 0.70,
-    "dt": 0.76,
-    "Nt": 0.70,
-    "T": 0.58,
-    "runtime_sec": 1.05,
-    "rk4_stages_per_step": 0.80,
-    "stability_safe": 0.72,
-    "min_u": 0.92,
-    "max_u": 0.82,
-    "mean_u": 0.92,
-    "AZ_Relative_L2_Error": 1.28,
-    "Exact_Relative_L2_Error": 1.36,
-}
 
 ONE_D_COLUMNS = [
     "dim",
@@ -83,8 +53,6 @@ ONE_D_COLUMNS = [
     "Nt",
     "T",
     "runtime_sec",
-    "rk4_stages_per_step",
-    "stability_safe",
     "min_u",
     "max_u",
     "mean_u",
@@ -92,8 +60,6 @@ ONE_D_COLUMNS = [
 ]
 
 TWO_D_COLUMNS = [
-    "dim",
-    "method",
     "Nx",
     "Ny",
     "dx",
@@ -102,11 +68,9 @@ TWO_D_COLUMNS = [
     "Nt",
     "T",
     "runtime_sec",
-    "rk4_stages_per_step",
-    "stability_safe",
-    "min_u",
-    "max_u",
-    "mean_u",
+    "min_U",
+    "max_U",
+    "mean_U",
     "Exact_Relative_L2_Error",
 ]
 
@@ -121,7 +85,6 @@ def _round_dt(t_final: float, dt: float) -> tuple[int, float]:
 def run_case_1d(nx: int, dt: float) -> dict[str, object]:
     x = np.linspace(x_left, x_right, nx)
     nt, dt_eff = _round_dt(T, dt)
-    stability = check_rk4_stability(dx=float(x[1] - x[0]), dt=dt_eff, D=D, r=r, dim=1)
     start = time.perf_counter()
     sol = solve_rk4(
         x=x,
@@ -146,8 +109,6 @@ def run_case_1d(nx: int, dt: float) -> dict[str, object]:
         "Nt": int(nt),
         "T": float(T),
         "runtime_sec": float(runtime),
-        "rk4_stages_per_step": RK4_STAGES_PER_STEP,
-        "stability_safe": bool(stability["is_practically_safe"]),
         "min_u": float(final.min()),
         "max_u": float(final.max()),
         "mean_u": float(final.mean()),
@@ -160,7 +121,6 @@ def run_case_2d(grid: int, dt: float) -> dict[str, object]:
     y = np.linspace(y_bottom_2d, y_top_2d, grid)
     nt, dt_eff = _round_dt(T_2D, dt)
     dx = float(x[1] - x[0])
-    stability = check_rk4_stability(dx=dx, dt=dt_eff, D=D_2D, r=r_2D, dim=2)
     start = time.perf_counter()
     sol = solve_rk4_2d(
         x=x,
@@ -177,8 +137,6 @@ def run_case_2d(grid: int, dt: float) -> dict[str, object]:
     runtime = time.perf_counter() - start
     final = np.asarray(sol["u_final"], dtype=np.float64)
     return {
-        "dim": "2D",
-        "method": "rk4",
         "Nx": int(grid),
         "Ny": int(grid),
         "dx": dx,
@@ -187,11 +145,9 @@ def run_case_2d(grid: int, dt: float) -> dict[str, object]:
         "Nt": int(nt),
         "T": float(T_2D),
         "runtime_sec": float(runtime),
-        "rk4_stages_per_step": RK4_STAGES_PER_STEP,
-        "stability_safe": bool(stability["is_practically_safe"]),
-        "min_u": float(final.min()),
-        "max_u": float(final.max()),
-        "mean_u": float(final.mean()),
+        "min_U": float(final.min()),
+        "max_U": float(final.max()),
+        "mean_U": float(final.mean()),
         "Exact_Relative_L2_Error": float(sol["relative_l2_final"]),
     }
 
@@ -209,6 +165,55 @@ def _format_value(value: object) -> str:
             return f"{number:.6f}".rstrip("0").rstrip(".")
         return f"{number:.6f}".rstrip("0").rstrip(".")
     return str(value)
+
+
+def _decimal_places(value: float, *, max_places: int = 6) -> int:
+    text = f"{float(value):.{max_places}f}".rstrip("0").rstrip(".")
+    if "." not in text:
+        return 0
+    return len(text.split(".", 1)[1])
+
+
+def _display_float(column: str, value: object, places_by_column: dict[str, int]) -> str:
+    number = float(value)
+    if column == "runtime_sec":
+        return f"{number:.6f}"
+    if column == "T":
+        return f"{number:.1f}"
+    if column in {"dx", "dy", "dt"}:
+        return f"{number:.{places_by_column.get(column, 3)}f}"
+    if column in {"min_u", "mean_u", "min_U", "max_U", "mean_U"}:
+        return f"{number:.6f}"
+    if column in {"max_u"}:
+        if abs(number - 1.0) < 5.0e-6:
+            return "1.0"
+        return f"{number:.6f}"
+    if column in {"AZ_Relative_L2_Error", "Exact_Relative_L2_Error"}:
+        return f"{number:.6f}"
+    return _format_value(number)
+
+
+def _display_frame_rows(rows: list[dict[str, object]], columns: list[str]) -> list[dict[str, str]]:
+    places_by_column: dict[str, int] = {}
+    for column in ("dx", "dy", "dt"):
+        values = [float(row[column]) for row in rows if column in row]
+        if values:
+            places_by_column[column] = max(1, max(_decimal_places(value, max_places=6) for value in values))
+    formatted: list[dict[str, str]] = []
+    for row in rows:
+        formatted_row: dict[str, str] = {}
+        for column in columns:
+            value = row.get(column, "")
+            if isinstance(value, bool):
+                formatted_row[column] = "True" if value else "False"
+            elif isinstance(value, (int, np.integer)):
+                formatted_row[column] = str(int(value))
+            elif isinstance(value, (float, np.floating)):
+                formatted_row[column] = _display_float(column, value, places_by_column)
+            else:
+                formatted_row[column] = str(value)
+        formatted.append(formatted_row)
+    return formatted
 
 
 def _write_csv(path: Path, rows: list[dict[str, object]], columns: list[str]) -> None:
@@ -257,72 +262,90 @@ def _print_console_table(title: str, rows: list[dict[str, object]], columns: lis
     print()
 
 
-def _write_png_table(path: Path, title: str, rows: list[dict[str, object]], columns: list[str]) -> None:
+def _column_widths(frame, columns: list[str]) -> list[float]:
+    weights: list[float] = []
+    for column in columns:
+        text_width = max(len(str(column)), *(len(str(value)) for value in frame[column].tolist()))
+        weights.append(max(0.70, min(3.20, text_width / 8.2)))
+    total = sum(weights)
+    return [weight / total for weight in weights]
+
+
+def _write_png_table(
+    path: Path,
+    title: str,
+    rows: list[dict[str, object]],
+    columns: list[str],
+    *,
+    show_index: bool,
+) -> None:
     try:
         import matplotlib.pyplot as plt
         import pandas as pd
     except ImportError:
         return
 
-    labels = [PNG_COLUMN_LABELS.get(column, column) for column in columns]
-    data = [{label: _format_value(row.get(column, "")) for label, column in zip(labels, columns)} for row in rows]
-    frame = pd.DataFrame(data, columns=labels)
-    weights = [PNG_COLUMN_WEIGHTS.get(column, 1.0) for column in columns]
-    total_weight = sum(weights)
-    col_widths = [weight / total_weight for weight in weights]
-    width = max(14.0, 1.08 * total_weight)
-    height = max(2.85, 0.62 * (len(rows) + 2))
+    frame = pd.DataFrame(_display_frame_rows(rows, columns), columns=columns)
+    display_columns = list(columns)
+    if show_index:
+        frame.insert(0, "", [str(index) for index in range(len(frame))])
+        display_columns = [""] + display_columns
+
+    col_widths = _column_widths(frame, display_columns)
+    total_chars = sum(max(len(str(column)), *(len(str(value)) for value in frame[column].tolist())) for column in display_columns)
+    width = max(12.0, min(24.0, total_chars * 0.155))
+    height = max(1.55, 0.43 * (len(rows) + 1))
     fig, ax = plt.subplots(figsize=(width, height))
     fig.patch.set_facecolor("#24272a")
     ax.set_facecolor("#24272a")
     ax.axis("off")
-    fig.text(
-        0.015,
-        0.955,
-        title,
-        color="#f2f2f2",
-        fontsize=13,
-        fontfamily="monospace",
-        fontweight="bold",
-        va="top",
-    )
-    ax.set_position([0.012, 0.055, 0.976, 0.79])
+    ax.set_position([0.0, 0.0, 1.0, 1.0])
     table = ax.table(
         cellText=frame.to_numpy(),
-        colLabels=list(frame.columns),
+        colLabels=display_columns,
         colWidths=col_widths,
         cellLoc="right",
-        colLoc="center",
+        colLoc="right",
         bbox=[0.0, 0.0, 1.0, 1.0],
     )
     table.auto_set_font_size(False)
     for (row_idx, col_idx), cell in table.get_celld().items():
-        cell.PAD = 0.026
+        cell.PAD = 0.016
         cell.set_edgecolor("#24272a")
-        cell.set_linewidth(1.0)
+        cell.set_linewidth(0.0)
         cell.get_text().set_fontfamily("monospace")
         cell.get_text().set_clip_on(False)
         if row_idx == 0:
             cell.set_facecolor("#24272a")
             cell.get_text().set_color("#f2f2f2")
             cell.get_text().set_weight("bold")
-            cell.get_text().set_fontsize(8.0)
-            cell.get_text().set_ha("center")
+            cell.get_text().set_fontsize(10.5)
+            cell.get_text().set_ha("right")
         else:
             cell.set_facecolor("#4a4a4a" if row_idx % 2 else "#282b2e")
             cell.get_text().set_color("#e5e5e5")
-            cell.get_text().set_fontsize(8.1)
-            if columns[col_idx] in {"dim", "method", "stability_safe"}:
+            cell.get_text().set_fontsize(10.0)
+            visible_column = display_columns[col_idx]
+            if visible_column in {"dim", "method", "converged_all"}:
                 cell.get_text().set_ha("center")
+            else:
+                cell.get_text().set_ha("right")
     path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(path, dpi=240, facecolor=fig.get_facecolor(), bbox_inches="tight", pad_inches=0.08)
+    fig.savefig(path, dpi=220, facecolor=fig.get_facecolor(), bbox_inches="tight", pad_inches=0.015)
     plt.close(fig)
 
 
-def _write_table_bundle(name: str, title: str, rows: list[dict[str, object]], columns: list[str]) -> None:
+def _write_table_bundle(
+    name: str,
+    title: str,
+    rows: list[dict[str, object]],
+    columns: list[str],
+    *,
+    show_index: bool,
+) -> None:
     _write_csv(TABLE_DIR / f"{name}.csv", rows, columns)
     _write_markdown(TABLE_DIR / f"{name}.md", title, rows, columns)
-    _write_png_table(TABLE_DIR / f"{name}.png", title, rows, columns)
+    _write_png_table(TABLE_DIR / f"{name}.png", title, rows, columns, show_index=show_index)
     _print_console_table(title, rows, columns)
 
 
@@ -341,19 +364,19 @@ def main() -> None:
     one_d_time = [run_case_1d(nx=201, dt=dt_value) for dt_value in (0.02, 0.01, 0.005, 0.0025)]
     two_d_spatial = [run_case_2d(grid=grid, dt=0.01) for grid in (41, 61, 81)]
     # With Nx=Ny=121, dt=0.04 is outside the explicit RK4 diffusion limit. The
-    # time table therefore starts at dt=0.02, the largest practical stable value.
-    two_d_time = [run_case_2d(grid=121, dt=dt_value) for dt_value in (0.02, 0.01, 0.005, 0.0025)]
+    # time table therefore drops that unavailable row instead of replacing it.
+    two_d_time = [run_case_2d(grid=121, dt=dt_value) for dt_value in (0.02, 0.01, 0.005)]
 
     bundles = [
-        ("rk4_1d_spatial_comparison", "1D RK4 spatial comparison", one_d_spatial, ONE_D_COLUMNS),
-        ("rk4_1d_time_comparison", "1D RK4 time-step comparison", one_d_time, ONE_D_COLUMNS),
-        ("rk4_2d_spatial_comparison", "2D RK4 spatial comparison", two_d_spatial, TWO_D_COLUMNS),
-        ("rk4_2d_time_comparison", "2D RK4 time-step comparison", two_d_time, TWO_D_COLUMNS),
+        ("rk4_1d_spatial_comparison", "1D spatial comparison", one_d_spatial, ONE_D_COLUMNS, True),
+        ("rk4_1d_time_comparison", "1D time comparison", one_d_time, ONE_D_COLUMNS, True),
+        ("rk4_2d_spatial_comparison", "2D spatial comparison", two_d_spatial, TWO_D_COLUMNS, False),
+        ("rk4_2d_time_comparison", "2D time comparison", two_d_time, TWO_D_COLUMNS, False),
     ]
-    for name, title, rows, columns in bundles:
-        _write_table_bundle(name, title, rows, columns)
+    for name, title, rows, columns, show_index in bundles:
+        _write_table_bundle(name, title, rows, columns, show_index=show_index)
 
-    _write_combined_markdown((title, rows, columns) for _, title, rows, columns in bundles)
+    _write_combined_markdown((title, rows, columns) for _, title, rows, columns, _ in bundles)
 
     summary_rows: list[dict[str, object]] = []
     for rows in (one_d_spatial, one_d_time):
@@ -365,8 +388,15 @@ def main() -> None:
         for row in rows:
             summary_rows.append(
                 {
-                    key: row[key]
-                    for key in ("dim", "method", "Nx", "Ny", "dx", "dt", "Nt", "T", "Exact_Relative_L2_Error")
+                    "dim": "2D",
+                    "method": "rk4",
+                    "Nx": row["Nx"],
+                    "Ny": row["Ny"],
+                    "dx": row["dx"],
+                    "dt": row["dt"],
+                    "Nt": row["Nt"],
+                    "T": row["T"],
+                    "Exact_Relative_L2_Error": row["Exact_Relative_L2_Error"],
                 }
             )
     _write_csv(OUTPUT_DIR / "convergence_summary.csv", summary_rows, sorted({key for row in summary_rows for key in row}))

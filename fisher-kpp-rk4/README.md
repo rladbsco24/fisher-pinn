@@ -81,14 +81,13 @@ This writes RK4-based 1D/2D spatial-grid and time-step comparison tables under
 - `rk4_2d_time_comparison.{csv,md,png}`
 - `rk4_grid_comparison_tables.md`
 
-The table columns mirror the report-style numerical-method tables while using
-RK4-appropriate diagnostics. The PNG tables are rendered from pandas
-DataFrames with compact display labels, while the CSV and Markdown outputs keep
-the full metric names. Because RK4 has no Newton iteration, the tables report
-`rk4_stages_per_step = 4` and `stability_safe` instead of Newton iteration and
-nonlinear residual columns. For the 2D `Nx=Ny=121` time-step comparison,
-`dt=0.04` is excluded because it is outside the explicit RK4 diffusion stability
-estimate; the largest reported time step is `dt=0.02`.
+The table columns mirror the report-style pandas output used in the numerical
+method notes. Because RK4 has no Newton iteration or nonlinear solve residual,
+the Newton-specific columns are removed instead of being replaced by artificial
+RK4-only columns. The 1D PNG tables keep the DataFrame index column, while the
+2D PNG tables start directly at `Nx`, matching the reference table format. For
+the 2D `Nx=Ny=121` time-step comparison, `dt=0.04` is excluded because it is
+outside the explicit RK4 diffusion stability estimate.
 
 The default short benchmark follows the exact traveling-wave regimes used for
 direct numerical verification:

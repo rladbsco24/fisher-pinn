@@ -277,8 +277,12 @@ def test_required_rk4_grid_tables_are_wired_into_script_and_notebook() -> None:
     script_source = (REPO_ROOT / "scripts" / "run_convergence.py").read_text(encoding="utf-8")
     notebook_source = (REPO_ROOT / "notebooks" / "fisher_kpp_rk4_demo.ipynb").read_text(encoding="utf-8")
     preview_source = (REPO_ROOT.parent / "docs" / "figure_previews" / "README.md").read_text(encoding="utf-8")
-    assert "rk4_stages_per_step" in script_source
-    assert "stability_safe" in script_source
+    assert "avg_newton_iter" not in script_source
+    assert "max_residual" not in script_source
+    assert "rk4_stages_per_step" not in script_source
+    assert "stability_safe" not in script_source
+    assert '"min_U"' in script_source
+    assert '"mean_U"' in script_source
     for name in required_names:
         assert name in script_source
         assert name in notebook_source
