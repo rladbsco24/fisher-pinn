@@ -265,3 +265,21 @@ def test_required_2d_report_figures_are_wired_into_script_and_notebook() -> None
         assert "centerline_2d_exact_wave.png" in source
     for name in required_names:
         assert f"rk4_report_{name}" in preview_source
+
+
+def test_required_rk4_grid_tables_are_wired_into_script_and_notebook() -> None:
+    required_names = [
+        "rk4_1d_spatial_comparison.png",
+        "rk4_1d_time_comparison.png",
+        "rk4_2d_spatial_comparison.png",
+        "rk4_2d_time_comparison.png",
+    ]
+    script_source = (REPO_ROOT / "scripts" / "run_convergence.py").read_text(encoding="utf-8")
+    notebook_source = (REPO_ROOT / "notebooks" / "fisher_kpp_rk4_demo.ipynb").read_text(encoding="utf-8")
+    preview_source = (REPO_ROOT.parent / "docs" / "figure_previews" / "README.md").read_text(encoding="utf-8")
+    assert "rk4_stages_per_step" in script_source
+    assert "stability_safe" in script_source
+    for name in required_names:
+        assert name in script_source
+        assert name in notebook_source
+        assert f"rk4_table_{name.removeprefix('rk4_')}" in preview_source
