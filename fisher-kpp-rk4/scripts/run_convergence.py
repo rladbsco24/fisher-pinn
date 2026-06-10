@@ -44,6 +44,35 @@ REQUIRED_TABLE_PNGS = [
     "rk4_2d_spatial_comparison.png",
     "rk4_2d_time_comparison.png",
 ]
+PNG_COLUMN_LABELS = {
+    "runtime_sec": "runtime\n(sec)",
+    "rk4_stages_per_step": "RK4\nstages",
+    "stability_safe": "stable",
+    "min_u": "min u",
+    "max_u": "max u",
+    "mean_u": "mean u",
+    "AZ_Relative_L2_Error": "AZ rel.\nL2 error",
+    "Exact_Relative_L2_Error": "exact rel.\nL2 error",
+}
+PNG_COLUMN_WEIGHTS = {
+    "dim": 0.58,
+    "method": 0.70,
+    "Nx": 0.58,
+    "Ny": 0.58,
+    "dx": 0.70,
+    "dy": 0.70,
+    "dt": 0.76,
+    "Nt": 0.70,
+    "T": 0.58,
+    "runtime_sec": 1.05,
+    "rk4_stages_per_step": 0.80,
+    "stability_safe": 0.72,
+    "min_u": 0.92,
+    "max_u": 0.82,
+    "mean_u": 0.92,
+    "AZ_Relative_L2_Error": 1.28,
+    "Exact_Relative_L2_Error": 1.36,
+}
 
 ONE_D_COLUMNS = [
     "dim",
@@ -231,40 +260,62 @@ def _print_console_table(title: str, rows: list[dict[str, object]], columns: lis
 def _write_png_table(path: Path, title: str, rows: list[dict[str, object]], columns: list[str]) -> None:
     try:
         import matplotlib.pyplot as plt
+        import pandas as pd
     except ImportError:
         return
 
-    data = [[_format_value(row.get(column, "")) for column in columns] for row in rows]
-    width = max(12.0, 0.70 * len(columns))
-    height = max(2.4, 0.48 * (len(rows) + 2))
+    labels = [PNG_COLUMN_LABELS.get(column, column) for column in columns]
+    data = [{label: _format_value(row.get(column, "")) for label, column in zip(labels, columns)} for row in rows]
+    frame = pd.DataFrame(data, columns=labels)
+    weights = [PNG_COLUMN_WEIGHTS.get(column, 1.0) for column in columns]
+    total_weight = sum(weights)
+    col_widths = [weight / total_weight for weight in weights]
+    width = max(14.0, 1.08 * total_weight)
+    height = max(2.85, 0.62 * (len(rows) + 2))
     fig, ax = plt.subplots(figsize=(width, height))
     fig.patch.set_facecolor("#24272a")
     ax.set_facecolor("#24272a")
     ax.axis("off")
-    ax.set_title(title, color="#f2f2f2", fontsize=13, fontfamily="monospace", pad=12, loc="left")
+    fig.text(
+        0.015,
+        0.955,
+        title,
+        color="#f2f2f2",
+        fontsize=13,
+        fontfamily="monospace",
+        fontweight="bold",
+        va="top",
+    )
+    ax.set_position([0.012, 0.055, 0.976, 0.79])
     table = ax.table(
-        cellText=data,
-        colLabels=columns,
+        cellText=frame.to_numpy(),
+        colLabels=list(frame.columns),
+        colWidths=col_widths,
         cellLoc="right",
-        colLoc="right",
-        loc="center",
+        colLoc="center",
+        bbox=[0.0, 0.0, 1.0, 1.0],
     )
     table.auto_set_font_size(False)
-    table.set_fontsize(8.2)
-    table.scale(1.0, 1.42)
-    for (row_idx, _col_idx), cell in table.get_celld().items():
+    for (row_idx, col_idx), cell in table.get_celld().items():
+        cell.PAD = 0.026
         cell.set_edgecolor("#24272a")
+        cell.set_linewidth(1.0)
         cell.get_text().set_fontfamily("monospace")
+        cell.get_text().set_clip_on(False)
         if row_idx == 0:
             cell.set_facecolor("#24272a")
             cell.get_text().set_color("#f2f2f2")
             cell.get_text().set_weight("bold")
+            cell.get_text().set_fontsize(8.0)
+            cell.get_text().set_ha("center")
         else:
             cell.set_facecolor("#4a4a4a" if row_idx % 2 else "#282b2e")
             cell.get_text().set_color("#e5e5e5")
-    fig.tight_layout()
+            cell.get_text().set_fontsize(8.1)
+            if columns[col_idx] in {"dim", "method", "stability_safe"}:
+                cell.get_text().set_ha("center")
     path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(path, dpi=220, facecolor=fig.get_facecolor(), bbox_inches="tight")
+    fig.savefig(path, dpi=240, facecolor=fig.get_facecolor(), bbox_inches="tight", pad_inches=0.08)
     plt.close(fig)
 
 

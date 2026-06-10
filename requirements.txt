@@ -1,6 +1,7 @@
 numpy>=1.26,<3
 torch>=2.2
 matplotlib>=3.8
+pandas>=2.2
 pillow>=10
 pyproj>=3.5
 pytest>=8
