@@ -14,7 +14,7 @@ import torch
 from matplotlib.path import Path as MplPath
 
 from .config import DomainConfig, PDEConfig, SeedConfig, shared_geo_forward_model_config
-from .losses import boundary_neumann_loss, spatial_coefficient_regularization_loss
+from .losses import boundary_neumann_loss, observed_support_tversky_loss, spatial_coefficient_regularization_loss
 from .models import OriginPINN
 
 
@@ -987,37 +987,6 @@ def _korea_anisotropic_pde_residual(
     return u_t - diffusion_flux - reaction * u * (1.0 - u)
 
 
-def _soft_observed_support_loss(
-    pred: torch.Tensor,
-    target: torch.Tensor,
-    *,
-    thresholds: tuple[float, ...] = (0.05, 0.10),
-    temperature: float = 0.025,
-    false_positive_weight: float = 0.20,
-    false_negative_weight: float = 0.80,
-    focal_gamma: float = 1.0,
-) -> torch.Tensor:
-    """Observed-support Tversky loss biased toward reducing missed infection cells."""
-
-    if not thresholds:
-        return torch.zeros((), dtype=pred.dtype, device=pred.device)
-    temp = max(float(temperature), 1.0e-4)
-    alpha = max(float(false_positive_weight), 1.0e-6)
-    beta = max(float(false_negative_weight), 1.0e-6)
-    gamma = max(float(focal_gamma), 1.0e-6)
-    eps = torch.as_tensor(1.0e-6, dtype=pred.dtype, device=pred.device)
-    losses = []
-    for threshold in thresholds:
-        pred_support = torch.sigmoid((pred - float(threshold)) / temp)
-        target_support = torch.sigmoid((target - float(threshold)) / temp).detach()
-        true_positive = torch.sum(pred_support * target_support)
-        false_positive = torch.sum(pred_support * (1.0 - target_support))
-        false_negative = torch.sum((1.0 - pred_support) * target_support)
-        score = (true_positive + eps) / (true_positive + alpha * false_positive + beta * false_negative + eps)
-        losses.append((1.0 - score.clamp(0.0, 1.0)).pow(gamma))
-    return torch.stack(losses).mean()
-
-
 def _korea_mass_trajectory_loss(
     model: OriginPINN,
     grid_xy: torch.Tensor,
@@ -1343,7 +1312,7 @@ def fit_korea_pine_wilt_pinn(
         else:
             sea_loss = torch.zeros((), device=device_obj)
         if support_weight > 0.0:
-            support_loss = _soft_observed_support_loss(
+            support_loss = observed_support_tversky_loss(
                 pred,
                 values[idx],
                 temperature=support_temperature,

@@ -76,6 +76,7 @@ from fisher_origin_lab.losses import (
     leading_edge_distribution_loss,
     leading_edge_floor_loss,
     mass_floor_trajectory_loss,
+    observed_support_tversky_loss,
     parabolic_mass_balance_loss,
     pde_residual,
     radial_symmetry_loss,
@@ -397,6 +398,10 @@ def test_expected_front_losses_are_finite() -> None:
     area_loss = leading_edge_area_loss(model, n_times=3, grid=8, device=torch.device("cpu"))
     distribution_loss = leading_edge_distribution_loss(model, n_times=3, grid=8, device=torch.device("cpu"))
     symmetry_loss = radial_symmetry_loss(model, groups=4, angles=5, device=torch.device("cpu"))
+    observed_support = observed_support_tversky_loss(
+        torch.tensor([[0.02], [0.12], [0.20]], dtype=torch.float32),
+        torch.tensor([[0.00], [0.10], [0.25]], dtype=torch.float32),
+    )
     support_loss = front_support_tversky_loss(model, n_times=3, grid=8, device=torch.device("cpu"))
     contrast_loss = front_area_contrast_loss(model, n_times=3, grid=8, device=torch.device("cpu"))
     profile_loss = front_profile_alignment_loss(model, n=24, device=torch.device("cpu"))
@@ -414,6 +419,7 @@ def test_expected_front_losses_are_finite() -> None:
     assert torch.isfinite(area_loss)
     assert torch.isfinite(distribution_loss)
     assert torch.isfinite(symmetry_loss)
+    assert torch.isfinite(observed_support)
     assert torch.isfinite(support_loss)
     assert torch.isfinite(contrast_loss)
     assert torch.isfinite(profile_loss)
@@ -628,6 +634,7 @@ def test_geo_spectral_forward_profile_extends_korea_setup() -> None:
     assert cfg.weights.front_speed > 0.0
     assert cfg.weights.mass_balance > 0.0
     assert cfg.weights.mass_floor > 0.0
+    assert cfg.weights.observation_support == 0.0
     assert cfg.weights.expected_front_pde == 0.0
     assert cfg.weights.leading_edge > 0.0
     assert cfg.weights.leading_edge_area > 0.0

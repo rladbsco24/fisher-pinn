@@ -348,6 +348,7 @@ def save_training_diagnostics_figure(
     for key, color in [
         ("total", COLORS["blue"]),
         ("data", COLORS["olive"]),
+        ("observation_support", COLORS["rose"]),
         ("validation_data", COLORS["blue_light"]),
         ("pde", COLORS["orange"]),
         ("ic", COLORS["gold"]),

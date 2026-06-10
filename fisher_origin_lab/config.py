@@ -101,6 +101,7 @@ class LossWeights:
     seed_mass: float = 0.25
     source_anchor: float = 2.0
     shooting: float = 5.0
+    observation_support: float = 0.0
     gradient: float = 0.01
     data_density_gain: float = 0.0
     front_pde_alpha: float = 0.0
@@ -231,6 +232,10 @@ class TrainConfig:
     adaptive_loss_min: float = 0.25
     adaptive_loss_max: float = 4.0
     validation_every: int = 50
+    observation_support_temperature: float = 0.025
+    observation_support_false_positive_weight: float = 0.20
+    observation_support_false_negative_weight: float = 0.80
+    observation_support_focal_gamma: float = 1.0
     restore_best_validation: bool = True
     resume_from_checkpoint: bool = True
     training_checkpoint_every: int = 1
@@ -370,6 +375,7 @@ class ExperimentConfig:
                 seed_mass=self.weights.seed_mass,
                 source_anchor=self.weights.source_anchor,
                 shooting=self.weights.shooting,
+                observation_support=self.weights.observation_support,
                 gradient=0.0,
                 data_density_gain=self.weights.data_density_gain,
                 front_pde_alpha=self.weights.front_pde_alpha,
@@ -434,6 +440,10 @@ class ExperimentConfig:
                 adaptive_loss_min=self.train.adaptive_loss_min,
                 adaptive_loss_max=self.train.adaptive_loss_max,
                 validation_every=30,
+                observation_support_temperature=self.train.observation_support_temperature,
+                observation_support_false_positive_weight=self.train.observation_support_false_positive_weight,
+                observation_support_false_negative_weight=self.train.observation_support_false_negative_weight,
+                observation_support_focal_gamma=self.train.observation_support_focal_gamma,
                 restore_best_validation=self.train.restore_best_validation,
                 front_speed_points=min(self.train.front_speed_points, 128),
                 front_speed_max_points=min(self.train.front_speed_max_points, 64),
@@ -642,6 +652,7 @@ class ExperimentConfig:
                 seed_mass=0.0,
                 source_anchor=0.0,
                 shooting=0.0,
+                observation_support=0.0,
                 gradient=0.0,
                 data_density_gain=4.0,
                 front_pde_alpha=2.0,
