@@ -786,11 +786,21 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             initial_condition_weight=getattr(args, "pinn_initial_condition_weight", 16.0),
             initial_condition_points=getattr(args, "pinn_initial_condition_points", 2048),
             sea_weight=getattr(args, "pinn_sea_weight", 2.0),
+            support_weight=getattr(args, "pinn_support_weight", 1.5),
+            support_temperature=getattr(args, "pinn_support_temperature", 0.025),
+            support_false_positive_weight=getattr(args, "pinn_support_false_positive_weight", 0.20),
+            support_false_negative_weight=getattr(args, "pinn_support_false_negative_weight", 0.80),
+            mass_trajectory_weight=getattr(args, "pinn_mass_trajectory_weight", 0.75),
+            mass_trajectory_points=getattr(args, "pinn_mass_trajectory_points", 2048),
+            mass_trajectory_times=getattr(args, "pinn_mass_trajectory_times", 4),
             diffusion=diffusion,
             reaction=float(pinn_initial_reaction),
             physics_anchor_weight=getattr(args, "pinn_physics_anchor_weight", 0.08),
             coefficient_field_weight=getattr(args, "pinn_coefficient_field_weight", 0.02),
             physics_length_scale_mode=length_scale_mode,
+            checkpoint_path=out_dir / "korea_pinn_latest.pt",
+            resume_from_checkpoint=not getattr(args, "no_pinn_resume", False),
+            checkpoint_every=getattr(args, "pinn_checkpoint_every", 1),
             seed=getattr(args, "seed", 7),
         )
         baseline_rows.extend(dict(method="pinn", **row) for row in pinn_result.metrics)
@@ -945,8 +955,18 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             "sea_weight": float(getattr(args, "pinn_sea_weight", 2.0)),
             "initial_condition_weight": float(getattr(args, "pinn_initial_condition_weight", 16.0)),
             "initial_condition_points": int(getattr(args, "pinn_initial_condition_points", 2048)),
+            "support_weight": float(getattr(args, "pinn_support_weight", 1.5)),
+            "support_temperature": float(getattr(args, "pinn_support_temperature", 0.025)),
+            "support_false_positive_weight": float(getattr(args, "pinn_support_false_positive_weight", 0.20)),
+            "support_false_negative_weight": float(getattr(args, "pinn_support_false_negative_weight", 0.80)),
+            "mass_trajectory_weight": float(getattr(args, "pinn_mass_trajectory_weight", 0.75)),
+            "mass_trajectory_points": int(getattr(args, "pinn_mass_trajectory_points", 2048)),
+            "mass_trajectory_times": int(getattr(args, "pinn_mass_trajectory_times", 4)),
             "physics_anchor_weight": float(getattr(args, "pinn_physics_anchor_weight", 0.08)),
             "coefficient_field_weight": float(getattr(args, "pinn_coefficient_field_weight", 0.02)),
+            "resume_from_checkpoint": not bool(getattr(args, "no_pinn_resume", False)),
+            "checkpoint_every": int(getattr(args, "pinn_checkpoint_every", 1)),
+            "checkpoint_path": "korea_pinn_latest.pt",
             **pinn_summary,
             "history": pinn_result.history,
         }
@@ -991,9 +1011,18 @@ def main() -> None:
     parser.add_argument("--pinn-initial-condition-weight", type=float, default=16.0)
     parser.add_argument("--pinn-initial-condition-points", type=int, default=2048)
     parser.add_argument("--pinn-sea-weight", type=float, default=2.0)
+    parser.add_argument("--pinn-support-weight", type=float, default=1.5)
+    parser.add_argument("--pinn-support-temperature", type=float, default=0.025)
+    parser.add_argument("--pinn-support-false-positive-weight", type=float, default=0.20)
+    parser.add_argument("--pinn-support-false-negative-weight", type=float, default=0.80)
+    parser.add_argument("--pinn-mass-trajectory-weight", type=float, default=0.75)
+    parser.add_argument("--pinn-mass-trajectory-points", type=int, default=2048)
+    parser.add_argument("--pinn-mass-trajectory-times", type=int, default=4)
     parser.add_argument("--pinn-initial-reaction", type=float, default=None)
     parser.add_argument("--pinn-physics-anchor-weight", type=float, default=0.08)
     parser.add_argument("--pinn-coefficient-field-weight", type=float, default=0.02)
+    parser.add_argument("--no-pinn-resume", action="store_true", help="Disable resume from output-dir/korea_pinn_latest.pt.")
+    parser.add_argument("--pinn-checkpoint-every", type=int, default=1, help="Save Korea PINN training state every N epochs.")
     parser.add_argument("--map-gif-fps", type=float, default=1.2)
     parser.add_argument("--map-gif-max-frames", type=int, default=15)
     parser.add_argument("--seed", type=int, default=7)

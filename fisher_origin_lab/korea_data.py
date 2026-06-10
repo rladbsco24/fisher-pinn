@@ -3,6 +3,8 @@ from __future__ import annotations
 import csv
 import gzip
 import json
+import signal
+import time
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
@@ -985,6 +987,136 @@ def _korea_anisotropic_pde_residual(
     return u_t - diffusion_flux - reaction * u * (1.0 - u)
 
 
+def _soft_observed_support_loss(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    *,
+    thresholds: tuple[float, ...] = (0.05, 0.10),
+    temperature: float = 0.025,
+    false_positive_weight: float = 0.20,
+    false_negative_weight: float = 0.80,
+    focal_gamma: float = 1.0,
+) -> torch.Tensor:
+    """Observed-support Tversky loss biased toward reducing missed infection cells."""
+
+    if not thresholds:
+        return torch.zeros((), dtype=pred.dtype, device=pred.device)
+    temp = max(float(temperature), 1.0e-4)
+    alpha = max(float(false_positive_weight), 1.0e-6)
+    beta = max(float(false_negative_weight), 1.0e-6)
+    gamma = max(float(focal_gamma), 1.0e-6)
+    eps = torch.as_tensor(1.0e-6, dtype=pred.dtype, device=pred.device)
+    losses = []
+    for threshold in thresholds:
+        pred_support = torch.sigmoid((pred - float(threshold)) / temp)
+        target_support = torch.sigmoid((target - float(threshold)) / temp).detach()
+        true_positive = torch.sum(pred_support * target_support)
+        false_positive = torch.sum(pred_support * (1.0 - target_support))
+        false_negative = torch.sum((1.0 - pred_support) * target_support)
+        score = (true_positive + eps) / (true_positive + alpha * false_positive + beta * false_negative + eps)
+        losses.append((1.0 - score.clamp(0.0, 1.0)).pow(gamma))
+    return torch.stack(losses).mean()
+
+
+def _korea_mass_trajectory_loss(
+    model: OriginPINN,
+    grid_xy: torch.Tensor,
+    observed_means: torch.Tensor,
+    observed_times: torch.Tensor,
+    *,
+    points: int,
+    times_per_epoch: int,
+    device: torch.device,
+    land_xy: torch.Tensor | None = None,
+) -> torch.Tensor:
+    if points <= 0 or times_per_epoch <= 0 or len(observed_times) == 0:
+        return torch.zeros((), device=device)
+    xy_pool = land_xy if land_xy is not None and len(land_xy) > 0 else grid_xy
+    n_times = min(int(times_per_epoch), len(observed_times))
+    chosen_times = torch.randperm(len(observed_times), device=device)[:n_times]
+    n_points = min(int(points), len(xy_pool))
+    if n_points <= 0:
+        return torch.zeros((), device=device)
+    losses = []
+    for time_idx in chosen_times:
+        point_idx = torch.randint(0, len(xy_pool), (n_points,), device=device)
+        xy = xy_pool[point_idx]
+        t = observed_times[time_idx].expand(n_points, 1)
+        pred_mean = model(xy, t).mean()
+        target_mean = observed_means[time_idx]
+        scale = target_mean.detach().abs().clamp_min(1.0e-3)
+        losses.append(((pred_mean - target_mean) / scale).pow(2))
+    return torch.stack(losses).mean()
+
+
+def _torch_load_korea_checkpoint(path: Path, device: torch.device) -> dict[str, object]:
+    try:
+        return torch.load(path, map_location=device, weights_only=False)
+    except TypeError:
+        return torch.load(path, map_location=device)
+
+
+def _save_korea_training_checkpoint(
+    path: Path,
+    *,
+    epoch: int,
+    model: OriginPINN,
+    optimizer: torch.optim.Optimizer,
+    history: list[dict[str, float]],
+    elapsed_sec: float,
+    reason: str,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "version": 1,
+        "reason": reason,
+        "saved_at_epoch": int(epoch),
+        "model_state": {name: value.detach().cpu() for name, value in model.state_dict().items()},
+        "optimizer_state": optimizer.state_dict(),
+        "history": history,
+        "elapsed_sec": float(elapsed_sec),
+        "torch_rng_state": torch.random.get_rng_state(),
+        "cuda_rng_state_all": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+        "numpy_rng_state": np.random.get_state(),
+    }
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    torch.save(payload, tmp_path)
+    for attempt in range(8):
+        try:
+            tmp_path.replace(path)
+            break
+        except PermissionError:
+            if attempt == 7:
+                raise
+            time.sleep(0.25 * (attempt + 1))
+
+
+def _load_korea_training_checkpoint(
+    path: Path,
+    *,
+    model: OriginPINN,
+    optimizer: torch.optim.Optimizer,
+    device: torch.device,
+) -> dict[str, object] | None:
+    if not path.exists():
+        return None
+    payload = _torch_load_korea_checkpoint(path, device)
+    model.load_state_dict(payload["model_state"])
+    optimizer.load_state_dict(payload["optimizer_state"])
+    torch_state = payload.get("torch_rng_state")
+    if isinstance(torch_state, torch.Tensor):
+        torch.random.set_rng_state(torch_state.detach().cpu())
+    cuda_states = payload.get("cuda_rng_state_all")
+    if cuda_states is not None and torch.cuda.is_available():
+        torch.cuda.set_rng_state_all(
+            [state.detach().cpu().to(torch.uint8) for state in cuda_states if isinstance(state, torch.Tensor)]
+        )
+    numpy_state = payload.get("numpy_rng_state")
+    if numpy_state is not None:
+        np.random.set_state(numpy_state)
+    return payload
+
+
 def predict_korea_pinn_fields(
     model: OriginPINN,
     grid: KoreaPineWiltGrid,
@@ -1035,11 +1167,21 @@ def fit_korea_pine_wilt_pinn(
     initial_condition_weight: float = 16.0,
     initial_condition_points: int = 2048,
     sea_weight: float = 2.0,
+    support_weight: float = 1.5,
+    support_temperature: float = 0.025,
+    support_false_positive_weight: float = 0.20,
+    support_false_negative_weight: float = 0.80,
+    mass_trajectory_weight: float = 0.75,
+    mass_trajectory_points: int = 2048,
+    mass_trajectory_times: int = 4,
     diffusion: float = 0.0015,
     reaction: float = 0.20,
     physics_anchor_weight: float = 0.08,
     coefficient_field_weight: float = 0.02,
     physics_length_scale_mode: str = "max_extent",
+    checkpoint_path: Path | None = None,
+    resume_from_checkpoint: bool = True,
+    checkpoint_every: int = 1,
     seed: int = 7,
     device: str | torch.device | None = None,
 ) -> KoreaPineWiltPINNResult:
@@ -1111,6 +1253,12 @@ def fit_korea_pine_wilt_pinn(
     initial_xy = torch.tensor(grid_xy_np, dtype=torch.float32, device=device_obj)
     initial_values = torch.tensor(grid.density[0].reshape(-1, 1), dtype=torch.float32, device=device_obj)
     initial_density_weight = 1.0 + 12.0 * initial_values.detach()
+    observed_times = torch.tensor(grid_times.reshape(-1, 1), dtype=torch.float32, device=device_obj)
+    if grid.land_mask is not None:
+        observed_means_np = np.asarray([field[grid.land_mask].mean() for field in grid.density], dtype=np.float32)
+    else:
+        observed_means_np = np.asarray([field.mean() for field in grid.density], dtype=np.float32)
+    observed_means = torch.tensor(observed_means_np.reshape(-1, 1), dtype=torch.float32, device=device_obj)
     sea_flags = None
     land_xy = None
     if grid.land_mask is not None:
@@ -1125,8 +1273,59 @@ def fit_korea_pine_wilt_pinn(
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     n_obs = len(xyt)
     history: list[dict[str, float]] = []
+    start_epoch = 1
+    elapsed_offset = 0.0
+    checkpoint_payload = None
+    if checkpoint_path is not None and resume_from_checkpoint and checkpoint_path.exists():
+        checkpoint_payload = _load_korea_training_checkpoint(
+            checkpoint_path,
+            model=model,
+            optimizer=optimizer,
+            device=device_obj,
+        )
+        history = list(checkpoint_payload.get("history", []))
+        start_epoch = min(int(checkpoint_payload.get("saved_at_epoch", 0)) + 1, int(epochs) + 1)
+        elapsed_offset = float(checkpoint_payload.get("elapsed_sec", 0.0))
+        print(f"resuming Korea PINN checkpoint: {checkpoint_path} epoch={start_epoch - 1}")
 
-    for epoch in range(1, int(epochs) + 1):
+    start_time = datetime.now().timestamp() - elapsed_offset
+    last_completed_epoch = start_epoch - 1
+    previous_sigint_handler = None
+    sigint_handler_installed = False
+
+    def _elapsed() -> float:
+        return float(datetime.now().timestamp() - start_time)
+
+    def _save_latest(reason: str) -> None:
+        if checkpoint_path is None or not resume_from_checkpoint:
+            return
+        _save_korea_training_checkpoint(
+            checkpoint_path,
+            epoch=max(0, int(last_completed_epoch)),
+            model=model,
+            optimizer=optimizer,
+            history=history,
+            elapsed_sec=_elapsed(),
+            reason=reason,
+        )
+
+    def _handle_sigint(signum, frame) -> None:  # noqa: ANN001
+        try:
+            _save_latest("sigint")
+            print(f"saved Korea interrupt checkpoint: {checkpoint_path} epoch={last_completed_epoch}")
+        finally:
+            raise KeyboardInterrupt
+
+    if checkpoint_path is not None and resume_from_checkpoint:
+        try:
+            previous_sigint_handler = signal.getsignal(signal.SIGINT)
+            signal.signal(signal.SIGINT, _handle_sigint)
+            sigint_handler_installed = True
+        except ValueError:
+            sigint_handler_installed = False
+
+    for epoch in range(start_epoch, int(epochs) + 1):
+        last_completed_epoch = epoch - 1
         model.train()
         idx = torch.randint(0, n_obs, (min(batch_size, n_obs),), device=device_obj)
         pred = model(xyt[idx, :2], xyt[idx, 2:3])
@@ -1144,6 +1343,16 @@ def fit_korea_pine_wilt_pinn(
             sea_loss = torch.sum(sea_batch * pred**2) / torch.clamp(sea_batch.sum(), min=1.0)
         else:
             sea_loss = torch.zeros((), device=device_obj)
+        if support_weight > 0.0:
+            support_loss = _soft_observed_support_loss(
+                pred,
+                values[idx],
+                temperature=support_temperature,
+                false_positive_weight=support_false_positive_weight,
+                false_negative_weight=support_false_negative_weight,
+            )
+        else:
+            support_loss = torch.zeros((), device=device_obj)
 
         if land_xy is not None and len(land_xy) > 0:
             col_idx = torch.randint(0, len(land_xy), (collocation_points,), device=device_obj)
@@ -1179,6 +1388,19 @@ def fit_korea_pine_wilt_pinn(
             )
         else:
             coefficient_field_loss = torch.zeros((), device=device_obj)
+        if mass_trajectory_weight > 0.0:
+            mass_trajectory_loss = _korea_mass_trajectory_loss(
+                model,
+                initial_xy,
+                observed_means,
+                observed_times,
+                points=mass_trajectory_points,
+                times_per_epoch=mass_trajectory_times,
+                device=device_obj,
+                land_xy=land_xy,
+            )
+        else:
+            mass_trajectory_loss = torch.zeros((), device=device_obj)
 
         loss = (
             data_weight * data_loss
@@ -1186,6 +1408,8 @@ def fit_korea_pine_wilt_pinn(
             + pde_weight * pde_loss
             + boundary_weight * bc_loss
             + sea_weight * sea_loss
+            + support_weight * support_loss
+            + mass_trajectory_weight * mass_trajectory_loss
             + physics_anchor_weight * physics_anchor
             + coefficient_field_weight * coefficient_field_loss
         )
@@ -1203,6 +1427,8 @@ def fit_korea_pine_wilt_pinn(
                     "pde": float(pde_loss.detach().cpu()),
                     "boundary": float(bc_loss.detach().cpu()),
                     "sea": float(sea_loss.detach().cpu()),
+                    "support": float(support_loss.detach().cpu()),
+                    "mass_trajectory": float(mass_trajectory_loss.detach().cpu()),
                     "physics_anchor": float(physics_anchor.detach().cpu()),
                     "coefficient_field": float(coefficient_field_loss.detach().cpu()),
                     "diffusion": float(model.pde.diffusion().detach().cpu()),
@@ -1212,6 +1438,25 @@ def fit_korea_pine_wilt_pinn(
                     **model.coefficient_stats(xy_col[: min(len(xy_col), 512)]),
                 }
             )
+        last_completed_epoch = epoch
+        if (
+            checkpoint_path is not None
+            and resume_from_checkpoint
+            and checkpoint_every > 0
+            and (epoch % int(checkpoint_every) == 0 or epoch == int(epochs))
+        ):
+            _save_korea_training_checkpoint(
+                checkpoint_path,
+                epoch=epoch,
+                model=model,
+                optimizer=optimizer,
+                history=history,
+                elapsed_sec=_elapsed(),
+                reason="epoch_end",
+            )
+
+    if sigint_handler_installed:
+        signal.signal(signal.SIGINT, previous_sigint_handler)
 
     if grid.time_values is not None:
         pred_years = grid.years.astype(np.int16)
@@ -1263,6 +1508,13 @@ def fit_korea_pine_wilt_pinn(
         "prior_front_speed_km_per_year": float(physics_prior.front_speed_km_per_year),
         "physics_anchor_weight": float(physics_anchor_weight),
         "coefficient_field_weight": float(coefficient_field_weight),
+        "support_weight": float(support_weight),
+        "support_temperature": float(support_temperature),
+        "support_false_positive_weight": float(support_false_positive_weight),
+        "support_false_negative_weight": float(support_false_negative_weight),
+        "mass_trajectory_weight": float(mass_trajectory_weight),
+        "mass_trajectory_points": float(mass_trajectory_points),
+        "mass_trajectory_times": float(mass_trajectory_times),
         "length_scale_km": float(physics_prior.scale.length_scale_km),
         "length_scale_mode": physics_prior.scale.length_scale_mode,
     }

@@ -29,6 +29,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--preset", choices=["smoke", "quick", "full"], default="smoke")
     parser.add_argument("--seeds", default="7", help="Comma-separated random seeds.")
     parser.add_argument("--epochs", type=int, default=None, help="Override epochs per run.")
+    parser.add_argument("--no-resume", action="store_true", help="Disable training resume checkpoints.")
+    parser.add_argument("--checkpoint-every", type=int, default=1, help="Save training state every N epochs.")
     parser.add_argument("--max-cases", type=int, default=None)
     return parser.parse_args()
 
@@ -62,6 +64,14 @@ def _preset_config(args: argparse.Namespace) -> ExperimentConfig:
             cfg,
             train=replace(cfg.train, epochs=args.epochs, print_every=max(1, args.epochs // 4)),
         )
+    cfg = replace(
+        cfg,
+        train=replace(
+            cfg.train,
+            resume_from_checkpoint=not args.no_resume,
+            training_checkpoint_every=max(1, int(args.checkpoint_every)),
+        ),
+    )
     return cfg
 
 
@@ -172,7 +182,7 @@ def make_forward_cases(base: ExperimentConfig) -> list[dict[str, Any]]:
     )
     geo_rk4_teacher_front_area = replace(
         base,
-        weights=replace(base.weights, rk4_teacher=0.005),
+        weights=replace(base.weights, rk4_teacher=max(base.weights.rk4_teacher, 0.01)),
         train=replace(
             base.train,
             rk4_teacher_pool=max(base.train.rk4_teacher_pool, 4096),

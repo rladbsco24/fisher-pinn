@@ -509,11 +509,17 @@ def test_korea_pine_wilt_compact_dataset_and_rk4_smoke(tmp_path) -> None:
     assert np.isfinite(pinn.history[-1]["physics_anchor"])
     assert "coefficient_field" in pinn.history[-1]
     assert np.isfinite(pinn.history[-1]["coefficient_field"])
+    assert "support" in pinn.history[-1]
+    assert np.isfinite(pinn.history[-1]["support"])
+    assert "mass_trajectory" in pinn.history[-1]
+    assert np.isfinite(pinn.history[-1]["mass_trajectory"])
     assert "diffusion_km2_per_year" in pinn.physics
     assert "normalized_diffusion_x" in pinn.physics
     assert "normalized_diffusion_y" in pinn.physics
     assert "coefficient_field_weight" in pinn.physics
     assert "prior_diffusion_km2_per_year" in pinn.physics
+    assert "support_weight" in pinn.physics
+    assert "mass_trajectory_weight" in pinn.physics
 
     gif_info = _save_korea_map_baseline_gif(
         tmp_path / "korea_map_baselines.gif",
@@ -611,6 +617,7 @@ def test_geo_spectral_forward_profile_extends_korea_setup() -> None:
     assert cfg.weights.front_support_tversky > 0.0
     assert cfg.weights.level_set_alignment > 0.0
     assert cfg.weights.time_interface > 0.0
+    assert cfg.weights.rk4_teacher > 0.0
     assert cfg.weights.physics_parameter_anchor > 0.0
     assert cfg.weights.coefficient_field > 0.0
     assert cfg.weights.sparse > 0.0
@@ -636,6 +643,9 @@ def test_geo_spectral_forward_profile_extends_korea_setup() -> None:
     assert cfg.train.time_window_observations is True
     assert cfg.train.observation_batch > 0
     assert cfg.train.time_interface_points > 0
+    assert cfg.train.rk4_teacher_pool > 0
+    assert cfg.train.rk4_teacher_batch > 0
+    assert cfg.train.rk4_pretrain_steps > 0
     assert cfg.train.residual_curriculum_epochs > 0
     assert cfg.train.residual_weight_exponent_start < cfg.train.residual_weight_exponent_end
     assert cfg.train.pde_loss_warmup_fraction > 0.0

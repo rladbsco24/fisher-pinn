@@ -123,6 +123,11 @@ def make_feature_validation_pairs(base: ExperimentConfig) -> list[dict[str, Any]
         weights=replace(base.weights, coefficient_field=0.0),
     )
 
+    teacher_without = replace(
+        base,
+        weights=replace(base.weights, rk4_teacher=0.0),
+        train=replace(base.train, rk4_pretrain_steps=0, rk4_pretrain_batch=0),
+    )
     teacher_with = replace(
         base,
         weights=replace(base.weights, rk4_teacher=max(base.weights.rk4_teacher, 0.005)),
@@ -179,7 +184,7 @@ def make_feature_validation_pairs(base: ExperimentConfig) -> list[dict[str, Any]
         _pair(
             "rk4_teacher",
             "Weak RK4 teacher samples used as solver-assisted regularization.",
-            _variant("without_rk4_teacher", base, "RK4 teacher off", "no RK4 pseudo-label term"),
+            _variant("without_rk4_teacher", teacher_without, "RK4 teacher off", "no RK4 pseudo-label term"),
             _variant("with_rk4_teacher", teacher_with, "RK4 teacher on", "weak RK4 pseudo-label term enabled"),
         ),
     ]

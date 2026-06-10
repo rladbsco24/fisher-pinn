@@ -23,6 +23,26 @@ Detailed method explanation, literature rationale, observations, and interpretat
 maintained in `docs/fisher_kpp_pinn_and_korea_pinn_technical_note.docx` and
 `docs/fisher_kpp_rk4_pde_technical_note.docx`.
 
+## Canonical Experiment Entrypoints
+
+The organized experiment front door is `experiments/`. It keeps the existing
+packages and Colab notebooks compatible while making the main research regimes
+explicit:
+
+```bash
+python experiments\basic_pinn\run_zeppe_exact_1d.py --preset quick
+python experiments\basic_pinn\run_gaussian_moving_front_2d.py --preset quick
+python experiments\korea_pine_pinn\run_pine_pinn.py --preset quick
+python experiments\rk4_exact\run_all.py
+```
+
+The basic PINN track now has one entrypoint for the Ablowitz-Zeppetella exact
+1D traveling wave and one for the 2D Gaussian moving-front problem. The Korea
+pine-wilt track has a separate land-masked PINN/RK4 entrypoint. The RK4 track
+has exact-solution 1D, 2D, and 3D report-figure entrypoints. See
+`docs/REPOSITORY_STRUCTURE.md` for the repository layout and generated-output
+policy.
+
 ## Figure Preview Gallery
 
 Representative outputs from the current runnable scripts are committed in

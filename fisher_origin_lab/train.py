@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+import signal
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -81,6 +83,8 @@ class SingleRunResult:
     physics: dict[str, float]
     history: list[dict[str, float]]
     model: OriginPINN
+    checkpoint_epoch: int = 0
+    checkpoint_score: float | None = None
 
 
 def _bin_losses(
@@ -157,6 +161,187 @@ def _rk4_teacher_batch_loss(
         return torch.zeros((), device=device)
     teacher_pred = model(teacher_xyt[teacher_idx, :2], teacher_xyt[teacher_idx, 2:3])
     return _weighted_data_mse(teacher_pred, teacher_values[teacher_idx], density_gain)
+
+
+def _tensor_float(value: torch.Tensor | float | None) -> float:
+    if value is None:
+        return 0.0
+    if isinstance(value, torch.Tensor):
+        return float(value.detach().cpu())
+    return float(value)
+
+
+def _mean_positive(values: list[float]) -> float:
+    finite = [float(value) for value in values if math.isfinite(float(value))]
+    if not finite:
+        return 0.0
+    return float(sum(finite) / len(finite))
+
+
+def _log_score(value: float, *, scale: float = 1.0) -> float:
+    value = float(value)
+    if not math.isfinite(value):
+        return float("inf")
+    return math.log1p(scale * max(0.0, value))
+
+
+def _checkpoint_teacher_loss(
+    model: OriginPINN,
+    teacher_xyt: torch.Tensor | None,
+    teacher_values: torch.Tensor | None,
+    cfg: ExperimentConfig,
+    density_gain: float,
+) -> float:
+    if teacher_xyt is None or teacher_values is None or len(teacher_xyt) == 0:
+        return 0.0
+    late_start = max(0.0, cfg.domain.t_end * 0.65)
+    candidates = torch.where(teacher_xyt[:, 2] >= late_start - 1.0e-8)[0]
+    if len(candidates) == 0:
+        candidates = torch.arange(len(teacher_xyt), device=teacher_xyt.device)
+    n = min(512, len(candidates))
+    if n <= 0:
+        return 0.0
+    if n == len(candidates):
+        idx = candidates
+    else:
+        pick = torch.linspace(0, len(candidates) - 1, n, device=teacher_xyt.device).long()
+        idx = candidates[pick]
+    with torch.no_grad():
+        pred = model(teacher_xyt[idx, :2], teacher_xyt[idx, 2:3])
+        loss = _weighted_data_mse(pred, teacher_values[idx], density_gain)
+    return _tensor_float(loss)
+
+
+def _checkpoint_composite_score(
+    cfg: ExperimentConfig,
+    *,
+    validation_loss: float | None,
+    data_loss: torch.Tensor,
+    teacher_loss: float,
+    pde_loss_value: torch.Tensor,
+    ic_loss: torch.Tensor,
+    front_terms: list[torch.Tensor],
+    mass_terms: list[torch.Tensor],
+) -> tuple[float, dict[str, float]]:
+    validation_or_data = float(validation_loss) if validation_loss is not None else _tensor_float(data_loss)
+    front_proxy = _mean_positive([_tensor_float(term) for term in front_terms])
+    mass_proxy = _mean_positive([_tensor_float(term) for term in mass_terms])
+    parts = {
+        "validation": _log_score(validation_or_data, scale=50.0),
+        "teacher": _log_score(teacher_loss, scale=50.0),
+        "pde": _log_score(_tensor_float(pde_loss_value), scale=1.0),
+        "ic": _log_score(_tensor_float(ic_loss), scale=1.0),
+        "front": _log_score(front_proxy, scale=1.0),
+        "mass": _log_score(mass_proxy, scale=1.0),
+    }
+    score = (
+        cfg.train.checkpoint_validation_weight * parts["validation"]
+        + cfg.train.checkpoint_teacher_weight * parts["teacher"]
+        + cfg.train.checkpoint_pde_weight * parts["pde"]
+        + cfg.train.checkpoint_initial_condition_weight * parts["ic"]
+        + cfg.train.checkpoint_front_weight * parts["front"]
+        + cfg.train.checkpoint_mass_weight * parts["mass"]
+    )
+    parts["score"] = float(score)
+    parts["raw_validation_or_data"] = validation_or_data
+    parts["raw_teacher"] = float(teacher_loss)
+    parts["raw_pde"] = _tensor_float(pde_loss_value)
+    parts["raw_front_proxy"] = front_proxy
+    parts["raw_mass_proxy"] = mass_proxy
+    return float(score), parts
+
+
+def _training_checkpoint_path(cfg: ExperimentConfig, run_seed: int) -> Path:
+    return cfg.out_dir / f"training_seed_{run_seed}_latest.pt"
+
+
+def _torch_load_checkpoint(path: Path, device: torch.device) -> dict[str, object]:
+    try:
+        return torch.load(path, map_location=device, weights_only=False)
+    except TypeError:
+        return torch.load(path, map_location=device)
+
+
+def _save_training_checkpoint(
+    path: Path,
+    *,
+    cfg: ExperimentConfig,
+    run_seed: int,
+    epoch: int,
+    model: OriginPINN,
+    optimizer: torch.optim.Optimizer,
+    history: list[dict[str, float]],
+    best_validation_loss: float,
+    best_checkpoint_score: float,
+    best_checkpoint_parts: dict[str, float],
+    best_epoch: int,
+    best_state: dict[str, torch.Tensor] | None,
+    rk4_pretrain_final_loss: float | None,
+    elapsed_sec: float,
+    reason: str,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "version": 1,
+        "reason": reason,
+        "saved_at_epoch": int(epoch),
+        "run_seed": int(run_seed),
+        "config": cfg.to_dict(),
+        "model_state": {name: value.detach().cpu() for name, value in model.state_dict().items()},
+        "optimizer_state": optimizer.state_dict(),
+        "history": history,
+        "best_validation_loss": float(best_validation_loss),
+        "best_checkpoint_score": float(best_checkpoint_score),
+        "best_checkpoint_parts": best_checkpoint_parts,
+        "best_epoch": int(best_epoch),
+        "best_state": (
+            {name: value.detach().cpu() for name, value in best_state.items()}
+            if best_state is not None
+            else None
+        ),
+        "rk4_pretrain_final_loss": rk4_pretrain_final_loss,
+        "elapsed_sec": float(elapsed_sec),
+        "torch_rng_state": torch.random.get_rng_state(),
+        "cuda_rng_state_all": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+        "numpy_rng_state": np.random.get_state(),
+    }
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    torch.save(payload, tmp_path)
+    for attempt in range(8):
+        try:
+            tmp_path.replace(path)
+            break
+        except PermissionError:
+            if attempt == 7:
+                raise
+            time.sleep(0.25 * (attempt + 1))
+
+
+def _load_training_checkpoint(
+    path: Path,
+    *,
+    model: OriginPINN,
+    optimizer: torch.optim.Optimizer | None,
+    device: torch.device,
+) -> dict[str, object] | None:
+    if not path.exists():
+        return None
+    payload = _torch_load_checkpoint(path, device)
+    model.load_state_dict(payload["model_state"])
+    if optimizer is not None and payload.get("optimizer_state") is not None:
+        optimizer.load_state_dict(payload["optimizer_state"])
+    torch_state = payload.get("torch_rng_state")
+    if isinstance(torch_state, torch.Tensor):
+        torch.random.set_rng_state(torch_state.detach().cpu())
+    cuda_states = payload.get("cuda_rng_state_all")
+    if cuda_states is not None and torch.cuda.is_available():
+        torch.cuda.set_rng_state_all(
+            [state.detach().cpu().to(torch.uint8) for state in cuda_states if isinstance(state, torch.Tensor)]
+        )
+    numpy_state = payload.get("numpy_rng_state")
+    if numpy_state is not None:
+        np.random.set_state(numpy_state)
+    return payload
 
 
 def _front_geometry_summary(
@@ -590,13 +775,30 @@ def train_single(
         warm_start = tensor_center(model)
     else:
         warm_start = _warm_start_center_from_observations(cfg, observations_xyt, observations_values)
+    if cfg.model.hard_initial_condition and not cfg.model.use_source_envelope and not is_az_benchmark:
+        # In known-IC forward runs the synthetic source is not inferred through SourceHead.
+        # Align the diagnostic source parameters with the enforced initial condition so
+        # origin metrics describe the forward setup instead of a stale neutral head.
+        warm_start = (cfg.seed.center_x, cfg.seed.center_y)
     print(f"warm_start mode={cfg.warm_start.mode} center=({warm_start[0]:.3f}, {warm_start[1]:.3f})")
     model.source.set_center(warm_start)
     warm_start_tensor = torch.tensor(warm_start, dtype=torch.float32, device=device)
     source_ids = {id(param) for param in model.source.parameters()}
     source_params = [param for param in model.parameters() if id(param) in source_ids]
     other_params = [param for param in model.parameters() if id(param) not in source_ids]
-    rk4_pretrain_final_loss = _pretrain_on_rk4_teacher(model, cfg, teacher_xyt, teacher_values, device)
+    resume_path = _training_checkpoint_path(cfg, run_seed)
+    resume_payload = None
+    if cfg.train.resume_from_checkpoint and resume_path.exists():
+        resume_payload = _load_training_checkpoint(resume_path, model=model, optimizer=None, device=device)
+        print(
+            f"resuming training checkpoint: {resume_path} "
+            f"epoch={int(resume_payload.get('saved_at_epoch', 0))}"
+        )
+    rk4_pretrain_final_loss = (
+        resume_payload.get("rk4_pretrain_final_loss")
+        if resume_payload is not None
+        else _pretrain_on_rk4_teacher(model, cfg, teacher_xyt, teacher_values, device)
+    )
     optimizer = torch.optim.Adam(
         [
             {"params": other_params, "lr": cfg.train.lr},
@@ -628,11 +830,73 @@ def train_single(
     )
     history: list[dict[str, float]] = []
     best_validation_loss = float("inf")
+    best_checkpoint_score = float("inf")
+    best_checkpoint_parts: dict[str, float] = {}
     best_state: dict[str, torch.Tensor] | None = None
     best_epoch = 0
-    start = time.time()
+    start_epoch = 1
+    elapsed_offset = 0.0
+    if resume_payload is not None:
+        if resume_payload.get("optimizer_state") is not None:
+            optimizer.load_state_dict(resume_payload["optimizer_state"])
+        history = list(resume_payload.get("history", []))
+        best_validation_loss = float(resume_payload.get("best_validation_loss", float("inf")))
+        best_checkpoint_score = float(resume_payload.get("best_checkpoint_score", float("inf")))
+        best_checkpoint_parts = dict(resume_payload.get("best_checkpoint_parts", {}))
+        loaded_best_state = resume_payload.get("best_state")
+        if loaded_best_state is not None:
+            best_state = {
+                name: value.detach().cpu().clone()
+                for name, value in loaded_best_state.items()
+            }
+        best_epoch = int(resume_payload.get("best_epoch", 0))
+        start_epoch = min(int(resume_payload.get("saved_at_epoch", 0)) + 1, cfg.train.epochs + 1)
+        elapsed_offset = float(resume_payload.get("elapsed_sec", 0.0))
+    min_checkpoint_epoch = max(1, int(math.ceil(cfg.train.epochs * cfg.train.checkpoint_min_epoch_fraction)))
+    start = time.time() - elapsed_offset
 
-    for epoch in range(1, cfg.train.epochs + 1):
+    last_completed_epoch = start_epoch - 1
+    previous_sigint_handler = None
+    sigint_handler_installed = False
+
+    def _save_latest_training_state(reason: str) -> None:
+        if not cfg.train.resume_from_checkpoint:
+            return
+        _save_training_checkpoint(
+            resume_path,
+            cfg=cfg,
+            run_seed=run_seed,
+            epoch=max(0, int(last_completed_epoch)),
+            model=model,
+            optimizer=optimizer,
+            history=history,
+            best_validation_loss=best_validation_loss,
+            best_checkpoint_score=best_checkpoint_score,
+            best_checkpoint_parts=best_checkpoint_parts,
+            best_epoch=best_epoch,
+            best_state=best_state,
+            rk4_pretrain_final_loss=rk4_pretrain_final_loss,
+            elapsed_sec=time.time() - start,
+            reason=reason,
+        )
+
+    def _handle_sigint(signum, frame) -> None:  # noqa: ANN001
+        try:
+            _save_latest_training_state("sigint")
+            print(f"saved interrupt checkpoint: {resume_path} epoch={last_completed_epoch}")
+        finally:
+            raise KeyboardInterrupt
+
+    if cfg.train.resume_from_checkpoint:
+        try:
+            previous_sigint_handler = signal.getsignal(signal.SIGINT)
+            signal.signal(signal.SIGINT, _handle_sigint)
+            sigint_handler_installed = True
+        except ValueError:
+            sigint_handler_installed = False
+
+    for epoch in range(start_epoch, cfg.train.epochs + 1):
+        last_completed_epoch = epoch - 1
         window_t_low, window_t_high = _time_window(cfg, epoch)
         optimizer.zero_grad()
         if cfg.train.observation_batch > 0 or cfg.train.time_window_observations:
@@ -997,13 +1261,51 @@ def train_single(
                 with torch.no_grad():
                     validation_pred = model(validation_xyt[:, :2], validation_xyt[:, 2:3])
                     validation_loss = float(torch.mean((validation_pred - validation_values) ** 2).detach().cpu())
-                if cfg.train.restore_best_validation and validation_loss < best_validation_loss:
+                teacher_checkpoint_loss = _checkpoint_teacher_loss(
+                    model,
+                    teacher_xyt,
+                    teacher_values,
+                    cfg,
+                    cfg.weights.data_density_gain,
+                )
+                checkpoint_score, checkpoint_parts = _checkpoint_composite_score(
+                    cfg,
+                    validation_loss=validation_loss,
+                    data_loss=data_loss,
+                    teacher_loss=teacher_checkpoint_loss,
+                    pde_loss_value=pde_loss_value,
+                    ic_loss=ic_loss,
+                    front_terms=[
+                        front_grad_loss,
+                        front_speed_loss,
+                        expected_front_loss,
+                        leading_edge_loss,
+                        leading_edge_area,
+                        front_contrast,
+                        front_profile,
+                        level_set_loss,
+                        front_support_tversky,
+                    ],
+                    mass_terms=[mass_loss, mass_floor_loss],
+                )
+                can_save_checkpoint = epoch >= min_checkpoint_epoch or epoch == cfg.train.epochs
+                if (
+                    cfg.train.restore_best_validation
+                    and can_save_checkpoint
+                    and checkpoint_score < best_checkpoint_score
+                ):
                     best_validation_loss = validation_loss
+                    best_checkpoint_score = checkpoint_score
+                    best_checkpoint_parts = checkpoint_parts
                     best_epoch = epoch
                     best_state = {
                         name: value.detach().cpu().clone()
                         for name, value in model.state_dict().items()
                     }
+            else:
+                teacher_checkpoint_loss = None
+                checkpoint_score = None
+                checkpoint_parts = {}
             center = tensor_center(model)
             row = {
                 "epoch": float(epoch),
@@ -1050,8 +1352,19 @@ def train_single(
             row.update(model.coefficient_stats(xy_col[: min(len(xy_col), 512)]))
             if validation_loss is not None:
                 row["validation_data"] = validation_loss
-                row["best_validation_data"] = best_validation_loss
+                row["best_validation_data"] = (
+                    float(best_validation_loss) if math.isfinite(best_validation_loss) else validation_loss
+                )
                 row["best_validation_epoch"] = float(best_epoch)
+                row["checkpoint_score"] = float(checkpoint_score)
+                row["best_checkpoint_score"] = (
+                    float(best_checkpoint_score) if math.isfinite(best_checkpoint_score) else 0.0
+                )
+                row["checkpoint_teacher"] = float(teacher_checkpoint_loss)
+                row["checkpoint_raw_pde"] = checkpoint_parts.get("raw_pde", 0.0)
+                row["checkpoint_raw_front_proxy"] = checkpoint_parts.get("raw_front_proxy", 0.0)
+                row["checkpoint_raw_mass_proxy"] = checkpoint_parts.get("raw_mass_proxy", 0.0)
+                row["checkpoint_min_epoch"] = float(min_checkpoint_epoch)
             if rk4_pretrain_final_loss is not None:
                 row["rk4_pretrain_final"] = rk4_pretrain_final_loss
             for name, value in adaptive_weights.items():
@@ -1065,13 +1378,42 @@ def train_single(
                 f"pde={row['pde']:.2e} rw_exp={row['residual_exponent']:.2f} "
                 f"origin_err={row['origin_error']:.3f}"
             )
+        last_completed_epoch = epoch
+        if (
+            cfg.train.resume_from_checkpoint
+            and cfg.train.training_checkpoint_every > 0
+            and (epoch % cfg.train.training_checkpoint_every == 0 or epoch == cfg.train.epochs)
+        ):
+            _save_training_checkpoint(
+                resume_path,
+                cfg=cfg,
+                run_seed=run_seed,
+                epoch=epoch,
+                model=model,
+                optimizer=optimizer,
+                history=history,
+                best_validation_loss=best_validation_loss,
+                best_checkpoint_score=best_checkpoint_score,
+                best_checkpoint_parts=best_checkpoint_parts,
+                best_epoch=best_epoch,
+                best_state=best_state,
+                rk4_pretrain_final_loss=rk4_pretrain_final_loss,
+                elapsed_sec=time.time() - start,
+                reason="epoch_end",
+            )
+
+    if sigint_handler_installed:
+        signal.signal(signal.SIGINT, previous_sigint_handler)
 
     if cfg.train.adam_to_lbfgs and cfg.train.lbfgs_steps > 0:
         _lbfgs_polish(model, cfg, observations_xyt, observations_values, sampler, device)
 
     if best_state is not None:
         model.load_state_dict({name: value.to(device) for name, value in best_state.items()})
-        print(f"restored best validation checkpoint: epoch={best_epoch} mse={best_validation_loss:.3e}")
+        print(
+            f"restored best composite checkpoint: epoch={best_epoch} "
+            f"score={best_checkpoint_score:.3e} validation_mse={best_validation_loss:.3e}"
+        )
 
     center = tensor_center(model)
     return SingleRunResult(
@@ -1081,6 +1423,8 @@ def train_single(
         physics=model.physics_dict(),
         history=history,
         model=model,
+        checkpoint_epoch=best_epoch,
+        checkpoint_score=best_checkpoint_score if math.isfinite(best_checkpoint_score) else None,
     )
 
 
@@ -1633,6 +1977,14 @@ def run_experiment(cfg: ExperimentConfig) -> dict[str, object]:
         "train_observation_count": int(len(train_observations.xyt)),
         "validation_observation_count": int(len(validation_observations.xyt)),
         "warm_start_mode": cfg.warm_start.mode,
+        "training_checkpoint": {
+            "resume_from_checkpoint": bool(cfg.train.resume_from_checkpoint),
+            "checkpoint_every": int(cfg.train.training_checkpoint_every),
+            "latest_paths": [
+                str(_training_checkpoint_path(cfg, run.seed))
+                for run in runs
+            ],
+        },
         "front_geometry": front_geometry,
         "pinn_evolution_gif": gif_diagnostics,
         "diagnostic_fields": str(diagnostic_fields_path),
@@ -1642,6 +1994,8 @@ def run_experiment(cfg: ExperimentConfig) -> dict[str, object]:
                 "seed": run.seed,
                 "origin": list(run.origin),
                 "origin_error": run.origin_error,
+                "checkpoint_epoch": run.checkpoint_epoch,
+                "checkpoint_score": run.checkpoint_score,
                 "physics": run.physics,
                 "history": run.history,
             }

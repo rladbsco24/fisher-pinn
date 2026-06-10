@@ -167,6 +167,15 @@ class TrainConfig:
     adaptive_loss_max: float = 4.0
     validation_every: int = 50
     restore_best_validation: bool = True
+    resume_from_checkpoint: bool = True
+    training_checkpoint_every: int = 1
+    checkpoint_min_epoch_fraction: float = 0.10
+    checkpoint_validation_weight: float = 0.45
+    checkpoint_teacher_weight: float = 0.20
+    checkpoint_pde_weight: float = 0.20
+    checkpoint_initial_condition_weight: float = 0.05
+    checkpoint_front_weight: float = 0.07
+    checkpoint_mass_weight: float = 0.03
     front_speed_points: int = 256
     front_speed_max_points: int = 128
     front_speed_min_grad: float = 1.0e-2
@@ -375,7 +384,7 @@ class ExperimentConfig:
                 rk4_teacher_pool=min(self.train.rk4_teacher_pool, 2048) if self.train.rk4_teacher_pool > 0 else 0,
                 rk4_teacher_batch=min(self.train.rk4_teacher_batch, 256) if self.train.rk4_teacher_batch > 0 else 0,
                 rk4_teacher_late_fraction=self.train.rk4_teacher_late_fraction,
-                rk4_pretrain_steps=min(self.train.rk4_pretrain_steps, 80)
+                rk4_pretrain_steps=min(self.train.rk4_pretrain_steps, 20)
                 if self.train.rk4_pretrain_steps > 0
                 else 0,
                 rk4_pretrain_batch=min(self.train.rk4_pretrain_batch, 256)
@@ -554,18 +563,18 @@ class ExperimentConfig:
                 front_gradient=0.005,
                 front_speed=0.01,
                 mass_balance=0.35,
-                mass_floor=0.15,
+                mass_floor=0.25,
                 expected_front_pde=0.0,
-                leading_edge=0.20,
-                leading_edge_area=0.75,
-                front_support_tversky=0.25,
-                front_contrast=0.10,
-                front_profile=0.15,
-                level_set_alignment=0.02,
+                leading_edge=0.25,
+                leading_edge_area=0.90,
+                front_support_tversky=0.45,
+                front_contrast=0.12,
+                front_profile=0.25,
+                level_set_alignment=0.05,
                 time_interface=0.01,
-                rk4_teacher=0.0,
-                physics_parameter_anchor=0.08,
-                coefficient_field=0.03,
+                rk4_teacher=0.01,
+                physics_parameter_anchor=0.20,
+                coefficient_field=0.05,
                 sparse=1.0e-5,
             ),
             warm_start=base.warm_start,
@@ -610,6 +619,12 @@ class ExperimentConfig:
                 observation_batch=512,
                 time_interface_points=256,
                 time_interface_width=0.015,
+                rk4_teacher_pool=8192,
+                rk4_teacher_batch=512,
+                rk4_teacher_late_fraction=0.50,
+                rk4_pretrain_steps=max(1, base.train.epochs // 12),
+                rk4_pretrain_batch=512,
+                rk4_pretrain_lr=1.0e-3,
             ),
             ensemble=base.ensemble,
             base_seed=base.base_seed,

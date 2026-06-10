@@ -282,24 +282,72 @@ PINN_PAGES: list[tuple[str, list[str], tuple[list[str], list[list[str]], list[fl
         ),
     ),
     (
-        "5. 기본 PINN 검증과 관찰 해석",
+        "5. 기본 PINN 검증, 주요 문제, 해결 방안",
         [
-            "현재 코드의 full run은 기본적으로 1200 epochs이며, quick run은 60 또는 120 epochs로 빠른 회귀 검증을 수행한다. README에 기록된 최근 60-epoch 검증은 `geo_spectral_forward().quick()`에서 weak RK4 teacher와 front-profile 조합을 사용했을 때 final_time_relative_l2 = 0.2682, validation_observation_mse = 5.49e-4, front_area_010_mae = 0.0119, mass_mae = 0.0025를 보였다.",
-            "같은 설정의 RK4 reference는 rk4_final_time_relative_l2 = 0.00465를 제공한다. 이 수치는 forward 적분 reference의 격자 정확도이며, PINN 결과는 continuous/inverse-capable surrogate가 관측, PDE residual, 계수, front geometry를 동시에 만족시키는 최적화 정확도다. 두 값은 같은 문제를 서로 다른 계산 형식으로 평가한다.",
-            "주요 관찰은 네 가지다. 첫째, front area와 mass metric은 field L2보다 front failure를 더 선명하게 드러낸다. 둘째, PINN error map은 active front 주변에서 가장 높은 정보를 제공한다. 셋째, support, contrast, mass floor, IC는 all-zero 해와 diffuse haze 해를 효과적으로 억제한다. 넷째, D/r 학습은 forward field와 front speed의 물리 일관성을 함께 추정하는 핵심 구성이다.",
+            "현재 코드의 full run은 기본적으로 1200 epochs이며, quick run은 60 또는 120 epochs로 빠른 회귀 검증을 수행한다. 최근 수정 전 full run은 D = 0.01959, r = 3.01315처럼 물리 계수는 목표값에 가깝게 맞췄지만 final-time relative L2 = 0.4135로 RK4 reference의 0.00147과는 큰 차이를 남겼다. 이 결과는 PINN이 계수와 질량을 맞추더라도 moving front의 phase와 final field shape를 별도로 제어해야 함을 보여준다.",
+            "가장 최근에 확인된 직접적인 학습 절차 문제는 best checkpoint 선택 기준이었다. 기존 구현은 validation observation MSE만 기준으로 모델을 복원했기 때문에, 1200 epochs를 학습하고도 epoch 1의 낮은 관측점 MSE checkpoint가 최종 모델로 선택될 수 있었다. 이 문제는 validation MSE, late-time RK4 teacher proxy, PDE residual, known initial condition, front proxy, mass proxy를 함께 보는 composite checkpoint score와 최소 checkpoint epoch 조건으로 수정했다.",
+            "주요 관찰은 front area와 mass metric이 field L2보다 front failure를 더 선명하게 드러낸다는 점이다. error map은 active front 주변에서 가장 높은 정보를 제공하며, support, contrast, mass floor, IC는 all-zero 해와 diffuse haze 해를 억제한다. D/r 학습은 forward field와 front speed의 물리 일관성을 함께 추정하는 핵심 구성이지만, Fisher-KPP front speed가 주로 2 sqrt(D r)에 의해 정해지므로 계수 식별성과 field profile 정렬은 별도 검증으로 관리한다.",
         ],
         (
-            ["지표", "해석"],
+            ["주요 문제", "원인", "해결 방안"],
             [
-                ["final-time L2", "전체장 forward 정확도, RK4와 직접 비교 가능"],
-                ["front_area / active-front", "moving front 위치와 폭이 맞는지 보는 핵심 지표"],
-                ["mass trajectory", "감염 총량이 사라지거나 과도하게 흐려지는지 확인"],
+                ["초기 checkpoint 복원", "관측점 MSE만 낮은 초기 모델이 최종장, PDE, front보다 우선됨", "composite checkpoint score와 최소 epoch 조건 적용"],
+                ["diffuse haze", "sparse front에서 낮은 농도를 넓게 깔아도 MSE 벌점이 작음", "known IC, hard IC, front profile, contrast, mass floor 강화"],
+                ["all-zero collapse", "대부분의 영역이 0인 해가 관측 sparse regime에서 유리해질 수 있음", "support Tversky, mass trajectory, density-weighted data loss 적용"],
+                ["front phase error", "moving front가 조금만 어긋나도 relative L2가 크게 증가", "level-set alignment, front-normal profile, time marching 적용"],
+                ["twin-trap error band", "front 안쪽과 바깥쪽 순서 관계가 약하고 halo가 남음", "inside/outside hinge, normal-slope, front-aware sampling 적용"],
+                ["D/r 식별성", "front speed는 D와 r의 곱에 민감하고 개별 계수는 약하게 식별됨", "physics anchor, coefficient regularization, learned physics reporting 적용"],
+                ["RK4와 큰 정확도 차이", "PINN은 연속 surrogate 최적화이고 RK4는 고정 격자 forward 적분", "RK4 reference, weak teacher, final-field/front/mass 공동 검증 적용"],
             ],
-            [1.55, 5.50],
+            [1.45, 2.55, 3.25],
         ),
     ),
     (
-        "6. 한국 산림청 데이터와 문제 구성",
+        "6. 실패 모드별 진단 근거",
+        [
+            "기본 PINN에서 발생한 문제는 단일 loss 값만으로 판단하지 않는다. 관측점 MSE, PDE residual, final-time field error, front-area metric, active-front band, mass trajectory, learned D/r, error map, GIF를 함께 보고 어느 실패 모드가 우세한지 분류한다. 이 방식은 PINN이 관측점에서는 좋아 보이지만 전체장에서는 틀리는 상황을 분리하기 위한 절차다.",
+            "초기 checkpoint 복원 문제는 validation observation MSE가 가장 낮은 시점과 실제 final-field 성능이 일치하지 않는 데서 드러났다. 1200 epochs를 실행했는데도 epoch 1이 복원된 것은 최적화가 실패했다는 뜻이 아니라, 모델 선택 기준이 학습 목적과 어긋났다는 의미다. 따라서 현재 보고 기준은 checkpoint epoch, checkpoint score, validation MSE, PDE residual, teacher proxy를 함께 기록한다.",
+            "front phase error와 twin-trap error band는 absolute-error map에서 active front 주변에 쌍봉형 또는 고리형 오차가 생기는 형태로 나타난다. 이 현상은 front의 면적만 맞추고 안쪽-바깥쪽 순서, level value, normal slope를 동시에 맞추지 못할 때 발생한다. field L2가 커지는 주된 원인이므로 front contour, active-front area, low-level support recall을 별도로 확인한다.",
+            "산림청 PINN에서는 mean relative L2와 mass error만으로 충분하지 않다. 최근 full run에서 PINN은 mass error를 줄였지만 support false-negative가 남아 실제 감염 support를 보수적으로 놓칠 수 있었다. 따라서 산림청 결과는 relative L2, correlation, mass error, support FNR/FPR, Dice/Tversky, sea leakage 여부를 함께 제시한다.",
+        ],
+        (
+            ["진단 항목", "문제가 드러나는 신호", "확인 산출물"],
+            [
+                ["checkpoint mismatch", "best epoch가 지나치게 이르고 final field가 좋지 않음", "metrics.json, training_diagnostics.png"],
+                ["diffuse haze", "넓은 저농도 영역이 생기며 front contour가 흐려짐", "reconstruction.png, spacetime_error.png"],
+                ["all-zero collapse", "관측 MSE는 작지만 mass와 support가 급감", "mass trajectory, support metric"],
+                ["front phase error", "front 앞뒤로 큰 absolute-error band가 형성", "pinn_vs_rk4_comparison.png"],
+                ["twin-trap band", "front 양쪽에 대칭적 고리형 error가 남음", "residual_front_diagnostics.png"],
+                ["D/r ambiguity", "front speed는 맞지만 D와 r의 개별값이 흔들림", "learned physics, coefficient stats"],
+                ["Korea support miss", "L2/mass는 개선되나 FNR이 높음", "korea_error_baselines.gif, support metrics"],
+            ],
+            [1.65, 3.15, 2.45],
+        ),
+    ),
+    (
+        "7. 해결 방안의 구현 반영",
+        [
+            "해결 방안은 loss를 단순히 늘리는 방식이 아니라, 실패 모드와 직접 연결되는 제약을 추가하는 방식으로 구성했다. known initial condition과 hard IC는 초기장 붕괴를 막고, level-set/profile/support loss는 front 위치와 두께를 직접 제어한다. mass floor와 mass trajectory는 all-zero collapse를 막으며, coefficient anchor와 spatial coefficient regularization은 D/r 학습의 식별성을 안정화한다.",
+            "checkpoint 수정은 학습 결과 해석에서 가장 중요한 절차 개선이다. 기존 validation MSE 단독 기준은 sparse observation 환경에서 초기 모델을 과대평가할 수 있었다. 새 기준은 validation MSE, late-time RK4 teacher proxy, PDE residual, IC, front proxy, mass proxy를 log-scale composite score로 합산하고, 최소 epoch 이후의 모델만 checkpoint 후보로 삼는다.",
+            "time marching과 time-slab curriculum은 parabolic PDE에서 초반 시간 오차가 후반 front 전체로 전파되는 문제를 줄이기 위한 장치다. 전체 시간 구간을 한 번에 강제하지 않고, 초기장과 쉬운 시간 구간을 먼저 안정화한 뒤 후반 front를 학습한다. front-aware RAR는 residual이 큰 영역뿐 아니라 u(1-u)와 gradient가 큰 active front 주변 collocation을 보강한다.",
+            "산림청 코드에서는 물리 제약을 지도 도메인에 맞게 바꿨다. 바다는 diffusion이 일어날 수 없는 영역으로 처리하고, RK4는 masked no-flux diffusion을 사용하며, PINN은 land-only collocation과 sea exclusion penalty를 사용한다. raw CSV가 있을 때는 조치 시작 전 월별 시간축을 구성해 방제 이후 동역학과 자연 확산 동역학을 섞지 않도록 한다.",
+        ],
+        (
+            ["해결 장치", "코드 반영", "목적"],
+            [
+                ["Composite checkpoint", "TrainConfig checkpoint weights, train.py score helper", "관측점 MSE 단독 선택 방지"],
+                ["Known IC / hard IC", "known_initial_condition_loss, hard_initial_condition", "초기부터 퍼진 haze와 collapse 억제"],
+                ["Level-set/profile loss", "front_level_set_alignment_loss, front_profile_alignment_loss", "front phase, level, slope 정렬"],
+                ["Support Tversky", "front_support_tversky_loss", "false negative support 누락 감소"],
+                ["Mass guards", "mass_floor_trajectory_loss, parabolic_mass_balance_loss", "감염 총량 보존과 all-zero 방지"],
+                ["Weak RK4 teacher", "rk4_pretrain, rk4_teacher proxy", "초기 최적화와 late front 안정화"],
+                ["Land/sea constraints", "land mask, sea penalty, masked RK4", "한국 지도에서 바다 확산 금지"],
+            ],
+            [1.75, 3.20, 2.30],
+        ),
+    ),
+    (
+        "8. 한국 산림청 데이터와 문제 구성",
         [
             "산림청 계열은 compact GitHub-safe 데이터와 raw CSV 선택 경로를 모두 지원한다. compact 데이터는 2016-2023 감염목 좌표와 연도, manifest, province GeoJSON을 포함한다. raw CSV가 있으면 `조사일자`와 `방제완료여부`를 읽어 조치 전 월별 시간축을 재구성할 수 있다.",
             "공간 좌표는 raw bundle의 EPSG:5181 좌표를 EPSG:5179로 변환하고, 격자 계산에서는 x,y를 [0, 1]로 정규화한다. land mask는 province GeoJSON으로 만들며, observation density는 바다 셀에서 0으로 둔다. RK4는 land/sea 경계에서 masked no-flux diffusion을 쓰고, PINN은 land-only collocation과 sea exclusion penalty를 쓴다.",
@@ -316,7 +364,7 @@ PINN_PAGES: list[tuple[str, list[str], tuple[list[str], list[list[str]], list[fl
         ),
     ),
     (
-        "7. 산림청 PINN과 D/r 해석",
+        "9. 산림청 PINN과 D/r 해석",
         [
             "산림청 PINN은 `fit_korea_pine_wilt_pinn`에서 동작한다. 모델은 기본 PINN과 같은 `OriginPINN` 계열을 쓰지만, seed-front feature와 travelling-wave exact feature는 끄고, 관측 격자와 land mask에 맞춘 data loss, initial condition loss, land-only PDE residual, sea penalty, weak boundary loss를 사용한다.",
             "계수는 normalized diffusion과 reaction을 학습한다. 물리 해석은 grid의 kilometer scale을 통해 D_phys = D_norm * L_km^2로 되돌린다. x/y 방향의 실제 지도 폭과 높이가 다르기 때문에 normalized PDE residual에서는 D_x = D_phys / width_km^2, D_y = D_phys / height_km^2인 anisotropic scaling을 사용한다.",
@@ -333,10 +381,11 @@ PINN_PAGES: list[tuple[str, list[str], tuple[list[str], list[list[str]], list[fl
         ),
     ),
     (
-        "8. 적용 범위와 참고문헌",
+        "10. 적용 범위와 참고문헌",
         [
-            "현재 구현은 Fisher-KPP family를 중심으로 forward field, moving front, 계수 추정, land-constrained spread를 함께 다루는 기준 모델이다. 기본 synthetic 문제에서는 front-aware PINN이 moving front를 안정적으로 추적하고, 산림청 문제에서는 관측 과정과 방제 조치가 반영된 밀도장을 effective reaction-diffusion 계수로 정리한다.",
-            "확장 방향은 multi-seed full run, 조치 시점 이후의 control term 명시화, 실제 월별 또는 일별 고해상도 관측 확보, front metric 기반 ablation의 통계 반복, D/r posterior와 uncertainty reporting이다. 현재 산출물은 validation figure, GIF, metrics JSON을 통해 field error, front error, mass trajectory, learned physics를 일관된 기준으로 확인한다.",
+            "현재 구현은 Fisher-KPP family를 중심으로 forward field, moving front, 계수 추정, land-constrained spread를 함께 다루는 기준 모델이다. 기본 synthetic 문제에서는 front-aware PINN이 moving front를 추적하고, 산림청 문제에서는 관측 과정과 방제 조치가 반영된 밀도장을 effective reaction-diffusion 계수로 정리한다. 산림청 계열에서 확인된 주요 문제는 바다 확산, 실제 support 누락, 연도 단위 관측의 시간 해상도 부족, 방제 조치 이후 동역학 변화다.",
+            "바다 확산은 land mask, masked no-flux RK4, land-only collocation, sea exclusion penalty로 해결한다. support 누락은 false-negative weight가 큰 support Tversky와 mass trajectory로 보정하고, 과도한 false positive는 sea penalty와 support false-positive weight로 제어한다. 연도 단위 관측의 시간 해상도 부족은 raw CSV가 있을 때 pre-action monthly axis로 바꾸어 조치 시작 전 확산만 비교하는 방식으로 정리한다.",
+            "확장 방향은 multi-seed full run, 조치 시점 이후의 control term 명시화, 실제 월별 또는 일별 고해상도 관측 확보, front metric 기반 ablation의 통계 반복, D/r posterior와 uncertainty reporting이다. 현재 산출물은 validation figure, GIF, metrics JSON을 통해 field error, front error, mass trajectory, learned physics, checkpoint 선택 근거를 일관된 기준으로 확인한다.",
         ],
         None,
     ),
