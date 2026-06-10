@@ -26,6 +26,7 @@ from .losses import (
     bounded_residual_weights,
     boundary_neumann_loss,
     causal_weights,
+    discrete_rk4_consistency_loss,
     expected_front_pde_loss,
     expected_front_gradient_residual_loss,
     front_area_contrast_loss,
@@ -1173,6 +1174,18 @@ def train_single(
             )
         else:
             time_interface_loss = torch.zeros((), device=device)
+        if cfg.weights.discrete_rk4 > 0.0 and cfg.train.discrete_rk4_times > 0 and cfg.train.discrete_rk4_grid > 2:
+            discrete_rk4_loss = discrete_rk4_consistency_loss(
+                model,
+                cfg.train.discrete_rk4_times,
+                cfg.train.discrete_rk4_grid,
+                device,
+                dt_fraction=cfg.train.discrete_rk4_dt_fraction,
+                t_low=window_t_low,
+                t_high=window_t_high,
+            )
+        else:
+            discrete_rk4_loss = torch.zeros((), device=device)
         if cfg.weights.physics_parameter_anchor > 0.0:
             physics_anchor_loss = _physics_parameter_anchor_loss(model, device)
         else:
@@ -1218,6 +1231,7 @@ def train_single(
                     front_support_tversky,
                 ),
                 ("time_interface", time_interface_weight, time_interface_loss),
+                ("discrete_rk4", cfg.weights.discrete_rk4 * schedule["pde"], discrete_rk4_loss),
                 ("physics_anchor", cfg.weights.physics_parameter_anchor, physics_anchor_loss),
                 ("coefficient_field", cfg.weights.coefficient_field, coefficient_field_loss),
                 ("sparse", cfg.weights.sparse, sparse_loss),
@@ -1332,6 +1346,7 @@ def train_single(
                 "mass_floor": float(mass_floor_loss.detach().cpu()),
                 "front_support_tversky": float(front_support_tversky.detach().cpu()),
                 "time_interface": float(time_interface_loss.detach().cpu()),
+                "discrete_rk4": float(discrete_rk4_loss.detach().cpu()),
                 "physics_anchor": float(physics_anchor_loss.detach().cpu()),
                 "coefficient_field": float(coefficient_field_loss.detach().cpu()),
                 "sparse": float(sparse_loss.detach().cpu()),
@@ -1678,6 +1693,16 @@ def _lbfgs_polish(
             )
         else:
             time_interface_loss = torch.zeros((), device=device)
+        if cfg.weights.discrete_rk4 > 0.0 and cfg.train.discrete_rk4_times > 0 and cfg.train.discrete_rk4_grid > 2:
+            discrete_rk4_loss = discrete_rk4_consistency_loss(
+                model,
+                cfg.train.discrete_rk4_times,
+                cfg.train.discrete_rk4_grid,
+                device,
+                dt_fraction=cfg.train.discrete_rk4_dt_fraction,
+            )
+        else:
+            discrete_rk4_loss = torch.zeros((), device=device)
         if (cfg.weights.seed_match > 0.0 or cfg.weights.seed_mass > 0.0) and cfg.train.seed_points > 0:
             seed_match, seed_mass = seed_regularization_loss(model, cfg.train.seed_points, device)
         else:
@@ -1712,6 +1737,7 @@ def _lbfgs_polish(
             + cfg.weights.mass_floor * mass_floor_loss
             + cfg.weights.front_support_tversky * front_support_tversky
             + cfg.weights.time_interface * time_interface_loss
+            + cfg.weights.discrete_rk4 * discrete_rk4_loss
             + cfg.weights.physics_parameter_anchor * physics_anchor_loss
             + cfg.weights.coefficient_field * coefficient_field_loss
             + cfg.weights.sparse * model.sparse_last_layer_l1()

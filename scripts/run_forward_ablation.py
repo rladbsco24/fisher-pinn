@@ -145,6 +145,11 @@ def make_forward_cases(base: ExperimentConfig) -> list[dict[str, Any]]:
         model=replace(base.model, use_spatial_coefficients=False),
         weights=replace(base.weights, coefficient_field=0.0),
     )
+    geo_no_discrete_rk4 = replace(
+        base,
+        weights=replace(base.weights, discrete_rk4=0.0),
+        train=replace(base.train, discrete_rk4_times=0, discrete_rk4_grid=0),
+    )
     geo_no_collapse_guards = replace(
         base,
         weights=replace(
@@ -238,6 +243,7 @@ def make_forward_cases(base: ExperimentConfig) -> list[dict[str, Any]]:
         _case("geo_no_support_tversky", geo_no_support_tversky, "Ablates threshold-support Tversky loss for false-negative front support."),
         _case("geo_no_physics_anchor", geo_no_physics_anchor, "Ablates the weak D/r parameter anchor used during coefficient learning."),
         _case("geo_no_spatial_coefficients", geo_no_spatial_coefficients, "Ablates the smooth spatial D(x,y), r(x,y) coefficient correction field."),
+        _case("geo_no_discrete_rk4", geo_no_discrete_rk4, "Ablates the self-consistent discrete RK4 time-marching physics loss."),
         _case("geo_no_collapse_guards", geo_no_collapse_guards, "Removes mass floor, support Tversky, parameter anchor, and leading-edge guards together."),
         _case("geo_levelset_time_slab", geo_levelset_time_slab, "Front level-set alignment plus causal time-slab windowing."),
         _case("geo_rk4_teacher_front_area", geo_rk4_teacher_front_area, "Weak RK4 pseudo-label regularizer for solver-assisted PINN training."),

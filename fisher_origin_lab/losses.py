@@ -838,6 +838,85 @@ def front_profile_alignment_loss(
     return torch.sum(valid * weight * (pred - target).pow(2)) / torch.sum(valid * weight).clamp_min(1.0e-8)
 
 
+def _neumann_laplacian_grid(u: torch.Tensor, dx: float) -> torch.Tensor:
+    left = torch.cat([u[:, 0:1, :], u[:, :-1, :]], dim=1)
+    right = torch.cat([u[:, 1:, :], u[:, -1:, :]], dim=1)
+    down = torch.cat([u[:, :, 0:1], u[:, :, :-1]], dim=2)
+    up = torch.cat([u[:, :, 1:], u[:, :, -1:]], dim=2)
+    return (left + right + down + up - 4.0 * u) / max(float(dx) ** 2, 1.0e-12)
+
+
+def _centered_gradient_grid(u: torch.Tensor, dx: float) -> tuple[torch.Tensor, torch.Tensor]:
+    left = torch.cat([u[:, 0:1, :], u[:, :-1, :]], dim=1)
+    right = torch.cat([u[:, 1:, :], u[:, -1:, :]], dim=1)
+    down = torch.cat([u[:, :, 0:1], u[:, :, :-1]], dim=2)
+    up = torch.cat([u[:, :, 1:], u[:, :, -1:]], dim=2)
+    denom = max(2.0 * float(dx), 1.0e-12)
+    return (right - left) / denom, (up - down) / denom
+
+
+def discrete_rk4_consistency_loss(
+    model: OriginPINN,
+    n_times: int,
+    grid: int,
+    device: torch.device,
+    *,
+    dt_fraction: float = 0.05,
+    t_low: float = 0.0,
+    t_high: float | None = None,
+) -> torch.Tensor:
+    """Self-consistency loss based on one discrete RK4 PDE step.
+
+    This follows the discrete-time PINN idea: the network is not fitted to an
+    external RK4 reference field. Instead, the model prediction at time t is
+    advanced by one small RK4 step of the Fisher-KPP PDE, and that step is
+    compared with the model prediction at t + dt. The loss therefore enforces
+    causal time-marching structure while remaining a physics loss.
+    """
+
+    if n_times <= 0 or grid <= 2:
+        return torch.zeros((), device=device)
+    dtype = next(model.parameters()).dtype
+    box = float(model.domain.box)
+    t_end = float(model.domain.t_end)
+    dt = max(1.0e-6, min(float(dt_fraction) * t_end, 0.25 * t_end))
+    low = max(0.0, min(float(t_low), max(t_end - dt, 0.0)))
+    high = t_end - dt if t_high is None else max(0.0, min(float(t_high), t_end - dt))
+    if high < low:
+        low, high = high, low
+    times = low + torch.rand(n_times, 1, dtype=dtype, device=device) * max(high - low, 1.0e-8)
+    xs = torch.linspace(0.0, box, grid, dtype=dtype, device=device)
+    x, y = torch.meshgrid(xs, xs, indexing="ij")
+    xy_one = torch.stack([x.reshape(-1), y.reshape(-1)], dim=1)
+    xy = xy_one.repeat(n_times, 1)
+    t0 = times.repeat_interleave(grid * grid, dim=0)
+    t1 = (times + dt).repeat_interleave(grid * grid, dim=0)
+
+    u0 = model(xy, t0).reshape(n_times, grid, grid)
+    u1 = model(xy, t1).reshape(n_times, grid, grid)
+    dx = box / max(grid - 1, 1)
+    diffusion = model.diffusion_coefficient(xy_one).reshape(1, grid, grid)
+    reaction = model.reaction_coefficient(xy_one).reshape(1, grid, grid)
+
+    def rhs(u: torch.Tensor) -> torch.Tensor:
+        lap = _neumann_laplacian_grid(u, dx)
+        out = diffusion * lap + reaction * u * (1.0 - u)
+        if model.pde.include_advection:
+            ux, uy = _centered_gradient_grid(u, dx)
+            velocity = model.pde.velocity.to(dtype=dtype, device=device)
+            out = out - velocity[0] * ux - velocity[1] * uy
+        return out
+
+    k1 = rhs(u0)
+    k2 = rhs(u0 + 0.5 * dt * k1)
+    k3 = rhs(u0 + 0.5 * dt * k2)
+    k4 = rhs(u0 + dt * k3)
+    stepped = u0 + (dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
+    stepped = stepped.clamp(0.0, 1.0)
+    activity = (0.10 + u0.detach() * (1.0 - u0.detach()) + u1.detach() * (1.0 - u1.detach())).clamp(0.10, 0.60)
+    return torch.mean(activity * (u1 - stepped).pow(2))
+
+
 def gradient_residual_loss(
     model: OriginPINN,
     xy: torch.Tensor,

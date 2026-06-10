@@ -123,6 +123,21 @@ def make_feature_validation_pairs(base: ExperimentConfig) -> list[dict[str, Any]
         weights=replace(base.weights, coefficient_field=0.0),
     )
 
+    discrete_without = replace(
+        base,
+        weights=replace(base.weights, discrete_rk4=0.0),
+        train=replace(base.train, discrete_rk4_times=0, discrete_rk4_grid=0),
+    )
+    discrete_with = replace(
+        base,
+        weights=replace(base.weights, discrete_rk4=max(base.weights.discrete_rk4, 0.05)),
+        train=replace(
+            base.train,
+            discrete_rk4_times=max(base.train.discrete_rk4_times, 3),
+            discrete_rk4_grid=max(base.train.discrete_rk4_grid, 20),
+        ),
+    )
+
     teacher_without = replace(
         base,
         weights=replace(base.weights, rk4_teacher=0.0),
@@ -180,6 +195,12 @@ def make_feature_validation_pairs(base: ExperimentConfig) -> list[dict[str, Any]
             "Smooth spatial correction fields for learned diffusion/reaction.",
             _variant("without_spatial_coefficients", coefficients_without, "spatial coefficients off", "global D/r only"),
             _variant("with_spatial_coefficients", base, "spatial coefficients on", "smooth spatial D/r correction enabled"),
+        ),
+        _pair(
+            "discrete_rk4_consistency",
+            "Discrete-time RK4 self-consistency without using RK4 solution labels.",
+            _variant("without_discrete_rk4_consistency", discrete_without, "discrete RK4 physics off", "continuous AD residual only"),
+            _variant("with_discrete_rk4_consistency", discrete_with, "discrete RK4 physics on", "self-consistent RK4 time step loss"),
         ),
         _pair(
             "rk4_teacher",

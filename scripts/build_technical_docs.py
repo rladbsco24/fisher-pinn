@@ -330,6 +330,7 @@ PINN_PAGES: list[tuple[str, list[str], tuple[list[str], list[list[str]], list[fl
             "해결 방안은 loss를 단순히 늘리는 방식이 아니라, 실패 모드와 직접 연결되는 제약을 추가하는 방식으로 구성했다. known initial condition과 hard IC는 초기장 붕괴를 막고, level-set/profile/support loss는 front 위치와 두께를 직접 제어한다. mass floor와 mass trajectory는 all-zero collapse를 막으며, coefficient anchor와 spatial coefficient regularization은 D/r 학습의 식별성을 안정화한다.",
             "checkpoint 수정은 학습 결과 해석에서 가장 중요한 절차 개선이다. 기존 validation MSE 단독 기준은 sparse observation 환경에서 초기 모델을 과대평가할 수 있었다. 새 기준은 validation MSE, late-time RK4 teacher proxy, PDE residual, IC, front proxy, mass proxy를 log-scale composite score로 합산하고, 최소 epoch 이후의 모델만 checkpoint 후보로 삼는다.",
             "time marching과 time-slab curriculum은 parabolic PDE에서 초반 시간 오차가 후반 front 전체로 전파되는 문제를 줄이기 위한 장치다. 전체 시간 구간을 한 번에 강제하지 않고, 초기장과 쉬운 시간 구간을 먼저 안정화한 뒤 후반 front를 학습한다. front-aware RAR는 residual이 큰 영역뿐 아니라 u(1-u)와 gradient가 큰 active front 주변 collocation을 보강한다.",
+            "새로 추가한 discrete RK4 consistency loss는 RK4 결과장을 정답 label로 주입하지 않고, 모델이 예측한 u(t)를 Fisher-KPP PDE의 한 RK4 step으로 전개한 값과 모델의 u(t+dt)를 맞춘다. 이는 discrete-time PINN 계열의 시간 전개 제약을 차용한 것이며, 연속 AD residual만으로 약했던 moving-front phase 누적 오차를 직접 줄이기 위한 공정한 physics loss이다.",
             "산림청 코드에서는 물리 제약을 지도 도메인에 맞게 바꿨다. 바다는 diffusion이 일어날 수 없는 영역으로 처리하고, RK4는 masked no-flux diffusion을 사용하며, PINN은 land-only collocation과 sea exclusion penalty를 사용한다. raw CSV가 있을 때는 조치 시작 전 월별 시간축을 구성해 방제 이후 동역학과 자연 확산 동역학을 섞지 않도록 한다.",
         ],
         (
@@ -340,6 +341,7 @@ PINN_PAGES: list[tuple[str, list[str], tuple[list[str], list[list[str]], list[fl
                 ["Level-set/profile loss", "front_level_set_alignment_loss, front_profile_alignment_loss", "front phase, level, slope 정렬"],
                 ["Support Tversky", "front_support_tversky_loss", "false negative support 누락 감소"],
                 ["Mass guards", "mass_floor_trajectory_loss, parabolic_mass_balance_loss", "감염 총량 보존과 all-zero 방지"],
+                ["Discrete RK4 consistency", "discrete_rk4_consistency_loss", "RK4 label 없이 시간 전개 일관성 강화"],
                 ["Weak RK4 teacher", "rk4_pretrain, rk4_teacher proxy", "초기 최적화와 late front 안정화"],
                 ["Land/sea constraints", "land mask, sea penalty, masked RK4", "한국 지도에서 바다 확산 금지"],
             ],
@@ -400,6 +402,11 @@ PINN_REFERENCES = [
     "Krishnapriyan, Aditi S., Amir Gholami, Shandian Zhe, Robert M. Kirby, and Michael W. Mahoney. 2021. “Characterizing Possible Failure Modes in Physics-Informed Neural Networks.” Advances in Neural Information Processing Systems 34.",
     "Jagtap, Ameya D., and George Em Karniadakis. 2020. “Extended Physics-Informed Neural Networks (XPINNs): A Generalized Space-Time Domain Decomposition Based Deep Learning Framework for Nonlinear Partial Differential Equations.” Communications in Computational Physics 28 (5): 2002–2041.",
     "Moseley, Ben, Andrew Markham, and Tarje Nissen-Meyer. 2023. “Finite Basis Physics-Informed Neural Networks (FBPINNs): A Scalable Domain Decomposition Approach for Solving Differential Equations.” Advances in Computational Mathematics 49: 62.",
+    "Yu, Jeremy, Lu Lu, Xuhui Meng, and George Em Karniadakis. 2022. “Gradient-Enhanced Physics-Informed Neural Networks for Forward and Inverse PDE Problems.” Computer Methods in Applied Mechanics and Engineering 393: 114823.",
+    "Wu, Chenxi, Min Zhu, Qinyang Tan, Yadhu Kartha, and Lu Lu. 2023. “A Comprehensive Study of Non-Adaptive and Residual-Based Adaptive Sampling for Physics-Informed Neural Networks.” Computer Methods in Applied Mechanics and Engineering 403: 115671.",
+    "Wang, Sifan, Shyam Sankaran, and Paris Perdikaris. 2024. “Respecting Causality for Training Physics-Informed Neural Networks.” Computer Methods in Applied Mechanics and Engineering 421: 116813.",
+    "Akrivis, Georgios, Charalambos G. Makridakis, and Costas Smaragdakis. 2025. “Runge-Kutta Physics-Informed Neural Networks: Formulation and Analysis.” Numerische Mathematik.",
+    "Wang, Sifan, Xinling Yu, and Paris Perdikaris. 2024. “PirateNets: Physics-Informed Deep Learning with Residual Adaptive Networks.” Journal of Machine Learning Research 25.",
 ]
 
 

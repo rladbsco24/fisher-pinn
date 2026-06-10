@@ -52,6 +52,7 @@ from fisher_origin_lab.losses import (
     ablowitz_zeppetella_front_band_samples,
     ablowitz_zeppetella_front_phase_loss,
     ablowitz_zeppetella_initial_condition_loss,
+    discrete_rk4_consistency_loss,
     expected_front_gradient_residual_loss,
     expected_front_pde_loss,
     expected_front_samples,
@@ -391,6 +392,7 @@ def test_expected_front_losses_are_finite() -> None:
     mass_floor_loss = mass_floor_trajectory_loss(model, n_times=3, grid=8, device=torch.device("cpu"))
     front_gpinn_loss = expected_front_gradient_residual_loss(model, n=16, device=torch.device("cpu"))
     interface_loss = time_slab_interface_loss(model, n=16, device=torch.device("cpu"), slabs=3)
+    discrete_loss = discrete_rk4_consistency_loss(model, n_times=1, grid=8, device=torch.device("cpu"))
     assert xy.shape == (16, 2)
     assert t.shape == (16, 1)
     assert torch.isfinite(xy).all()
@@ -405,6 +407,7 @@ def test_expected_front_losses_are_finite() -> None:
     assert torch.isfinite(mass_floor_loss)
     assert torch.isfinite(front_gpinn_loss)
     assert torch.isfinite(interface_loss)
+    assert torch.isfinite(discrete_loss)
 
 
 def test_korea_pine_style_matches_forward_pinn_setup() -> None:
@@ -617,6 +620,7 @@ def test_geo_spectral_forward_profile_extends_korea_setup() -> None:
     assert cfg.weights.front_support_tversky > 0.0
     assert cfg.weights.level_set_alignment > 0.0
     assert cfg.weights.time_interface > 0.0
+    assert cfg.weights.discrete_rk4 > 0.0
     assert cfg.weights.rk4_teacher > 0.0
     assert cfg.weights.physics_parameter_anchor > 0.0
     assert cfg.weights.coefficient_field > 0.0
@@ -643,6 +647,9 @@ def test_geo_spectral_forward_profile_extends_korea_setup() -> None:
     assert cfg.train.time_window_observations is True
     assert cfg.train.observation_batch > 0
     assert cfg.train.time_interface_points > 0
+    assert cfg.train.discrete_rk4_times > 0
+    assert cfg.train.discrete_rk4_grid > 2
+    assert cfg.train.discrete_rk4_dt_fraction > 0.0
     assert cfg.train.rk4_teacher_pool > 0
     assert cfg.train.rk4_teacher_batch > 0
     assert cfg.train.rk4_pretrain_steps > 0
@@ -728,6 +735,7 @@ def test_forward_ablation_cases_report_front_metrics() -> None:
     assert "geo_no_support_tversky" in names
     assert "geo_no_physics_anchor" in names
     assert "geo_no_spatial_coefficients" in names
+    assert "geo_no_discrete_rk4" in names
     assert "geo_no_collapse_guards" in names
     assert "geo_no_tw_front_area" in names
     assert "geo_rk4_teacher_front_area" in names
@@ -751,6 +759,7 @@ def test_forward_ablation_cases_report_front_metrics() -> None:
     assert any(case["cfg"].weights.front_support_tversky == 0.0 for case in cases)
     assert any(case["cfg"].weights.physics_parameter_anchor == 0.0 for case in cases)
     assert any(case["cfg"].model.use_spatial_coefficients is False for case in cases)
+    assert any(case["cfg"].weights.discrete_rk4 == 0.0 for case in cases)
     assert any(case["cfg"].train.rk4_teacher_late_fraction > 0.0 for case in cases)
     assert any(case["cfg"].train.rk4_pretrain_steps > 0 for case in cases)
     assert any(case["cfg"].train.time_marching for case in cases)
@@ -786,6 +795,7 @@ def test_feature_validation_pairs_and_visual_exports(tmp_path) -> None:
     assert "front_speed_gpinn" in names
     assert "adaptive_balancing" in names
     assert "spatial_coefficients" in names
+    assert "discrete_rk4_consistency" in names
     assert "rk4_teacher" in names
     assert all("without" in pair and "with" in pair for pair in pairs)
 

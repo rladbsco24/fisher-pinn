@@ -117,6 +117,7 @@ class LossWeights:
     front_profile: float = 0.0
     level_set_alignment: float = 0.0
     time_interface: float = 0.0
+    discrete_rk4: float = 0.0
     rk4_teacher: float = 0.0
     physics_parameter_anchor: float = 0.0
     coefficient_field: float = 0.0
@@ -197,6 +198,9 @@ class TrainConfig:
     mass_balance_grid: int = 18
     time_interface_points: int = 256
     time_interface_width: float = 0.01
+    discrete_rk4_times: int = 0
+    discrete_rk4_grid: int = 0
+    discrete_rk4_dt_fraction: float = 0.05
     rk4_teacher_pool: int = 0
     rk4_teacher_batch: int = 0
     rk4_teacher_late_fraction: float = 0.0
@@ -314,6 +318,7 @@ class ExperimentConfig:
                 front_profile=self.weights.front_profile,
                 level_set_alignment=self.weights.level_set_alignment,
                 time_interface=self.weights.time_interface,
+                discrete_rk4=self.weights.discrete_rk4,
                 rk4_teacher=self.weights.rk4_teacher,
                 physics_parameter_anchor=self.weights.physics_parameter_anchor,
                 coefficient_field=self.weights.coefficient_field,
@@ -381,6 +386,13 @@ class ExperimentConfig:
                 mass_balance_grid=min(self.train.mass_balance_grid, 18),
                 time_interface_points=min(self.train.time_interface_points, 128),
                 time_interface_width=self.train.time_interface_width,
+                discrete_rk4_times=min(self.train.discrete_rk4_times, 2)
+                if self.train.discrete_rk4_times > 0
+                else 0,
+                discrete_rk4_grid=min(self.train.discrete_rk4_grid, 16)
+                if self.train.discrete_rk4_grid > 0
+                else 0,
+                discrete_rk4_dt_fraction=self.train.discrete_rk4_dt_fraction,
                 rk4_teacher_pool=min(self.train.rk4_teacher_pool, 2048) if self.train.rk4_teacher_pool > 0 else 0,
                 rk4_teacher_batch=min(self.train.rk4_teacher_batch, 256) if self.train.rk4_teacher_batch > 0 else 0,
                 rk4_teacher_late_fraction=self.train.rk4_teacher_late_fraction,
@@ -491,6 +503,7 @@ class ExperimentConfig:
                 front_profile=0.0,
                 level_set_alignment=0.0,
                 time_interface=0.0,
+                discrete_rk4=0.0,
                 rk4_teacher=0.0,
                 physics_parameter_anchor=self.weights.physics_parameter_anchor,
                 coefficient_field=self.weights.coefficient_field,
@@ -572,6 +585,7 @@ class ExperimentConfig:
                 front_profile=0.25,
                 level_set_alignment=0.05,
                 time_interface=0.01,
+                discrete_rk4=0.08,
                 rk4_teacher=0.01,
                 physics_parameter_anchor=0.20,
                 coefficient_field=0.05,
@@ -619,6 +633,9 @@ class ExperimentConfig:
                 observation_batch=512,
                 time_interface_points=256,
                 time_interface_width=0.015,
+                discrete_rk4_times=3,
+                discrete_rk4_grid=20,
+                discrete_rk4_dt_fraction=0.05,
                 rk4_teacher_pool=8192,
                 rk4_teacher_batch=512,
                 rk4_teacher_late_fraction=0.50,
@@ -697,6 +714,7 @@ class ExperimentConfig:
                 front_profile=0.0,
                 level_set_alignment=1.0,
                 time_interface=0.0,
+                discrete_rk4=0.10,
                 physics_parameter_anchor=0.0,
                 coefficient_field=0.0,
             ),
@@ -716,6 +734,9 @@ class ExperimentConfig:
                 pde_loss_warmup_fraction=0.05,
                 front_loss_start_fraction=0.0,
                 front_loss_warmup_fraction=0.0,
+                discrete_rk4_times=3,
+                discrete_rk4_grid=24,
+                discrete_rk4_dt_fraction=0.025,
                 rk4_teacher_pool=4096,
                 rk4_teacher_batch=512,
                 rk4_pretrain_steps=0,
