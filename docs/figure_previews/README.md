@@ -128,6 +128,18 @@ from `0.2049` to `0.0524`, and mass MAE improved from `0.1678` to `0.0711`.
 
 ![AZ planar transverse PINN training diagnostics](pinn_az_planar_transverse_quick40_training_diagnostics.png)
 
+## Support-Area Guard Smoke Preview
+
+Run source: `python experiments\basic_pinn\run_gaussian_moving_front_2d.py --preset smoke --out-dir runs\smoke_support_area_guard`.
+This is a low-epoch wiring check for the observed support-area guard, not a
+benchmark result. It verifies that the new support-area term is logged together
+with adaptive and gradient-norm weights and that the normal comparison figures
+still render.
+
+![Support-area guard smoke PINN vs RK4](support_area_guard_smoke_pinn_vs_rk4.png)
+
+![Support-area guard smoke training diagnostics](support_area_guard_smoke_training_diagnostics.png)
+
 ## SciML-Style Moving-Front Comparison
 
 Run source: `python scripts\run_sciml_moving_front_comparison.py`.
