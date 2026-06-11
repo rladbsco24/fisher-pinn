@@ -109,6 +109,7 @@ class LossWeights:
     source_anchor: float = 2.0
     shooting: float = 5.0
     observation_support: float = 0.0
+    observation_support_area: float = 0.0
     gradient: float = 0.01
     data_density_gain: float = 0.0
     front_pde_alpha: float = 0.0
@@ -464,6 +465,7 @@ class ExperimentConfig:
                 source_anchor=self.weights.source_anchor,
                 shooting=self.weights.shooting,
                 observation_support=self.weights.observation_support,
+                observation_support_area=self.weights.observation_support_area,
                 gradient=0.0,
                 data_density_gain=self.weights.data_density_gain,
                 front_pde_alpha=self.weights.front_pde_alpha,
@@ -756,6 +758,7 @@ class ExperimentConfig:
                 source_anchor=0.0,
                 shooting=0.0,
                 observation_support=0.0,
+                observation_support_area=0.15,
                 gradient=0.0,
                 data_density_gain=4.0,
                 front_pde_alpha=2.0,

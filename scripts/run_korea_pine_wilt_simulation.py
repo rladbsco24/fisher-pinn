@@ -790,6 +790,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             support_temperature=getattr(args, "pinn_support_temperature", 0.025),
             support_false_positive_weight=getattr(args, "pinn_support_false_positive_weight", 0.20),
             support_false_negative_weight=getattr(args, "pinn_support_false_negative_weight", 0.80),
+            support_area_weight=getattr(args, "pinn_support_area_weight", 0.35),
             mass_trajectory_weight=getattr(args, "pinn_mass_trajectory_weight", 0.75),
             mass_trajectory_points=getattr(args, "pinn_mass_trajectory_points", 2048),
             mass_trajectory_times=getattr(args, "pinn_mass_trajectory_times", 4),
@@ -959,6 +960,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             "support_temperature": float(getattr(args, "pinn_support_temperature", 0.025)),
             "support_false_positive_weight": float(getattr(args, "pinn_support_false_positive_weight", 0.20)),
             "support_false_negative_weight": float(getattr(args, "pinn_support_false_negative_weight", 0.80)),
+            "support_area_weight": float(getattr(args, "pinn_support_area_weight", 0.35)),
             "mass_trajectory_weight": float(getattr(args, "pinn_mass_trajectory_weight", 0.75)),
             "mass_trajectory_points": int(getattr(args, "pinn_mass_trajectory_points", 2048)),
             "mass_trajectory_times": int(getattr(args, "pinn_mass_trajectory_times", 4)),
@@ -1015,6 +1017,7 @@ def main() -> None:
     parser.add_argument("--pinn-support-temperature", type=float, default=0.025)
     parser.add_argument("--pinn-support-false-positive-weight", type=float, default=0.20)
     parser.add_argument("--pinn-support-false-negative-weight", type=float, default=0.80)
+    parser.add_argument("--pinn-support-area-weight", type=float, default=0.35)
     parser.add_argument("--pinn-mass-trajectory-weight", type=float, default=0.75)
     parser.add_argument("--pinn-mass-trajectory-points", type=int, default=2048)
     parser.add_argument("--pinn-mass-trajectory-times", type=int, default=4)

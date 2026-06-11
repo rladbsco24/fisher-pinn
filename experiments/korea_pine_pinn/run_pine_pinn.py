@@ -67,6 +67,8 @@ def _preset_args(args: argparse.Namespace) -> list[str]:
         str(1024 if args.preset == "flagship" else 128),
         "--pinn-initial-condition-points",
         str(8192 if args.preset == "flagship" else 2048),
+        "--pinn-support-area-weight",
+        str(0.50 if args.preset == "flagship" else 0.35),
         "--pinn-mass-trajectory-points",
         str(8192 if args.preset == "flagship" else 2048),
         "--pinn-mass-trajectory-times",

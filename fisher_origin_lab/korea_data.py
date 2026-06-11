@@ -14,7 +14,12 @@ import torch
 from matplotlib.path import Path as MplPath
 
 from .config import DomainConfig, PDEConfig, SeedConfig, shared_geo_forward_model_config
-from .losses import boundary_neumann_loss, observed_support_tversky_loss, spatial_coefficient_regularization_loss
+from .losses import (
+    boundary_neumann_loss,
+    observed_support_area_loss,
+    observed_support_tversky_loss,
+    spatial_coefficient_regularization_loss,
+)
 from .models import OriginPINN
 
 
@@ -1140,6 +1145,7 @@ def fit_korea_pine_wilt_pinn(
     support_temperature: float = 0.025,
     support_false_positive_weight: float = 0.20,
     support_false_negative_weight: float = 0.80,
+    support_area_weight: float = 0.35,
     mass_trajectory_weight: float = 0.75,
     mass_trajectory_points: int = 2048,
     mass_trajectory_times: int = 4,
@@ -1321,6 +1327,16 @@ def fit_korea_pine_wilt_pinn(
             )
         else:
             support_loss = torch.zeros((), device=device_obj)
+        if support_area_weight > 0.0:
+            support_area_loss = observed_support_area_loss(
+                pred,
+                values[idx],
+                temperature=support_temperature,
+                false_positive_weight=support_false_positive_weight,
+                false_negative_weight=support_false_negative_weight,
+            )
+        else:
+            support_area_loss = torch.zeros((), device=device_obj)
 
         if land_xy is not None and len(land_xy) > 0:
             col_idx = torch.randint(0, len(land_xy), (collocation_points,), device=device_obj)
@@ -1377,6 +1393,7 @@ def fit_korea_pine_wilt_pinn(
             + boundary_weight * bc_loss
             + sea_weight * sea_loss
             + support_weight * support_loss
+            + support_area_weight * support_area_loss
             + mass_trajectory_weight * mass_trajectory_loss
             + physics_anchor_weight * physics_anchor
             + coefficient_field_weight * coefficient_field_loss
@@ -1396,6 +1413,7 @@ def fit_korea_pine_wilt_pinn(
                     "boundary": float(bc_loss.detach().cpu()),
                     "sea": float(sea_loss.detach().cpu()),
                     "support": float(support_loss.detach().cpu()),
+                    "support_area": float(support_area_loss.detach().cpu()),
                     "mass_trajectory": float(mass_trajectory_loss.detach().cpu()),
                     "physics_anchor": float(physics_anchor.detach().cpu()),
                     "coefficient_field": float(coefficient_field_loss.detach().cpu()),
@@ -1480,6 +1498,7 @@ def fit_korea_pine_wilt_pinn(
         "support_temperature": float(support_temperature),
         "support_false_positive_weight": float(support_false_positive_weight),
         "support_false_negative_weight": float(support_false_negative_weight),
+        "support_area_weight": float(support_area_weight),
         "mass_trajectory_weight": float(mass_trajectory_weight),
         "mass_trajectory_points": float(mass_trajectory_points),
         "mass_trajectory_times": float(mass_trajectory_times),

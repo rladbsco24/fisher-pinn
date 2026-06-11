@@ -42,6 +42,7 @@ from .losses import (
     leading_edge_area_loss,
     leading_edge_distribution_loss,
     mass_floor_trajectory_loss,
+    observed_support_area_loss,
     observed_support_tversky_loss,
     parabolic_mass_balance_loss,
     pde_residual,
@@ -673,6 +674,8 @@ def _combine_loss_terms(
 ) -> tuple[torch.Tensor, dict[str, float], dict[str, float]]:
     balanceable = {
         "data",
+        "observation_support",
+        "observation_support_area",
         "rk4_teacher",
         "pde",
         "bc",
@@ -938,6 +941,16 @@ def train_single(
             )
         else:
             observation_support_loss = torch.zeros((), device=device)
+        if cfg.weights.observation_support_area > 0.0:
+            observation_support_area_loss = observed_support_area_loss(
+                pred,
+                obs_values_batch,
+                temperature=cfg.train.observation_support_temperature,
+                false_positive_weight=cfg.train.observation_support_false_positive_weight,
+                false_negative_weight=cfg.train.observation_support_false_negative_weight,
+            )
+        else:
+            observation_support_area_loss = torch.zeros((), device=device)
         if cfg.weights.rk4_teacher > 0.0:
             rk4_teacher_loss = _rk4_teacher_batch_loss(
                 model,
@@ -1257,6 +1270,7 @@ def train_single(
             [
                 ("data", cfg.weights.data, data_loss),
                 ("observation_support", cfg.weights.observation_support, observation_support_loss),
+                ("observation_support_area", cfg.weights.observation_support_area, observation_support_area_loss),
                 ("rk4_teacher", cfg.weights.rk4_teacher, rk4_teacher_loss),
                 ("pde", pde_weight, pde_loss_value),
                 ("ic", cfg.weights.initial_condition, ic_loss),
@@ -1363,6 +1377,7 @@ def train_single(
                         transverse_loss,
                         front_support_tversky,
                         observation_support_loss,
+                        observation_support_area_loss,
                     ],
                     mass_terms=[mass_loss, mass_floor_loss],
                 )
@@ -1390,6 +1405,7 @@ def train_single(
                 "total": float(total.detach().cpu()),
                 "data": float(data_loss.detach().cpu()),
                 "observation_support": float(observation_support_loss.detach().cpu()),
+                "observation_support_area": float(observation_support_area_loss.detach().cpu()),
                 "rk4_teacher": float(rk4_teacher_loss.detach().cpu()),
                 "pde": float(pde_loss_value.detach().cpu()),
                 "ic": float(ic_loss.detach().cpu()),
@@ -1609,6 +1625,16 @@ def _lbfgs_polish(
             )
         else:
             observation_support_loss = torch.zeros((), device=device)
+        if cfg.weights.observation_support_area > 0.0:
+            observation_support_area_loss = observed_support_area_loss(
+                pred,
+                observations_values,
+                temperature=cfg.train.observation_support_temperature,
+                false_positive_weight=cfg.train.observation_support_false_positive_weight,
+                false_negative_weight=cfg.train.observation_support_false_negative_weight,
+            )
+        else:
+            observation_support_area_loss = torch.zeros((), device=device)
         residual, u_col, u_xy_col, _, _ = pde_residual_terms(model, xy_col, t_col)
         front_weights = front_indicator_weights(
             u_col,
@@ -1831,6 +1857,7 @@ def _lbfgs_polish(
         loss = (
             cfg.weights.data * data_loss
             + cfg.weights.observation_support * observation_support_loss
+            + cfg.weights.observation_support_area * observation_support_area_loss
             + cfg.weights.pde * pde_loss_value
             + cfg.weights.initial_condition * ic_loss
             + cfg.weights.boundary * bc_loss

@@ -352,7 +352,8 @@ The current default `geo_spectral_forward()` profile is intentionally RK4-teache
 `rk4_teacher=0`, no RK4 pretraining, and no time-window teacher labels. The default
 instead uses known/hard initial-condition constraints, moving-front geometry losses,
 front-aware sampling, discrete RK4 consistency as a physics transition loss, and a
-tighter parabolic mass envelope. A 40-epoch quick check on the Gaussian moving-front
+tighter parabolic mass envelope plus a soft support-area guard against underfilled
+active fronts. A 40-epoch quick check on the Gaussian moving-front
 case improved final-time relative L2 from `1.3894` to `0.8284`, validation observation
 MSE from `8.37e-3` to `2.84e-3`, and mass MAE from `0.0201` to `0.00342`. RK4 remains
 the much more accurate same-problem numerical reference on this quick check

@@ -782,6 +782,42 @@ def observed_support_tversky_loss(
     return torch.stack(losses).mean()
 
 
+def observed_support_area_loss(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    *,
+    thresholds: tuple[float, ...] = (0.05, 0.10),
+    temperature: float = 0.025,
+    false_positive_weight: float = 0.25,
+    false_negative_weight: float = 1.00,
+) -> torch.Tensor:
+    """Soft active-area loss for sparse front observations.
+
+    Tversky overlap penalizes support mismatch, but on sparse or imbalanced
+    batches the model can still underfill the active region while preserving a
+    tolerable pointwise MSE. This term compares the differentiable active-cell
+    fraction at several thresholds and weights underprediction more strongly
+    than overprediction. It uses only observed targets or analytic benchmark
+    targets, not RK4 pseudo-labels.
+    """
+
+    if not thresholds:
+        return torch.zeros((), dtype=pred.dtype, device=pred.device)
+    temp = max(float(temperature), 1.0e-4)
+    fp_weight = max(float(false_positive_weight), 0.0)
+    fn_weight = max(float(false_negative_weight), 0.0)
+    losses = []
+    for threshold in thresholds:
+        pred_support = torch.sigmoid((pred - float(threshold)) / temp)
+        target_support = torch.sigmoid((target - float(threshold)) / temp).detach()
+        pred_area = pred_support.mean()
+        target_area = target_support.mean()
+        underfill = torch.relu(target_area - pred_area)
+        overfill = torch.relu(pred_area - target_area)
+        losses.append(fn_weight * underfill.pow(2) + fp_weight * overfill.pow(2))
+    return torch.stack(losses).mean()
+
+
 def leading_edge_distribution_loss(
     model: OriginPINN,
     n_times: int,

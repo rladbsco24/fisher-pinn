@@ -138,7 +138,7 @@ def make_forward_cases(base: ExperimentConfig) -> list[dict[str, Any]]:
     )
     geo_no_support_tversky = replace(
         base,
-        weights=replace(base.weights, front_support_tversky=0.0),
+        weights=replace(base.weights, front_support_tversky=0.0, observation_support_area=0.0),
     )
     geo_no_physics_anchor = replace(
         base,
@@ -173,6 +173,7 @@ def make_forward_cases(base: ExperimentConfig) -> list[dict[str, Any]]:
         weights=replace(
             base.weights,
             mass_floor=0.0,
+            observation_support_area=0.0,
             front_support_tversky=0.0,
             physics_parameter_anchor=0.0,
             leading_edge=0.0,
@@ -257,7 +258,7 @@ def make_forward_cases(base: ExperimentConfig) -> list[dict[str, Any]]:
         _case("geo_front_area", geo_front_area, "Default full front-aware stack: level-set, gPINN, causal slabs, front Fourier, and balancing."),
         _case("geo_front_area_strong", geo_area_strong, "Stronger front-area ablation; useful for checking metric tradeoffs."),
         _case("geo_no_mass_floor", geo_no_mass_floor, "Ablates the minimum mass trajectory guard against near-zero collapse."),
-        _case("geo_no_support_tversky", geo_no_support_tversky, "Ablates threshold-support Tversky loss for false-negative front support."),
+        _case("geo_no_support_tversky", geo_no_support_tversky, "Ablates threshold-support Tversky and support-area guards for false-negative front support."),
         _case("geo_no_physics_anchor", geo_no_physics_anchor, "Ablates the weak D/r parameter anchor used during coefficient learning."),
         _case("geo_no_spatial_coefficients", geo_no_spatial_coefficients, "Ablates the smooth spatial D(x,y), r(x,y) coefficient correction field."),
         _case("geo_no_discrete_rk4", geo_no_discrete_rk4, "Ablates the self-consistent discrete RK4 time-marching physics loss."),

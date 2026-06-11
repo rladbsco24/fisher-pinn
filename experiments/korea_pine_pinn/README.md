@@ -16,8 +16,9 @@ python experiments/korea_pine_pinn/run_pine_pinn.py --preset flagship --output-d
 
 The run compares observed density, RK4 simulation, and the repository PINN on
 the same initial density grid. The PINN uses land-only PDE collocation,
-sea-exclusion loss, known-initial-condition fitting, support/mass guards, and
-learned effective diffusion/reaction parameters.
+sea-exclusion loss, known-initial-condition fitting, support Tversky plus
+support-area guards, mass-trajectory guards, and learned effective
+diffusion/reaction parameters.
 
 The `flagship` preset uses 20,000 PINN epochs, a 128 x 128 Korea grid, larger
 land-only PDE/initial-condition/mass batches, 120 RK4 steps per year, and

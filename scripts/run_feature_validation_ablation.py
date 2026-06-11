@@ -93,6 +93,7 @@ def make_feature_validation_pairs(base: ExperimentConfig) -> list[dict[str, Any]
             base.weights,
             mass_balance=0.0,
             mass_floor=0.0,
+            observation_support_area=0.0,
             leading_edge=0.0,
             leading_edge_area=0.0,
             front_support_tversky=0.0,
