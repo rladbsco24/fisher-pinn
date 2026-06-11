@@ -122,6 +122,7 @@ class LossWeights:
     front_contrast: float = 0.0
     front_profile: float = 0.0
     level_set_alignment: float = 0.0
+    transverse_invariance: float = 0.0
     time_interface: float = 0.0
     discrete_rk4: float = 0.0
     rk4_teacher: float = 0.0
@@ -275,6 +276,7 @@ class TrainConfig:
     front_contrast_grid: int = 32
     front_profile_points: int = 256
     front_profile_width: float = 0.06
+    transverse_invariance_points: int = 0
     front_gradient_expected_points: int = 128
     mass_balance_times: int = 4
     mass_balance_grid: int = 18
@@ -405,6 +407,7 @@ class ExperimentConfig:
                 front_contrast=self.weights.front_contrast,
                 front_profile=self.weights.front_profile,
                 level_set_alignment=self.weights.level_set_alignment,
+                transverse_invariance=self.weights.transverse_invariance,
                 time_interface=self.weights.time_interface,
                 discrete_rk4=self.weights.discrete_rk4,
                 rk4_teacher=self.weights.rk4_teacher,
@@ -479,6 +482,11 @@ class ExperimentConfig:
                 front_contrast_grid=min(self.train.front_contrast_grid, 24),
                 front_profile_points=min(self.train.front_profile_points, 128),
                 front_profile_width=self.train.front_profile_width,
+                transverse_invariance_points=(
+                    min(self.train.transverse_invariance_points, 128)
+                    if self.train.transverse_invariance_points > 0
+                    else 0
+                ),
                 front_gradient_expected_points=min(self.train.front_gradient_expected_points, 96),
                 mass_balance_times=min(self.train.mass_balance_times, 4),
                 mass_balance_grid=min(self.train.mass_balance_grid, 18),
@@ -605,6 +613,7 @@ class ExperimentConfig:
                 front_contrast=0.0,
                 front_profile=0.0,
                 level_set_alignment=0.0,
+                transverse_invariance=0.0,
                 time_interface=0.0,
                 discrete_rk4=0.0,
                 rk4_teacher=0.0,
@@ -686,6 +695,7 @@ class ExperimentConfig:
                 front_contrast=0.12,
                 front_profile=0.25,
                 level_set_alignment=0.05,
+                transverse_invariance=0.0,
                 time_interface=0.01,
                 discrete_rk4=0.08,
                 rk4_teacher=0.0,
@@ -726,6 +736,7 @@ class ExperimentConfig:
                 front_contrast_grid=32,
                 front_profile_points=256,
                 front_profile_width=0.06,
+                transverse_invariance_points=0,
                 front_gradient_expected_points=128,
                 time_marching=True,
                 time_marching_start_fraction=0.30,
@@ -824,6 +835,7 @@ class ExperimentConfig:
                 front_contrast=0.0,
                 front_profile=0.0,
                 level_set_alignment=1.0,
+                transverse_invariance=3.0,
                 time_interface=0.0,
                 discrete_rk4=0.10,
                 physics_parameter_anchor=0.0,
@@ -848,6 +860,7 @@ class ExperimentConfig:
                 discrete_rk4_times=3,
                 discrete_rk4_grid=24,
                 discrete_rk4_dt_fraction=0.025,
+                transverse_invariance_points=512,
                 rk4_teacher_pool=4096,
                 rk4_teacher_batch=512,
                 rk4_pretrain_steps=0,

@@ -351,6 +351,30 @@ def ablowitz_zeppetella_front_phase_loss(
     )
 
 
+def transverse_invariance_loss(
+    model: OriginPINN,
+    n: int,
+    device: torch.device,
+) -> torch.Tensor:
+    """Penalize spurious transverse variation when a 1D wave is embedded in 2D."""
+
+    if n <= 0:
+        return torch.zeros((), device=device)
+    dtype = next(model.parameters()).dtype
+    x = torch.rand(n, 1, dtype=dtype, device=device) * model.domain.box
+    t = torch.rand(n, 1, dtype=dtype, device=device) * model.domain.t_end
+    y0 = torch.rand(n, 1, dtype=dtype, device=device) * model.domain.box
+    y1 = torch.rand(n, 1, dtype=dtype, device=device) * model.domain.box
+    xy0 = torch.cat([x, y0], dim=1).detach().clone().requires_grad_(True)
+    xy1 = torch.cat([x, y1], dim=1)
+    pred0 = model(xy0, t)
+    pred1 = model(xy1, t)
+    pair_loss = (pred0 - pred1).pow(2).mean()
+    grad0 = torch.autograd.grad(pred0, xy0, torch.ones_like(pred0), create_graph=True)[0]
+    transverse_grad = grad0[:, 1:2].pow(2).mean()
+    return pair_loss + 0.10 * transverse_grad
+
+
 def parabolic_mass_balance_loss(
     model: OriginPINN,
     n_times: int,

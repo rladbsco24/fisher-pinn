@@ -1,0 +1,6 @@
+family,moving_front_role,representative_problem,local_mapping,implemented_here,source
+SciML NeuralPDE PINN optimizer benchmark,standard PINN optimizer/loss construction reference,diffusion and related PDE PINN benchmarks,vanilla PINN proxy rows,partly,https://docs.sciml.ai/SciMLBenchmarksOutput/dev/PINNOptimizers/1d_diffusion/
+SciML NeuralPDE level-set error-vs-time benchmark,level-set/interface benchmark framing,2D level-set PDE,front-level-set alignment and front-band diagnostics,partly,https://docs.sciml.ai/SciMLBenchmarksOutput/dev/PINNErrorsVsTime/level_set_et/
+PINNacle benchmark suite,benchmark-model family comparison,"PINN, PINN+L-BFGS, LRA, NTK, RAR, gPINN, FBPINN","adaptive balancing, front RAR, gPINN-like front losses",partly,https://github.com/i207M/PINNacle
+Level-set moving-interface PINN / PirateNet line,moving-interface accuracy target,level-set moving interface and vortex front,"Pirate/RWF backbone, Fourier features, causal curriculum, level-set front losses",partly,https://arxiv.org/html/2502.02440v1
+Classical RK4 method-of-lines reference,same-regime numerical accuracy reference,1D AZ exact wave and 2D Fisher-KPP exact/finite-difference reference,RK4 rows in local accuracy table,yes,local fisher-kpp-rk4 and PINN metric outputs

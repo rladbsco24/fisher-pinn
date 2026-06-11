@@ -1,0 +1,7 @@
+problem,method,run_dir,final_time_relative_l2,validation_observation_mse,front_area_010_mae,mass_mae,metric_source
+1D AZ traveling front,PINN vanilla moving-front proxy,zeppe_exact_1d_quick40,0.4627782302832115,0.09570412337779999,0.20486886160714282,0.1678368410921363,local metrics.json
+1D AZ traveling front,PINN planar + transverse invariant,zeppe_exact_1d_planar_transverse_w3_quick40,0.20177124667069374,0.015874341130256653,0.05241660466269841,0.07109512945392833,local metrics.json
+1D AZ traveling front,RK4 exact-wave reference,zeppe_exact_1d_planar_transverse_w3_quick40,0.0013704520464578689,,,,same-problem RK4 metric
+2D Gaussian moving front,PINN vanilla moving-front proxy,gaussian_front_2d_no_teacher_no_radial_quick40,1.3894259862566791,0.008366098627448082,0.11126612103174605,0.020065195241689673,local metrics.json
+2D Gaussian moving front,PINN geo-spectral + mass/front guards,gaussian_front_2d_mass_upper115_quick40,0.8283944361167782,0.002836541272699833,0.019763764880952384,0.0034198272289658643,local metrics.json
+2D Gaussian moving front,RK4 finite-difference reference,gaussian_front_2d_mass_upper115_quick40,0.004646523476133505,,,,same-problem RK4 metric

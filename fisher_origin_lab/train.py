@@ -49,6 +49,7 @@ from .losses import (
     radial_symmetry_loss,
     seed_regularization_loss,
     spatial_coefficient_regularization_loss,
+    transverse_invariance_loss,
     time_slab_interface_loss,
 )
 from .metrics import origin_error, relative_l2, tensor_center
@@ -693,6 +694,7 @@ def _combine_loss_terms(
         "front_contrast",
         "front_profile",
         "level_set",
+        "transverse_invariance",
         "time_interface",
         "coefficient_field",
     }
@@ -1176,6 +1178,14 @@ def train_single(
                 )
         else:
             level_set_loss = torch.zeros((), device=device)
+        if cfg.weights.transverse_invariance > 0.0 and cfg.train.transverse_invariance_points > 0:
+            transverse_loss = transverse_invariance_loss(
+                model,
+                cfg.train.transverse_invariance_points,
+                device,
+            )
+        else:
+            transverse_loss = torch.zeros((), device=device)
         if cfg.weights.mass_balance > 0.0:
             mass_loss = parabolic_mass_balance_loss(
                 model,
@@ -1270,6 +1280,11 @@ def train_single(
                 ("front_contrast", cfg.weights.front_contrast * front_weight, front_contrast),
                 ("front_profile", cfg.weights.front_profile * front_weight, front_profile),
                 ("level_set", cfg.weights.level_set_alignment * front_weight, level_set_loss),
+                (
+                    "transverse_invariance",
+                    cfg.weights.transverse_invariance * front_weight,
+                    transverse_loss,
+                ),
                 ("mass", cfg.weights.mass_balance * front_weight, mass_loss),
                 ("mass_floor", cfg.weights.mass_floor * front_weight, mass_floor_loss),
                 (
@@ -1345,6 +1360,7 @@ def train_single(
                         front_contrast,
                         front_profile,
                         level_set_loss,
+                        transverse_loss,
                         front_support_tversky,
                         observation_support_loss,
                     ],
@@ -1393,6 +1409,7 @@ def train_single(
                 "front_contrast": float(front_contrast.detach().cpu()),
                 "front_profile": float(front_profile.detach().cpu()),
                 "level_set": float(level_set_loss.detach().cpu()),
+                "transverse_invariance": float(transverse_loss.detach().cpu()),
                 "mass": float(mass_loss.detach().cpu()),
                 "mass_floor": float(mass_floor_loss.detach().cpu()),
                 "front_support_tversky": float(front_support_tversky.detach().cpu()),
@@ -1739,6 +1756,14 @@ def _lbfgs_polish(
                 )
         else:
             level_set_loss = torch.zeros((), device=device)
+        if cfg.weights.transverse_invariance > 0.0 and cfg.train.transverse_invariance_points > 0:
+            transverse_loss = transverse_invariance_loss(
+                model,
+                min(cfg.train.transverse_invariance_points, 512),
+                device,
+            )
+        else:
+            transverse_loss = torch.zeros((), device=device)
         if cfg.weights.mass_balance > 0.0:
             mass_loss = parabolic_mass_balance_loss(
                 model,
@@ -1820,6 +1845,7 @@ def _lbfgs_polish(
             + cfg.weights.front_contrast * front_contrast
             + cfg.weights.front_profile * front_profile
             + cfg.weights.level_set_alignment * level_set_loss
+            + cfg.weights.transverse_invariance * transverse_loss
             + cfg.weights.mass_balance * mass_loss
             + cfg.weights.mass_floor * mass_floor_loss
             + cfg.weights.front_support_tversky * front_support_tversky

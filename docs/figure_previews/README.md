@@ -109,18 +109,35 @@ The refreshed run produced `pinn_final_time_relative_l2 = 0.9769`,
 
 ## Ablowitz-Zeppetella PINN Planar-Wave Probe
 
-Run source: `python experiments\basic_pinn\run_zeppe_exact_1d.py --preset quick --epochs 40 --out-dir runs\goal_eval\zeppe_exact_1d_planar_quick40`.
-This probe enables the planar Fisher-KPP traveling-wave feature for the exact
-Ablowitz-Zeppetella 1D benchmark. Relative to the previous 40-epoch quick check,
-final-time relative L2 improved from `0.4628` to `0.2243`, validation MSE improved
-from `9.57e-2` to `2.13e-2`, and final-time mean absolute error improved from
-`0.3574` to `0.1632`.
+Run source: `python experiments\basic_pinn\run_zeppe_exact_1d.py --preset quick --epochs 40 --out-dir runs\goal_eval\zeppe_exact_1d_planar_transverse_w3_quick40`.
+This probe enables the planar Fisher-KPP traveling-wave feature and transverse
+invariance for the exact Ablowitz-Zeppetella 1D benchmark. Relative to the earlier
+40-epoch vanilla quick check, final-time relative L2 improved from `0.4628` to
+`0.2018`, validation MSE improved from `9.57e-2` to `1.59e-2`, front-area MAE improved
+from `0.2049` to `0.0524`, and mass MAE improved from `0.1678` to `0.0711`.
 
 ![AZ planar PINN vs RK4 comparison](pinn_az_planar_quick40_comparison.png)
 
 ![AZ planar PINN spacetime error](pinn_az_planar_quick40_spacetime_error.png)
 
 ![AZ planar PINN training diagnostics](pinn_az_planar_quick40_training_diagnostics.png)
+
+![AZ planar transverse PINN vs RK4 comparison](pinn_az_planar_transverse_quick40_comparison.png)
+
+![AZ planar transverse PINN spacetime error](pinn_az_planar_transverse_quick40_spacetime_error.png)
+
+![AZ planar transverse PINN training diagnostics](pinn_az_planar_transverse_quick40_training_diagnostics.png)
+
+## SciML-Style Moving-Front Comparison
+
+Run source: `python scripts\run_sciml_moving_front_comparison.py`.
+The plot compares same-regime local 1D/2D moving-front PINN variants against the
+corresponding RK4 reference. SciML NeuralPDE, SciML level-set, PINNacle, and
+PirateNet-style moving-interface work are represented in
+`sciml_moving_front_benchmark_families.csv` as benchmark families rather than mixed
+directly into the numeric L2 table.
+
+![SciML-style moving-front accuracy comparison](sciml_moving_front_accuracy_comparison.png)
 
 ## Korea Pine-Wilt Preview
 

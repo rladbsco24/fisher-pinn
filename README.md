@@ -342,12 +342,28 @@ the much more accurate same-problem numerical reference on this quick check
 improvement target rather than a solved accuracy claim.
 
 The Ablowitz-Zeppetella 1D exact-wave profile now enables a planar KPP traveling-wave
-coordinate feature. Unlike the radial seed-front feature used by the 2D Gaussian case,
-this feature follows the exact planar phase variable with `c = 5 sqrt(D r / 6)` and
-thickness `sqrt(6D/r)`. A 40-epoch quick check improved the 1D exact-wave PINN
-final-time relative L2 from `0.4628` to `0.2243`, validation MSE from `9.57e-2` to
-`2.13e-2`, and final-time mean absolute error from `0.3574` to `0.1632`. This is a
-model-side representation improvement, not RK4 pseudo-labeling or postprocessing.
+coordinate feature and a transverse-invariance loss. Unlike the radial seed-front
+feature used by the 2D Gaussian case, the planar feature follows the exact phase
+variable with `c = 5 sqrt(D r / 6)` and thickness `sqrt(6D/r)`. The transverse term
+penalizes artificial `y` variation introduced by solving the 1D wave with the shared
+2D PINN backbone. A 40-epoch quick check improved the 1D exact-wave PINN final-time
+relative L2 from `0.4628` to `0.2018`, validation MSE from `9.57e-2` to `1.59e-2`,
+front-area MAE from `0.2049` to `0.0524`, and mass MAE from `0.1678` to `0.0711`.
+The same-problem RK4 final-time relative L2 remains `0.00137`, so this is a clear
+model-side improvement but not an RK4-level accuracy claim.
+
+For the SciML-style moving-front comparison, run:
+
+```bash
+python scripts\run_sciml_moving_front_comparison.py
+```
+
+This writes `docs\figure_previews\sciml_moving_front_accuracy_comparison.png`,
+`sciml_moving_front_accuracy_comparison.csv`, and
+`sciml_moving_front_benchmark_families.csv`. The numeric table compares only local
+same-regime runs; SciML NeuralPDE, SciML level-set, PINNacle, and PirateNet-style
+moving-interface work are listed as benchmark families because their published tasks,
+budgets, and error definitions are not identical to this repository's Fisher-KPP runs.
 
 Leading-edge distribution and radial-symmetry losses are implemented as explicit
 ON/OFF validation features, but their default weights are zero. Early quick checks made
