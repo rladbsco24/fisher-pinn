@@ -19,6 +19,7 @@ from scripts.run_forward_ablation import aggregate as aggregate_forward_ablation
 from scripts.run_forward_ablation import make_forward_cases
 from scripts.run_feature_validation_ablation import make_feature_validation_pairs, summarize_feature_validation_rows
 from scripts.run_korea_pine_wilt_simulation import _save_korea_map_baseline_gif
+from scripts.prepare_flagship_budget_manifest import build_manifest
 
 from PIL import Image
 
@@ -1155,3 +1156,18 @@ def test_visualization_exports_are_created(tmp_path) -> None:
     assert gif_diag["frames"] == 3
     assert gif_diag["warning"] == "DIAGNOSTIC ONLY: smoke visualization."
     assert gif_diag["final_frame_relative_l2"] >= 0.0
+
+
+def test_flagship_budget_manifest_is_non_teacher_and_relative(tmp_path: Path) -> None:
+    manifest = build_manifest(epochs=123, root=tmp_path)
+
+    assert manifest["default_epochs"] == 123
+    assert len(manifest["cases"]) == 3
+    for case in manifest["cases"]:
+        fairness = case["fairness_constraints"]
+        assert fairness["rk4_teacher_labels"] is False
+        assert fairness["posthoc_field_correction"] is False
+        assert fairness["checkpoint_resume"] is True
+        assert "--preset flagship" in case["command"]
+        assert str(case["output_dir"]).startswith("runs")
+        assert not Path(str(case["output_dir"])).is_absolute()

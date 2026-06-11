@@ -139,6 +139,17 @@ directly into the numeric L2 table.
 
 ![SciML-style moving-front accuracy comparison](sciml_moving_front_accuracy_comparison.png)
 
+## Flagship PINN Budget Manifest
+
+Run source: `python scripts\prepare_flagship_budget_manifest.py`.
+This does not run training. It records the 20,000-epoch 1D, 2D, and Korea PINN
+commands, expected output paths, and fairness constraints used before launching
+long comparisons against the RK4 references.
+
+Manifest files:
+`flagship_budget_manifest/flagship_budget_manifest.md` and
+`flagship_budget_manifest/flagship_budget_manifest.json`.
+
 ## Korea Pine-Wilt Preview
 
 Run source: `python scripts\run_korea_pine_wilt_simulation.py --output-dir runs\figure_update_korea_pine_wilt_full --pinn-epochs 1200`.

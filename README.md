@@ -53,6 +53,14 @@ python experiments\basic_pinn\run_gaussian_moving_front_2d.py --preset flagship 
 python experiments\korea_pine_pinn\run_pine_pinn.py --preset flagship --output-dir runs\korea_pine_pinn_flagship
 ```
 
+Before launching those long runs, the non-executing manifest below records the
+same budget, output paths, and fairness constraints for the 1D, 2D, and Korea
+PINN comparisons:
+
+```bash
+python scripts\prepare_flagship_budget_manifest.py
+```
+
 ## Figure Preview Gallery
 
 Representative outputs from the current runnable scripts are committed in

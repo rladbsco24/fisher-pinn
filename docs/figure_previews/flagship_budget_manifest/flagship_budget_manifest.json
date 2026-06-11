@@ -1,0 +1,79 @@
+{
+  "purpose": "Execution plan for high-budget PINN runs intended to close the accuracy gap to the same-problem RK4 references without RK4 teacher labels or postprocessing.",
+  "root": "C:\\Users\\yoonc\\Downloads\\fisher-pinn-github-worktree",
+  "default_epochs": 20000,
+  "cases": [
+    {
+      "name": "basic_1d_az_flagship",
+      "problem": "Ablowitz-Zeppetella 1D traveling-front benchmark in the shared 2D PINN backbone",
+      "epochs": 20000,
+      "command": "python experiments/basic_pinn/run_zeppe_exact_1d.py --preset flagship --epochs 20000 --out-dir runs\\basic_pinn\\zeppe_exact_1d_flagship",
+      "output_dir": "runs\\basic_pinn\\zeppe_exact_1d_flagship",
+      "expected_outputs": [
+        "runs\\basic_pinn\\zeppe_exact_1d_flagship\\metrics.json",
+        "runs\\basic_pinn\\zeppe_exact_1d_flagship\\pinn_vs_rk4_comparison.png",
+        "runs\\basic_pinn\\zeppe_exact_1d_flagship\\prediction_evolution.gif"
+      ],
+      "fairness_constraints": {
+        "rk4_teacher_labels": false,
+        "posthoc_field_correction": false,
+        "checkpoint_resume": true,
+        "same_metric_family": [
+          "final-time relative L2",
+          "validation observation MSE",
+          "front-area/front-band error",
+          "mass trajectory error"
+        ]
+      },
+      "notes": "Uses exact initial/boundary constraints and traveling-wave geometry, but no RK4 pseudo-labels or after-the-fact correction."
+    },
+    {
+      "name": "basic_2d_gaussian_flagship",
+      "problem": "2D Gaussian moving-front Fisher-KPP benchmark",
+      "epochs": 20000,
+      "command": "python experiments/basic_pinn/run_gaussian_moving_front_2d.py --preset flagship --epochs 20000 --run-classical-baseline --out-dir runs\\basic_pinn\\gaussian_moving_front_2d_flagship",
+      "output_dir": "runs\\basic_pinn\\gaussian_moving_front_2d_flagship",
+      "expected_outputs": [
+        "runs\\basic_pinn\\gaussian_moving_front_2d_flagship\\metrics.json",
+        "runs\\basic_pinn\\gaussian_moving_front_2d_flagship\\pinn_vs_rk4_comparison.png",
+        "runs\\basic_pinn\\gaussian_moving_front_2d_flagship\\prediction_evolution.gif"
+      ],
+      "fairness_constraints": {
+        "rk4_teacher_labels": false,
+        "posthoc_field_correction": false,
+        "checkpoint_resume": true,
+        "same_metric_family": [
+          "final-time relative L2",
+          "validation observation MSE",
+          "front-area/front-band error",
+          "mass trajectory error"
+        ]
+      },
+      "notes": "Uses the same geo-spectral/front-aware model family and logs the RK4 reference as an evaluation baseline, not as supervised training labels."
+    },
+    {
+      "name": "korea_pine_flagship",
+      "problem": "Korea pine-wilt land-mask reaction-diffusion PINN/RK4 comparison",
+      "epochs": 20000,
+      "command": "python experiments/korea_pine_pinn/run_pine_pinn.py --preset flagship --output-dir runs\\korea_pine_pinn_flagship",
+      "output_dir": "runs\\korea_pine_pinn_flagship",
+      "expected_outputs": [
+        "runs\\korea_pine_pinn_flagship\\metrics.json",
+        "runs\\korea_pine_pinn_flagship\\pinn_vs_rk4_comparison.png",
+        "runs\\korea_pine_pinn_flagship\\prediction_evolution.gif"
+      ],
+      "fairness_constraints": {
+        "rk4_teacher_labels": false,
+        "posthoc_field_correction": false,
+        "checkpoint_resume": true,
+        "same_metric_family": [
+          "final-time relative L2",
+          "validation observation MSE",
+          "front-area/front-band error",
+          "mass trajectory error"
+        ]
+      },
+      "notes": "Uses the Korea-specific land mask, sea exclusion, and observation timeline while keeping the same PINN training budget scale."
+    }
+  ]
+}
