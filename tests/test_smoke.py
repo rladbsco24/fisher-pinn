@@ -77,12 +77,14 @@ from fisher_origin_lab.losses import (
     leading_edge_area_loss,
     leading_edge_distribution_loss,
     leading_edge_floor_loss,
+    logit_phase_residual_loss,
     mass_floor_trajectory_loss,
     observed_support_area_loss,
     observed_support_tversky_loss,
     parabolic_mass_balance_loss,
     pde_residual,
     radial_symmetry_loss,
+    residual_cvar_loss,
     spatial_coefficient_regularization_loss,
     time_slab_interface_loss,
 )
@@ -303,6 +305,8 @@ def test_geo_spectral_forward_model_terms_are_finite() -> None:
     pred = model(xy, t)
     residual = pde_residual(model, xy, t)
     front_grad = front_local_gradient_residual_loss(model, xy, t, max_points=6)
+    phase_loss = logit_phase_residual_loss(model, xy, t)
+    cvar_loss = residual_cvar_loss(residual.pow(2), tail_fraction=0.25)
     coefficient_loss = spatial_coefficient_regularization_loss(model, xy)
     sparse = model.sparse_last_layer_l1()
     assert pred.shape == (12, 1)
@@ -310,6 +314,8 @@ def test_geo_spectral_forward_model_terms_are_finite() -> None:
     assert torch.isfinite(pred).all()
     assert torch.isfinite(residual).all()
     assert torch.isfinite(front_grad)
+    assert torch.isfinite(phase_loss)
+    assert torch.isfinite(cvar_loss)
     assert torch.isfinite(coefficient_loss)
     assert torch.isfinite(sparse)
     assert model.has_spatial_coefficients()
@@ -323,6 +329,8 @@ def test_ablowitz_zeppetella_forward_preset_matches_exact_wave() -> None:
     assert np.isclose(cfg.pde.reaction, 1.0)
     assert np.isclose(cfg.pde.diffusion, 1.0 / 40.0**2)
     assert cfg.weights.level_set_alignment > 0.0
+    assert cfg.weights.phase_pde > 0.0
+    assert cfg.weights.residual_cvar > 0.0
     assert cfg.model.use_az_hard_constraints is True
     model = OriginPINN(cfg.domain, cfg.pde, cfg.seed, cfg.model)
     xy = torch.rand(16, 2)
@@ -588,6 +596,10 @@ def test_korea_pine_wilt_compact_dataset_and_rk4_smoke(tmp_path) -> None:
     assert np.isfinite(pinn.history[-1]["support"])
     assert "support_area" in pinn.history[-1]
     assert np.isfinite(pinn.history[-1]["support_area"])
+    assert "phase_pde" in pinn.history[-1]
+    assert np.isfinite(pinn.history[-1]["phase_pde"])
+    assert "residual_cvar" in pinn.history[-1]
+    assert np.isfinite(pinn.history[-1]["residual_cvar"])
     assert "mass_trajectory" in pinn.history[-1]
     assert np.isfinite(pinn.history[-1]["mass_trajectory"])
     assert "diffusion_km2_per_year" in pinn.physics
@@ -598,6 +610,8 @@ def test_korea_pine_wilt_compact_dataset_and_rk4_smoke(tmp_path) -> None:
     assert "support_weight" in pinn.physics
     assert "support_area_weight" in pinn.physics
     assert "mass_trajectory_weight" in pinn.physics
+    assert "phase_pde_weight" in pinn.physics
+    assert "residual_cvar_weight" in pinn.physics
 
     gif_info = _save_korea_map_baseline_gif(
         tmp_path / "korea_map_baselines.gif",
@@ -691,6 +705,8 @@ def test_geo_spectral_forward_profile_extends_korea_setup() -> None:
     assert cfg.weights.mass_floor > 0.0
     assert cfg.weights.observation_support == 0.0
     assert cfg.weights.observation_support_area > 0.0
+    assert cfg.weights.phase_pde > 0.0
+    assert cfg.weights.residual_cvar > 0.0
     assert cfg.weights.expected_front_pde == 0.0
     assert cfg.weights.leading_edge > 0.0
     assert cfg.weights.leading_edge_area > 0.0

@@ -21,7 +21,8 @@ simulation.
 
 Detailed method explanation, literature rationale, observations, and interpretation are
 maintained in `docs/fisher_kpp_pinn_and_korea_pinn_technical_note.docx` and
-`docs/fisher_kpp_rk4_pde_technical_note.docx`.
+`docs/fisher_kpp_rk4_pde_technical_note.docx`. The phase-residual and residual-CVaR
+PINN addendum is documented in `docs/phase_cvar_pinn_methodology.md`.
 
 ## Canonical Experiment Entrypoints
 

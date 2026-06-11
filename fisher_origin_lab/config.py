@@ -112,6 +112,8 @@ class LossWeights:
     observation_support_area: float = 0.0
     gradient: float = 0.01
     data_density_gain: float = 0.0
+    phase_pde: float = 0.0
+    residual_cvar: float = 0.0
     front_pde_alpha: float = 0.0
     front_pde_gradient: float = 0.0
     front_gradient: float = 0.0
@@ -307,6 +309,11 @@ class TrainConfig:
     residual_weight_exponent_start: float = 0.5
     residual_weight_exponent_end: float = 0.5
     residual_curriculum_epochs: int = 0
+    phase_residual_low: float = 1.0e-3
+    phase_residual_high: float = 0.995
+    phase_residual_temperature: float = 0.02
+    phase_residual_clip: float = 25.0
+    residual_cvar_fraction: float = 0.10
     pde_loss_warmup_fraction: float = 0.0
     front_loss_start_fraction: float = 0.0
     front_loss_warmup_fraction: float = 0.0
@@ -532,6 +539,8 @@ class ExperimentConfig:
                 observation_support_area=self.weights.observation_support_area,
                 gradient=0.0,
                 data_density_gain=self.weights.data_density_gain,
+                phase_pde=self.weights.phase_pde,
+                residual_cvar=self.weights.residual_cvar,
                 front_pde_alpha=self.weights.front_pde_alpha,
                 front_pde_gradient=self.weights.front_pde_gradient,
                 front_gradient=self.weights.front_gradient,
@@ -583,6 +592,11 @@ class ExperimentConfig:
                     if self.train.residual_curriculum_epochs > 0
                     else 0
                 ),
+                phase_residual_low=self.train.phase_residual_low,
+                phase_residual_high=self.train.phase_residual_high,
+                phase_residual_temperature=self.train.phase_residual_temperature,
+                phase_residual_clip=self.train.phase_residual_clip,
+                residual_cvar_fraction=self.train.residual_cvar_fraction,
                 pde_loss_warmup_fraction=self.train.pde_loss_warmup_fraction,
                 front_loss_start_fraction=self.train.front_loss_start_fraction,
                 front_loss_warmup_fraction=self.train.front_loss_warmup_fraction,
@@ -707,6 +721,8 @@ class ExperimentConfig:
                 shooting=0.0,
                 gradient=0.0,
                 data_density_gain=4.0,
+                phase_pde=0.03,
+                residual_cvar=0.05,
                 front_pde_alpha=0.0,
                 front_pde_gradient=0.0,
                 front_gradient=0.0,
@@ -788,6 +804,8 @@ class ExperimentConfig:
                 observation_support_area=0.15,
                 gradient=0.0,
                 data_density_gain=4.0,
+                phase_pde=0.18,
+                residual_cvar=0.12,
                 front_pde_alpha=2.0,
                 front_pde_gradient=0.5,
                 front_gradient=0.005,
@@ -817,6 +835,11 @@ class ExperimentConfig:
                 residual_weight_exponent_start=0.0,
                 residual_weight_exponent_end=0.5,
                 residual_curriculum_epochs=max(1, base.train.epochs // 4),
+                phase_residual_low=7.5e-4,
+                phase_residual_high=0.997,
+                phase_residual_temperature=0.018,
+                phase_residual_clip=20.0,
+                residual_cvar_fraction=0.12,
                 pde_loss_warmup_fraction=0.05,
                 front_loss_start_fraction=0.05,
                 front_loss_warmup_fraction=0.20,
@@ -934,6 +957,8 @@ class ExperimentConfig:
                 base.weights,
                 data=2.0,
                 pde=1.0,
+                phase_pde=0.25,
+                residual_cvar=0.10,
                 initial_condition=8.0,
                 boundary=4.0,
                 front_speed=0.0,

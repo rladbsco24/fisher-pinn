@@ -53,6 +53,81 @@ def pde_residual_terms(
     return residual, u, u_xy, xy_req, t_req
 
 
+def logit_phase_residual_loss(
+    model: OriginPINN,
+    xy: torch.Tensor,
+    t: torch.Tensor,
+    *,
+    active_low: float = 1.0e-3,
+    active_high: float = 0.995,
+    temperature: float = 0.02,
+    residual_clip: float = 25.0,
+) -> torch.Tensor:
+    """Fisher-KPP residual after the exact logit phase transform.
+
+    For 0 < u < 1 and q=logit(u), the Fisher-KPP equation is equivalent to
+    q_t + v.grad(q) - div(D grad(q)) - D(1-2u)|grad(q)|^2 - r = 0.
+    This removes the u(1-u) factor that makes the standard residual nearly
+    vanish in the low-density leading edge.
+    """
+
+    xy_req = xy.detach().clone().requires_grad_(True)
+    t_req = t.detach().clone().requires_grad_(True)
+    u = model(xy_req, t_req)
+    eps = max(float(active_low) * 0.1, 1.0e-6)
+    u_safe = u.clamp(eps, 1.0 - eps)
+    q = torch.log(u_safe) - torch.log1p(-u_safe)
+    grad = torch.autograd.grad
+    q_t = grad(q, t_req, torch.ones_like(q), create_graph=True)[0]
+    q_xy = grad(q, xy_req, torch.ones_like(q), create_graph=True)[0]
+    lap_q = torch.zeros_like(q)
+    for dim in range(2):
+        component = q_xy[:, dim : dim + 1]
+        second = grad(component, xy_req, torch.ones_like(component), create_graph=True)[0]
+        lap_q = lap_q + second[:, dim : dim + 1]
+
+    if model.pde.include_advection:
+        adv_q = model.pde.velocity[0] * q_xy[:, 0:1] + model.pde.velocity[1] * q_xy[:, 1:2]
+    else:
+        adv_q = torch.zeros_like(q)
+    if model.has_spatial_coefficients():
+        diffusion = model.diffusion_coefficient(xy_req).clamp_min(1.0e-12)
+        reaction = model.reaction_coefficient(xy_req)
+        diffusion_grad = grad(diffusion, xy_req, torch.ones_like(diffusion), create_graph=True)[0]
+        diffusion_grad_dot = torch.sum(diffusion_grad * q_xy, dim=-1, keepdim=True)
+    else:
+        diffusion = model.pde.diffusion().clamp_min(1.0e-12)
+        reaction = model.pde.reaction()
+        diffusion_grad_dot = torch.zeros_like(q)
+
+    grad_q_sq = torch.sum(q_xy.pow(2), dim=-1, keepdim=True)
+    phase_residual = (
+        q_t
+        + adv_q
+        - diffusion * lap_q
+        - diffusion * (1.0 - 2.0 * u_safe) * grad_q_sq
+        - diffusion_grad_dot
+        - reaction
+    )
+    low = max(float(active_low), eps)
+    high = min(max(float(active_high), low + 1.0e-4), 1.0 - eps)
+    tau = max(float(temperature), 1.0e-4)
+    active = torch.sigmoid((u.detach() - low) / tau) * torch.sigmoid((high - u.detach()) / tau)
+    clipped = phase_residual.clamp(-float(residual_clip), float(residual_clip))
+    return torch.sum(active * clipped.pow(2)) / active.sum().clamp_min(1.0)
+
+
+def residual_cvar_loss(residual_sq: torch.Tensor, tail_fraction: float = 0.10) -> torch.Tensor:
+    """Worst-tail residual loss, a CVaR/L-infinity proxy for PINN collocation."""
+
+    values = residual_sq.flatten()
+    if len(values) == 0:
+        return torch.zeros((), dtype=residual_sq.dtype, device=residual_sq.device)
+    fraction = min(max(float(tail_fraction), 1.0 / float(len(values))), 1.0)
+    keep = max(1, int(math.ceil(fraction * len(values))))
+    return torch.topk(values, k=keep).values.mean()
+
+
 def spatial_coefficient_regularization_loss(
     model: OriginPINN,
     xy: torch.Tensor,

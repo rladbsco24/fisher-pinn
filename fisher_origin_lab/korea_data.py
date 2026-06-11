@@ -18,6 +18,7 @@ from .losses import (
     boundary_neumann_loss,
     observed_support_area_loss,
     observed_support_tversky_loss,
+    residual_cvar_loss,
     spatial_coefficient_regularization_loss,
 )
 from .models import OriginPINN
@@ -992,6 +993,56 @@ def _korea_anisotropic_pde_residual(
     return u_t - diffusion_flux - reaction * u * (1.0 - u)
 
 
+def _korea_anisotropic_logit_phase_residual_loss(
+    model: OriginPINN,
+    xy: torch.Tensor,
+    t: torch.Tensor,
+    *,
+    diffusion_x_scale: float,
+    diffusion_y_scale: float,
+    active_low: float = 1.0e-3,
+    active_high: float = 0.995,
+    temperature: float = 0.02,
+    residual_clip: float = 25.0,
+) -> torch.Tensor:
+    xy_req = xy.detach().clone().requires_grad_(True)
+    t_req = t.detach().clone().requires_grad_(True)
+    u = model(xy_req, t_req)
+    eps = max(float(active_low) * 0.1, 1.0e-6)
+    u_safe = u.clamp(eps, 1.0 - eps)
+    q = torch.log(u_safe) - torch.log1p(-u_safe)
+    ones = torch.ones_like(q)
+    q_t = torch.autograd.grad(q, t_req, ones, create_graph=True)[0]
+    q_xy = torch.autograd.grad(q, xy_req, ones, create_graph=True)[0]
+    q_x = q_xy[:, 0:1]
+    q_y = q_xy[:, 1:2]
+    q_xx = torch.autograd.grad(q_x, xy_req, torch.ones_like(q_x), create_graph=True)[0][:, 0:1]
+    q_yy = torch.autograd.grad(q_y, xy_req, torch.ones_like(q_y), create_graph=True)[0][:, 1:2]
+    diffusion_base = model.diffusion_coefficient(xy_req).clamp_min(1.0e-12)
+    if model.has_spatial_coefficients():
+        diffusion_grad = torch.autograd.grad(
+            diffusion_base,
+            xy_req,
+            torch.ones_like(diffusion_base),
+            create_graph=True,
+        )[0]
+    else:
+        diffusion_grad = torch.zeros_like(xy_req)
+    diffusion_phase = (
+        float(diffusion_x_scale)
+        * (diffusion_base * q_xx + diffusion_base * (1.0 - 2.0 * u_safe) * q_x.pow(2) + diffusion_grad[:, 0:1] * q_x)
+        + float(diffusion_y_scale)
+        * (diffusion_base * q_yy + diffusion_base * (1.0 - 2.0 * u_safe) * q_y.pow(2) + diffusion_grad[:, 1:2] * q_y)
+    )
+    phase_residual = q_t - diffusion_phase - model.reaction_coefficient(xy_req)
+    low = max(float(active_low), eps)
+    high = min(max(float(active_high), low + 1.0e-4), 1.0 - eps)
+    tau = max(float(temperature), 1.0e-4)
+    active = torch.sigmoid((u.detach() - low) / tau) * torch.sigmoid((high - u.detach()) / tau)
+    clipped = phase_residual.clamp(-float(residual_clip), float(residual_clip))
+    return torch.sum(active * clipped.pow(2)) / active.sum().clamp_min(1.0)
+
+
 def _korea_mass_trajectory_loss(
     model: OriginPINN,
     grid_xy: torch.Tensor,
@@ -1149,6 +1200,9 @@ def fit_korea_pine_wilt_pinn(
     mass_trajectory_weight: float = 0.75,
     mass_trajectory_points: int = 2048,
     mass_trajectory_times: int = 4,
+    phase_pde_weight: float = 0.02,
+    residual_cvar_weight: float = 0.03,
+    residual_cvar_fraction: float = 0.10,
     diffusion: float = 0.0015,
     reaction: float = 0.20,
     physics_anchor_weight: float = 0.08,
@@ -1349,7 +1403,22 @@ def fit_korea_pine_wilt_pinn(
             diffusion_x_scale=diffusion_x_scale,
             diffusion_y_scale=diffusion_y_scale,
         )
-        pde_loss = torch.mean(residual**2)
+        residual_sq = residual.pow(2).flatten()
+        pde_loss = torch.mean(residual_sq)
+        if phase_pde_weight > 0.0:
+            phase_pde_loss = _korea_anisotropic_logit_phase_residual_loss(
+                model,
+                xy_col,
+                t_col,
+                diffusion_x_scale=diffusion_x_scale,
+                diffusion_y_scale=diffusion_y_scale,
+            )
+        else:
+            phase_pde_loss = torch.zeros((), device=device_obj)
+        if residual_cvar_weight > 0.0:
+            residual_cvar = residual_cvar_loss(residual_sq, residual_cvar_fraction)
+        else:
+            residual_cvar = torch.zeros((), device=device_obj)
         if boundary_points > 0:
             bc_loss = boundary_neumann_loss(model, boundary_points, device_obj)
         else:
@@ -1388,6 +1457,8 @@ def fit_korea_pine_wilt_pinn(
             data_weight * data_loss
             + initial_condition_weight * ic_loss
             + pde_weight * pde_loss
+            + phase_pde_weight * phase_pde_loss
+            + residual_cvar_weight * residual_cvar
             + boundary_weight * bc_loss
             + sea_weight * sea_loss
             + support_weight * support_loss
@@ -1408,6 +1479,8 @@ def fit_korea_pine_wilt_pinn(
                     "data": float(data_loss.detach().cpu()),
                     "initial_condition": float(ic_loss.detach().cpu()),
                     "pde": float(pde_loss.detach().cpu()),
+                    "phase_pde": float(phase_pde_loss.detach().cpu()),
+                    "residual_cvar": float(residual_cvar.detach().cpu()),
                     "boundary": float(bc_loss.detach().cpu()),
                     "sea": float(sea_loss.detach().cpu()),
                     "support": float(support_loss.detach().cpu()),
@@ -1500,6 +1573,9 @@ def fit_korea_pine_wilt_pinn(
         "mass_trajectory_weight": float(mass_trajectory_weight),
         "mass_trajectory_points": float(mass_trajectory_points),
         "mass_trajectory_times": float(mass_trajectory_times),
+        "phase_pde_weight": float(phase_pde_weight),
+        "residual_cvar_weight": float(residual_cvar_weight),
+        "residual_cvar_fraction": float(residual_cvar_fraction),
         "length_scale_km": float(physics_prior.scale.length_scale_km),
         "length_scale_mode": physics_prior.scale.length_scale_mode,
     }

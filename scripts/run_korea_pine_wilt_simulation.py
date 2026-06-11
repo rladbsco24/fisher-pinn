@@ -794,6 +794,9 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             mass_trajectory_weight=getattr(args, "pinn_mass_trajectory_weight", 0.75),
             mass_trajectory_points=getattr(args, "pinn_mass_trajectory_points", 2048),
             mass_trajectory_times=getattr(args, "pinn_mass_trajectory_times", 4),
+            phase_pde_weight=getattr(args, "pinn_phase_pde_weight", 0.02),
+            residual_cvar_weight=getattr(args, "pinn_residual_cvar_weight", 0.03),
+            residual_cvar_fraction=getattr(args, "pinn_residual_cvar_fraction", 0.10),
             diffusion=diffusion,
             reaction=float(pinn_initial_reaction),
             physics_anchor_weight=getattr(args, "pinn_physics_anchor_weight", 0.08),
@@ -1021,6 +1024,9 @@ def main() -> None:
     parser.add_argument("--pinn-mass-trajectory-weight", type=float, default=0.75)
     parser.add_argument("--pinn-mass-trajectory-points", type=int, default=2048)
     parser.add_argument("--pinn-mass-trajectory-times", type=int, default=4)
+    parser.add_argument("--pinn-phase-pde-weight", type=float, default=0.02)
+    parser.add_argument("--pinn-residual-cvar-weight", type=float, default=0.03)
+    parser.add_argument("--pinn-residual-cvar-fraction", type=float, default=0.10)
     parser.add_argument("--pinn-initial-reaction", type=float, default=None)
     parser.add_argument("--pinn-physics-anchor-weight", type=float, default=0.08)
     parser.add_argument("--pinn-coefficient-field-weight", type=float, default=0.02)

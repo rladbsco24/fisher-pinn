@@ -41,6 +41,7 @@ from .losses import (
     leading_edge_floor_loss,
     leading_edge_area_loss,
     leading_edge_distribution_loss,
+    logit_phase_residual_loss,
     mass_floor_trajectory_loss,
     observed_support_area_loss,
     observed_support_tversky_loss,
@@ -48,6 +49,7 @@ from .losses import (
     pde_residual,
     pde_residual_terms,
     radial_symmetry_loss,
+    residual_cvar_loss,
     seed_regularization_loss,
     spatial_coefficient_regularization_loss,
     transverse_invariance_loss,
@@ -678,6 +680,8 @@ def _combine_loss_terms(
         "observation_support_area",
         "rk4_teacher",
         "pde",
+        "phase_pde",
+        "residual_cvar",
         "bc",
         "seed_match",
         "seed_mass",
@@ -1002,6 +1006,33 @@ def train_single(
         bins = _bin_losses(weighted_residual_sq, t_col, cfg.train.time_bins, cfg.domain.t_end)
         time_weights = causal_weights(bins, cfg.train.causal_eps) * decay.update(bins)
         pde_loss_value = torch.sum(time_weights * bins) / time_weights.sum().clamp_min(1.0e-12)
+        if cfg.weights.phase_pde > 0.0:
+            phase_points = min(
+                len(xy_col),
+                max(512, cfg.train.expected_front_points, cfg.train.level_set_points),
+            )
+            if phase_points < len(xy_col):
+                head = phase_points // 2
+                tail = phase_points - head
+                xy_phase = torch.cat([xy_col[:head], xy_col[-tail:]], dim=0)
+                t_phase = torch.cat([t_col[:head], t_col[-tail:]], dim=0)
+            else:
+                xy_phase, t_phase = xy_col, t_col
+            phase_pde_loss = logit_phase_residual_loss(
+                model,
+                xy_phase,
+                t_phase,
+                active_low=cfg.train.phase_residual_low,
+                active_high=cfg.train.phase_residual_high,
+                temperature=cfg.train.phase_residual_temperature,
+                residual_clip=cfg.train.phase_residual_clip,
+            )
+        else:
+            phase_pde_loss = torch.zeros((), device=device)
+        if cfg.weights.residual_cvar > 0.0:
+            residual_cvar = residual_cvar_loss(weighted_residual_sq, cfg.train.residual_cvar_fraction)
+        else:
+            residual_cvar = torch.zeros((), device=device)
 
         if cfg.weights.boundary > 0.0 and cfg.train.boundary_points > 0:
             if is_az_benchmark:
@@ -1273,6 +1304,8 @@ def train_single(
                 ("observation_support_area", cfg.weights.observation_support_area, observation_support_area_loss),
                 ("rk4_teacher", cfg.weights.rk4_teacher, rk4_teacher_loss),
                 ("pde", pde_weight, pde_loss_value),
+                ("phase_pde", cfg.weights.phase_pde * schedule["pde"], phase_pde_loss),
+                ("residual_cvar", cfg.weights.residual_cvar * schedule["pde"], residual_cvar),
                 ("ic", cfg.weights.initial_condition, ic_loss),
                 ("bc", cfg.weights.boundary, bc_loss),
                 ("seed_match", cfg.weights.seed_match, seed_match),
@@ -1408,6 +1441,8 @@ def train_single(
                 "observation_support_area": float(observation_support_area_loss.detach().cpu()),
                 "rk4_teacher": float(rk4_teacher_loss.detach().cpu()),
                 "pde": float(pde_loss_value.detach().cpu()),
+                "phase_pde": float(phase_pde_loss.detach().cpu()),
+                "residual_cvar": float(residual_cvar.detach().cpu()),
                 "ic": float(ic_loss.detach().cpu()),
                 "bc": float(bc_loss.detach().cpu()),
                 "seed_match": float(seed_match.detach().cpu()),
@@ -1648,6 +1683,34 @@ def _lbfgs_polish(
             exponent=cfg.train.residual_weight_exponent_end,
         ) * front_weights.flatten()
         pde_loss_value = torch.mean(point_weights * residual_sq)
+        weighted_residual_sq = point_weights * residual_sq
+        if cfg.weights.phase_pde > 0.0:
+            phase_points = min(
+                len(xy_col),
+                max(512, cfg.train.expected_front_points, cfg.train.level_set_points),
+            )
+            if phase_points < len(xy_col):
+                head = phase_points // 2
+                tail = phase_points - head
+                xy_phase = torch.cat([xy_col[:head], xy_col[-tail:]], dim=0)
+                t_phase = torch.cat([t_col[:head], t_col[-tail:]], dim=0)
+            else:
+                xy_phase, t_phase = xy_col, t_col
+            phase_pde_loss = logit_phase_residual_loss(
+                model,
+                xy_phase,
+                t_phase,
+                active_low=cfg.train.phase_residual_low,
+                active_high=cfg.train.phase_residual_high,
+                temperature=cfg.train.phase_residual_temperature,
+                residual_clip=cfg.train.phase_residual_clip,
+            )
+        else:
+            phase_pde_loss = torch.zeros((), device=device)
+        if cfg.weights.residual_cvar > 0.0:
+            residual_cvar = residual_cvar_loss(weighted_residual_sq, cfg.train.residual_cvar_fraction)
+        else:
+            residual_cvar = torch.zeros((), device=device)
         if cfg.weights.boundary > 0.0 and cfg.train.boundary_points > 0:
             if is_az_benchmark:
                 bc_loss = ablowitz_zeppetella_dirichlet_loss(
@@ -1859,6 +1922,8 @@ def _lbfgs_polish(
             + cfg.weights.observation_support * observation_support_loss
             + cfg.weights.observation_support_area * observation_support_area_loss
             + cfg.weights.pde * pde_loss_value
+            + cfg.weights.phase_pde * phase_pde_loss
+            + cfg.weights.residual_cvar * residual_cvar
             + cfg.weights.initial_condition * ic_loss
             + cfg.weights.boundary * bc_loss
             + cfg.weights.seed_match * seed_match
