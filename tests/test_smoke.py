@@ -32,6 +32,7 @@ from fisher_origin_lab.config import (
     WarmStartConfig,
     shared_geo_forward_model_config,
 )
+from fisher_origin_lab.exact_wave import az_exact_unit_torch
 from fisher_origin_lab.curve_trend import (
     CurvePINNConfig,
     CurveTrendConfig,
@@ -320,6 +321,7 @@ def test_ablowitz_zeppetella_forward_preset_matches_exact_wave() -> None:
     assert np.isclose(cfg.pde.reaction, 1.0)
     assert np.isclose(cfg.pde.diffusion, 1.0 / 40.0**2)
     assert cfg.weights.level_set_alignment > 0.0
+    assert cfg.model.use_az_hard_constraints is True
     model = OriginPINN(cfg.domain, cfg.pde, cfg.seed, cfg.model)
     xy = torch.rand(16, 2)
     t = torch.rand(16, 1) * cfg.domain.t_end
@@ -337,6 +339,44 @@ def test_ablowitz_zeppetella_forward_preset_matches_exact_wave() -> None:
     assert torch.isfinite(front_xy).all()
     assert torch.isfinite(front_t).all()
     assert torch.isfinite(phase)
+
+
+def test_ablowitz_zeppetella_hard_constraints_match_ic_and_boundaries() -> None:
+    cfg = ExperimentConfig().ablowitz_zeppetella_forward().quick()
+    model = OriginPINN(cfg.domain, cfg.pde, cfg.seed, cfg.model)
+    x = torch.linspace(0.0, 1.0, 9).view(-1, 1)
+    y = torch.rand_like(x)
+    xy = torch.cat([x, y], dim=1)
+    t0 = torch.zeros_like(x)
+    pred_initial = model(xy, t0)
+    target_initial = az_exact_unit_torch(
+        x,
+        t0,
+        x_left=cfg.benchmark.x_left,
+        x_right=cfg.benchmark.x_right,
+        x0=cfg.benchmark.wave_x0,
+    )
+    assert torch.allclose(pred_initial, target_initial, atol=1.0e-6)
+
+    t = torch.linspace(0.0, cfg.domain.t_end, 9).view(-1, 1)
+    left_xy = torch.cat([torch.zeros_like(t), y], dim=1)
+    right_xy = torch.cat([torch.ones_like(t), y], dim=1)
+    left_target = az_exact_unit_torch(
+        torch.zeros_like(t),
+        t,
+        x_left=cfg.benchmark.x_left,
+        x_right=cfg.benchmark.x_right,
+        x0=cfg.benchmark.wave_x0,
+    )
+    right_target = az_exact_unit_torch(
+        torch.ones_like(t),
+        t,
+        x_left=cfg.benchmark.x_left,
+        x_right=cfg.benchmark.x_right,
+        x0=cfg.benchmark.wave_x0,
+    )
+    assert torch.allclose(model(left_xy, t), left_target, atol=1.0e-6)
+    assert torch.allclose(model(right_xy, t), right_target, atol=1.0e-6)
 
 
 def test_ablowitz_zeppetella_rk4_truth_shape_and_error() -> None:

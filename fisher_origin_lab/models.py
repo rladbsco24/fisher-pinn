@@ -7,6 +7,7 @@ from torch import nn
 from torch.nn import functional as F
 
 from .config import DomainConfig, ModelConfig, PDEConfig, SeedConfig
+from .exact_wave import az_exact_unit_torch
 
 
 def _inv_softplus(value: float) -> float:
@@ -402,6 +403,10 @@ class OriginPINN(nn.Module):
         self.use_seed_front_features = bool(model.use_seed_front_features)
         self.use_traveling_wave_features = bool(model.use_traveling_wave_features)
         self.use_planar_wave_features = bool(model.use_planar_wave_features)
+        self.use_az_hard_constraints = bool(model.use_az_hard_constraints)
+        self.az_x_left = float(model.az_x_left)
+        self.az_x_right = float(model.az_x_right)
+        self.az_wave_x0 = float(model.az_wave_x0)
         self.use_front_fourier_features = bool(model.use_front_fourier_features)
         self.hard_initial_condition = bool(model.hard_initial_condition)
         self.initial_envelope_tau = float(model.initial_envelope_tau)
@@ -482,6 +487,8 @@ class OriginPINN(nn.Module):
             neural_field = torch.sigmoid(self.mlp(self._nif_spatial_features(xy), self._nif_parameter_features(t)))
         else:
             neural_field = torch.sigmoid(self.mlp(self._joint_features(xy, t)))
+        if self.use_az_hard_constraints:
+            return self._az_hard_constrained_field(xy, t, neural_field)
         if self.use_kpp_front_envelope:
             neural_field = self._front_envelope(xy, t) * neural_field
         if self.hard_initial_condition:
@@ -497,6 +504,57 @@ class OriginPINN(nn.Module):
         # as a post-hoc argmax.
         blend = torch.exp(-t / (0.08 * self.domain.t_end + 1.0e-8))
         return blend * source_field + (1.0 - blend) * neural_field
+
+    def _az_hard_constrained_field(
+        self,
+        xy: torch.Tensor,
+        t: torch.Tensor,
+        neural_field: torch.Tensor,
+    ) -> torch.Tensor:
+        x = (xy[:, 0:1] / max(self.domain.box, 1.0e-12)).clamp(0.0, 1.0)
+        zeros = torch.zeros_like(x)
+        ones = torch.ones_like(x)
+        t0 = torch.zeros_like(t)
+        left = az_exact_unit_torch(
+            zeros,
+            t,
+            x_left=self.az_x_left,
+            x_right=self.az_x_right,
+            x0=self.az_wave_x0,
+        )
+        right = az_exact_unit_torch(
+            ones,
+            t,
+            x_left=self.az_x_left,
+            x_right=self.az_x_right,
+            x0=self.az_wave_x0,
+        )
+        initial = az_exact_unit_torch(
+            x,
+            t0,
+            x_left=self.az_x_left,
+            x_right=self.az_x_right,
+            x0=self.az_wave_x0,
+        )
+        initial_left = az_exact_unit_torch(
+            zeros,
+            t0,
+            x_left=self.az_x_left,
+            x_right=self.az_x_right,
+            x0=self.az_wave_x0,
+        )
+        initial_right = az_exact_unit_torch(
+            ones,
+            t0,
+            x_left=self.az_x_left,
+            x_right=self.az_x_right,
+            x0=self.az_wave_x0,
+        )
+        base = (1.0 - x) * left + x * right + initial - ((1.0 - x) * initial_left + x * initial_right)
+        time_gate = (t / max(self.domain.t_end, 1.0e-12)).clamp(0.0, 1.0)
+        space_gate = 4.0 * x * (1.0 - x)
+        bounded_correction = (2.0 * neural_field - 1.0) * space_gate * time_gate
+        return base + base * (1.0 - base) * bounded_correction
 
     def _joint_features(self, xy: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         xyt = torch.cat([xy / self.domain.box, t / self.domain.t_end], dim=-1)

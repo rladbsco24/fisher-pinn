@@ -19,10 +19,14 @@ for exact-solution numerical baselines. Its `src/` directory is importable as
 `experiments/basic_pinn/` is the official entrypoint for synthetic PINN runs.
 It exposes the 1D Ablowitz-Zeppetella exact-wave benchmark and the 2D Gaussian
 moving-front benchmark without requiring users to remember the lower-level
-script flags.
+script flags. Both entrypoints support `smoke`, `quick`, `full`, and `flagship`
+presets. `flagship` is the high-budget research run with 20,000 epochs,
+large collocation/front batches, causal time slabs, L-BFGS polish, and resume
+checkpoints.
 
 `experiments/korea_pine_pinn/` is the official entrypoint for the Korea
-Forest Service pine-wilt PINN/RK4 comparison.
+Forest Service pine-wilt PINN/RK4 comparison. It also supports `flagship`,
+using a larger Korea grid and the same 20,000-epoch PINN budget family.
 
 `experiments/rk4_exact/` is the official entrypoint for RK4 exact-solution
 baselines, including the required 1D, 2D, and 3D surface/error figure exports.

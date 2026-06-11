@@ -16,6 +16,8 @@ from fisher_origin_lab.train import run_experiment
 def _apply_preset(cfg: ExperimentConfig, preset: str, epochs: int | None) -> ExperimentConfig:
     if preset in {"smoke", "quick"}:
         cfg = cfg.quick()
+    if preset == "flagship":
+        cfg = cfg.flagship(epochs=epochs if epochs is not None else 20_000)
     if preset == "smoke":
         cfg = replace(
             cfg,
@@ -32,7 +34,7 @@ def _apply_preset(cfg: ExperimentConfig, preset: str, epochs: int | None) -> Exp
                 print_every=4,
             ),
         )
-    elif epochs is not None:
+    elif preset != "flagship" and epochs is not None:
         cfg = replace(cfg, train=replace(cfg.train, epochs=epochs))
     return cfg
 
@@ -44,7 +46,7 @@ def parse_args() -> argparse.Namespace:
             "The 1D physical wave is represented as a y-invariant field in the shared 2D PINN backbone."
         )
     )
-    parser.add_argument("--preset", choices=["smoke", "quick", "full"], default="quick")
+    parser.add_argument("--preset", choices=["smoke", "quick", "full", "flagship"], default="quick")
     parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--ensemble", type=int, default=1)

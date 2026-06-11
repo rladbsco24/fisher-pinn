@@ -11,7 +11,7 @@ SCRIPT = ROOT / "scripts" / "run_korea_pine_wilt_simulation.py"
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the Korea pine-wilt Fisher-KPP PINN/RK4 comparison.")
-    parser.add_argument("--preset", choices=["smoke", "quick", "full"], default="quick")
+    parser.add_argument("--preset", choices=["smoke", "quick", "full", "flagship"], default="quick")
     parser.add_argument("--output-dir", type=Path, default=Path("runs") / "korea_pine_pinn")
     parser.add_argument("--time-axis", choices=["year", "pre_action_month"], default="year")
     parser.add_argument("--raw-csv-dir", type=Path, default=None)
@@ -33,11 +33,16 @@ def _preset_args(args: argparse.Namespace) -> list[str]:
         pinn_epochs = 30
         steps_per_year = 24
         max_frames = 8
-    else:
+    elif args.preset == "full":
         grid_size = 96
         pinn_epochs = 1200
         steps_per_year = 80
         max_frames = 15
+    else:
+        grid_size = 128
+        pinn_epochs = 20_000
+        steps_per_year = 120
+        max_frames = 24
     if args.pinn_epochs is not None:
         pinn_epochs = int(args.pinn_epochs)
 
@@ -54,6 +59,22 @@ def _preset_args(args: argparse.Namespace) -> list[str]:
         str(args.time_axis),
         "--pinn-epochs",
         str(pinn_epochs),
+        "--pinn-batch-size",
+        str(8192 if args.preset == "flagship" else 4096),
+        "--pinn-collocation-points",
+        str(8192 if args.preset == "flagship" else 768),
+        "--pinn-boundary-points",
+        str(1024 if args.preset == "flagship" else 128),
+        "--pinn-initial-condition-points",
+        str(8192 if args.preset == "flagship" else 2048),
+        "--pinn-mass-trajectory-points",
+        str(8192 if args.preset == "flagship" else 2048),
+        "--pinn-mass-trajectory-times",
+        str(8 if args.preset == "flagship" else 4),
+        "--pinn-lr",
+        str(1.0e-3 if args.preset == "flagship" else 2.0e-3),
+        "--pinn-checkpoint-every",
+        str(25 if args.preset == "flagship" else 1),
         "--map-gif-max-frames",
         str(max_frames),
         "--seed",

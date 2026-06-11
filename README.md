@@ -43,6 +43,16 @@ has exact-solution 1D, 2D, and 3D report-figure entrypoints. See
 `docs/REPOSITORY_STRUCTURE.md` for the repository layout and generated-output
 policy.
 
+For paper-style high-budget PINN runs, use the `flagship` preset. It raises the
+budget to 20,000 epochs with larger collocation/front batches, causal time slabs,
+Adam-to-L-BFGS polishing, and checkpoint/resume. RK4 teacher labels remain off.
+
+```bash
+python experiments\basic_pinn\run_zeppe_exact_1d.py --preset flagship --out-dir runs\basic_pinn\zeppe_exact_1d_flagship
+python experiments\basic_pinn\run_gaussian_moving_front_2d.py --preset flagship --out-dir runs\basic_pinn\gaussian_moving_front_2d_flagship
+python experiments\korea_pine_pinn\run_pine_pinn.py --preset flagship --output-dir runs\korea_pine_pinn_flagship
+```
+
 ## Figure Preview Gallery
 
 Representative outputs from the current runnable scripts are committed in

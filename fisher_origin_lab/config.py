@@ -80,6 +80,10 @@ class ModelConfig:
     use_planar_wave_features: bool = False
     planar_wave_direction_x: float = 1.0
     planar_wave_direction_y: float = 0.0
+    use_az_hard_constraints: bool = False
+    az_x_left: float = AZ_X_LEFT_1D
+    az_x_right: float = AZ_X_RIGHT_1D
+    az_wave_x0: float = 0.0
     use_front_fourier_features: bool = False
     hard_initial_condition: bool = False
     initial_envelope_tau: float = 0.06
@@ -155,6 +159,10 @@ def shared_geo_forward_model_config(
     use_planar_wave_features: bool = False,
     planar_wave_direction_x: float = 1.0,
     planar_wave_direction_y: float = 0.0,
+    use_az_hard_constraints: bool = False,
+    az_x_left: float = AZ_X_LEFT_1D,
+    az_x_right: float = AZ_X_RIGHT_1D,
+    az_wave_x0: float = 0.0,
     use_front_fourier_features: bool = True,
     hard_initial_condition: bool = True,
     initial_envelope_tau: float = 0.18,
@@ -191,6 +199,10 @@ def shared_geo_forward_model_config(
         use_planar_wave_features=bool(use_planar_wave_features),
         planar_wave_direction_x=float(planar_wave_direction_x),
         planar_wave_direction_y=float(planar_wave_direction_y),
+        use_az_hard_constraints=bool(use_az_hard_constraints),
+        az_x_left=float(az_x_left),
+        az_x_right=float(az_x_right),
+        az_wave_x0=float(az_wave_x0),
         use_front_fourier_features=bool(use_front_fourier_features),
         hard_initial_condition=bool(hard_initial_condition),
         initial_envelope_tau=float(initial_envelope_tau),
@@ -329,6 +341,64 @@ class ExperimentConfig:
         data["out_dir"] = str(self.out_dir)
         return data
 
+    def flagship(self, epochs: int = 20_000) -> "ExperimentConfig":
+        """Return a high-budget, paper-style training preset without RK4 labels."""
+
+        epochs = int(epochs)
+        return replace(
+            self,
+            train=replace(
+                self.train,
+                epochs=epochs,
+                lr=min(self.train.lr, 1.0e-3),
+                collocation_points=max(self.train.collocation_points, 8192),
+                boundary_points=max(self.train.boundary_points, 2048),
+                seed_points=max(self.train.seed_points, 4096),
+                observation_batch=max(self.train.observation_batch, 4096),
+                validation_every=max(250, epochs // 40),
+                print_every=max(250, epochs // 40),
+                rar_interval=100,
+                rar_candidates=max(self.train.rar_candidates, 32768),
+                rar_keep=max(self.train.rar_keep, 4096),
+                residual_curriculum_epochs=max(self.train.residual_curriculum_epochs, epochs // 4),
+                adaptive_loss_balancing=True,
+                gradient_norm_balancing=True,
+                gradient_norm_balance_every=25,
+                level_set_points=max(self.train.level_set_points, 1024),
+                leading_edge_area_times=max(self.train.leading_edge_area_times, 8),
+                leading_edge_area_grid=max(self.train.leading_edge_area_grid, 48),
+                front_contrast_times=max(self.train.front_contrast_times, 8),
+                front_contrast_grid=max(self.train.front_contrast_grid, 48),
+                front_profile_points=max(self.train.front_profile_points, 1024),
+                transverse_invariance_points=(
+                    max(self.train.transverse_invariance_points, 2048)
+                    if self.weights.transverse_invariance > 0.0
+                    else self.train.transverse_invariance_points
+                ),
+                mass_balance_times=max(self.train.mass_balance_times, 8),
+                mass_balance_grid=max(self.train.mass_balance_grid, 32),
+                time_marching=True,
+                time_marching_epochs=max(self.train.time_marching_epochs, epochs // 2),
+                time_slabs=max(self.train.time_slabs, 8),
+                time_slab_overlap=max(self.train.time_slab_overlap, 0.08),
+                time_slab_curriculum=True,
+                time_window_focus_fraction=min(self.train.time_window_focus_fraction, 0.75),
+                time_window_teacher=False,
+                time_window_observations=True,
+                discrete_rk4_times=max(self.train.discrete_rk4_times, 4),
+                discrete_rk4_grid=max(self.train.discrete_rk4_grid, 32),
+                rk4_teacher_pool=0,
+                rk4_teacher_batch=0,
+                rk4_pretrain_steps=0,
+                adam_to_lbfgs=True,
+                lbfgs_steps=max(self.train.lbfgs_steps, 500),
+                restore_best_validation=True,
+                resume_from_checkpoint=True,
+                training_checkpoint_every=25,
+                checkpoint_min_epoch_fraction=max(self.train.checkpoint_min_epoch_fraction, 0.15),
+            ),
+        )
+
     def quick(self) -> "ExperimentConfig":
         return ExperimentConfig(
             domain=DomainConfig(box=self.domain.box, t_end=self.domain.t_end, grid=51, truth_steps=160),
@@ -367,6 +437,10 @@ class ExperimentConfig:
                 use_planar_wave_features=self.model.use_planar_wave_features,
                 planar_wave_direction_x=self.model.planar_wave_direction_x,
                 planar_wave_direction_y=self.model.planar_wave_direction_y,
+                use_az_hard_constraints=self.model.use_az_hard_constraints,
+                az_x_left=self.model.az_x_left,
+                az_x_right=self.model.az_x_right,
+                az_wave_x0=self.model.az_wave_x0,
                 use_front_fourier_features=self.model.use_front_fourier_features,
                 hard_initial_condition=self.model.hard_initial_condition,
                 initial_envelope_tau=self.model.initial_envelope_tau,
@@ -576,6 +650,10 @@ class ExperimentConfig:
                 use_planar_wave_features=self.model.use_planar_wave_features,
                 planar_wave_direction_x=self.model.planar_wave_direction_x,
                 planar_wave_direction_y=self.model.planar_wave_direction_y,
+                use_az_hard_constraints=self.model.use_az_hard_constraints,
+                az_x_left=self.model.az_x_left,
+                az_x_right=self.model.az_x_right,
+                az_wave_x0=self.model.az_wave_x0,
                 use_front_fourier_features=self.model.use_front_fourier_features,
                 hard_initial_condition=False,
                 initial_envelope_tau=self.model.initial_envelope_tau,
@@ -812,6 +890,10 @@ class ExperimentConfig:
                 use_planar_wave_features=True,
                 planar_wave_direction_x=1.0,
                 planar_wave_direction_y=0.0,
+                use_az_hard_constraints=True,
+                az_x_left=AZ_X_LEFT_1D,
+                az_x_right=AZ_X_RIGHT_1D,
+                az_wave_x0=0.0,
                 use_front_fourier_features=False,
                 use_spatial_coefficients=False,
                 learn_diffusion=False,
