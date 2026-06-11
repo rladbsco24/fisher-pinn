@@ -219,6 +219,70 @@ def shared_geo_forward_model_config(
     )
 
 
+def korea_pine_model_config(
+    base: ModelConfig | None = None,
+    *,
+    hidden: int | None = None,
+    layers: int | None = None,
+    fourier_features: int | None = None,
+    fourier_sigma: float | None = None,
+    front_fourier_features: int | None = 0,
+    front_fourier_sigma: float | None = None,
+    nif_rank: int | None = None,
+    use_seed_front_features: bool = False,
+    use_traveling_wave_features: bool = False,
+    use_front_fourier_features: bool = False,
+    hard_initial_condition: bool = False,
+    use_kpp_front_envelope: bool = False,
+    use_spatial_coefficients: bool = True,
+    spatial_coefficient_features: int | None = None,
+    spatial_coefficient_sigma: float | None = None,
+    spatial_coefficient_hidden: int | None = None,
+    spatial_coefficient_log_scale: float | None = None,
+) -> ModelConfig:
+    """Korea pine-wilt specialization of the shared forward PINN backbone."""
+
+    base = base or ModelConfig()
+    return shared_geo_forward_model_config(
+        hidden=base.hidden if hidden is None else hidden,
+        layers=base.layers if layers is None else layers,
+        fourier_features=base.fourier_features if fourier_features is None else fourier_features,
+        fourier_sigma=base.fourier_sigma if fourier_sigma is None else fourier_sigma,
+        front_fourier_features=(
+            base.front_fourier_features if front_fourier_features is None else front_fourier_features
+        ),
+        front_fourier_sigma=base.front_fourier_sigma if front_fourier_sigma is None else front_fourier_sigma,
+        nif_rank=base.nif_rank if nif_rank is None else nif_rank,
+        learn_diffusion=True,
+        learn_reaction=True,
+        learn_drift=False,
+        use_seed_front_features=use_seed_front_features,
+        use_traveling_wave_features=use_traveling_wave_features,
+        use_front_fourier_features=use_front_fourier_features,
+        hard_initial_condition=hard_initial_condition,
+        use_kpp_front_envelope=use_kpp_front_envelope,
+        use_spatial_coefficients=use_spatial_coefficients,
+        spatial_coefficient_features=(
+            base.spatial_coefficient_features
+            if spatial_coefficient_features is None
+            else spatial_coefficient_features
+        ),
+        spatial_coefficient_sigma=(
+            base.spatial_coefficient_sigma if spatial_coefficient_sigma is None else spatial_coefficient_sigma
+        ),
+        spatial_coefficient_hidden=(
+            base.spatial_coefficient_hidden
+            if spatial_coefficient_hidden is None
+            else spatial_coefficient_hidden
+        ),
+        spatial_coefficient_log_scale=(
+            base.spatial_coefficient_log_scale
+            if spatial_coefficient_log_scale is None
+            else spatial_coefficient_log_scale
+        ),
+    )
+
+
 @dataclass(frozen=True)
 class TrainConfig:
     epochs: int = 1200
@@ -631,44 +695,7 @@ class ExperimentConfig:
             observations=self.observations,
             geo=self.geo,
             benchmark=self.benchmark,
-            model=ModelConfig(
-                architecture=self.model.architecture,
-                fourier_features=self.model.fourier_features,
-                fourier_sigma=self.model.fourier_sigma,
-                front_fourier_features=self.model.front_fourier_features,
-                front_fourier_sigma=self.model.front_fourier_sigma,
-                hidden=self.model.hidden,
-                layers=self.model.layers,
-                nif_rank=self.model.nif_rank,
-                use_random_weight_factorization=self.model.use_random_weight_factorization,
-                learn_diffusion=True,
-                learn_reaction=True,
-                learn_drift=False,
-                use_source_envelope=False,
-                use_geo_features=self.model.use_geo_features,
-                spatial_fourier_only=self.model.spatial_fourier_only,
-                use_seed_front_features=self.model.use_seed_front_features,
-                use_traveling_wave_features=self.model.use_traveling_wave_features,
-                use_planar_wave_features=self.model.use_planar_wave_features,
-                planar_wave_direction_x=self.model.planar_wave_direction_x,
-                planar_wave_direction_y=self.model.planar_wave_direction_y,
-                use_az_hard_constraints=self.model.use_az_hard_constraints,
-                az_x_left=self.model.az_x_left,
-                az_x_right=self.model.az_x_right,
-                az_wave_x0=self.model.az_wave_x0,
-                use_front_fourier_features=self.model.use_front_fourier_features,
-                hard_initial_condition=False,
-                initial_envelope_tau=self.model.initial_envelope_tau,
-                use_kpp_front_envelope=False,
-                front_envelope_level=self.model.front_envelope_level,
-                front_envelope_margin=self.model.front_envelope_margin,
-                front_envelope_width=self.model.front_envelope_width,
-                use_spatial_coefficients=self.model.use_spatial_coefficients,
-                spatial_coefficient_features=self.model.spatial_coefficient_features,
-                spatial_coefficient_sigma=self.model.spatial_coefficient_sigma,
-                spatial_coefficient_hidden=self.model.spatial_coefficient_hidden,
-                spatial_coefficient_log_scale=self.model.spatial_coefficient_log_scale,
-            ),
+            model=korea_pine_model_config(self.model),
             weights=LossWeights(
                 data=1.0,
                 pde=1.0,

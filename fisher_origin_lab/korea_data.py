@@ -13,7 +13,7 @@ import numpy as np
 import torch
 from matplotlib.path import Path as MplPath
 
-from .config import DomainConfig, PDEConfig, SeedConfig, shared_geo_forward_model_config
+from .config import DomainConfig, ModelConfig, PDEConfig, SeedConfig, korea_pine_model_config
 from .losses import (
     boundary_neumann_loss,
     observed_support_area_loss,
@@ -1199,7 +1199,8 @@ def fit_korea_pine_wilt_pinn(
     diffusion_x_scale = physics_prior.normalized_diffusion_x / max(float(diffusion), 1.0e-12)
     diffusion_y_scale = physics_prior.normalized_diffusion_y / max(float(diffusion), 1.0e-12)
     seed_cfg = SeedConfig(center_x=0.5, center_y=0.5, sigma=0.12, amplitude=0.25)
-    model_cfg = shared_geo_forward_model_config(
+    model_cfg = korea_pine_model_config(
+        ModelConfig(),
         hidden=48,
         layers=3,
         fourier_features=16,
@@ -1207,9 +1208,6 @@ def fit_korea_pine_wilt_pinn(
         front_fourier_features=0,
         front_fourier_sigma=1.5,
         nif_rank=24,
-        learn_diffusion=True,
-        learn_reaction=True,
-        learn_drift=False,
         use_seed_front_features=False,
         use_traveling_wave_features=False,
         use_front_fourier_features=False,

@@ -31,7 +31,7 @@ from fisher_origin_lab.config import (
     PDEConfig,
     SeedConfig,
     WarmStartConfig,
-    shared_geo_forward_model_config,
+    korea_pine_model_config,
 )
 from fisher_origin_lab.exact_wave import az_exact_unit_torch
 from fisher_origin_lab.curve_trend import (
@@ -485,7 +485,12 @@ def test_korea_pine_style_matches_forward_pinn_setup() -> None:
     assert cfg.model.learn_diffusion is True
     assert cfg.model.learn_reaction is True
     assert cfg.model.learn_drift is False
+    assert cfg.model.architecture == "pirate"
+    assert cfg.model.use_random_weight_factorization is True
     assert cfg.model.use_source_envelope is False
+    assert cfg.model.use_geo_features is True
+    assert cfg.model.spatial_fourier_only is True
+    assert cfg.model.use_spatial_coefficients is True
     assert cfg.weights.boundary == 0.0
     assert cfg.weights.initial_condition == 0.0
     assert cfg.weights.seed_match == 0.0
@@ -746,7 +751,8 @@ def test_geo_spectral_forward_profile_extends_korea_setup() -> None:
 
 def test_shared_forward_model_factory_specializes_korea_without_changing_backbone() -> None:
     baseline = ExperimentConfig().geo_spectral_forward().model
-    korea = shared_geo_forward_model_config(
+    korea = korea_pine_model_config(
+        baseline,
         hidden=48,
         layers=3,
         fourier_features=16,

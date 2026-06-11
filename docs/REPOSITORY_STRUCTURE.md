@@ -9,6 +9,9 @@ experiment entrypoints, notebooks, documents, and generated outputs.
 Fisher-KPP experiments and the Korea pine-wilt experiment. It includes model
 definitions, losses, samplers, RK4 references, plotting, Korea data processing,
 and training loops.
+The synthetic and Korea PINN tracks share the same forward backbone helpers;
+Korea-specific code is limited to land-mask data handling, collocation masks,
+sea exclusion, and observation-support losses.
 
 `fisher-kpp-rk4/` contains the independent finite-difference RK4 solver package
 for exact-solution numerical baselines. Its `src/` directory is importable as

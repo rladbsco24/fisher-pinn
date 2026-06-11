@@ -112,6 +112,12 @@ This profile disables advection, learns `D` and `r`, disables the hard source en
 sets boundary/source/shooting losses to zero, and uses the notebook's density-weighted
 data loss form `1 + 4u_obs`.
 
+The synthetic forward PINN and Korea pine-wilt PINN share the
+`korea_pine_model_config()` / `shared_geo_forward_model_config()` backbone family:
+Pirate/RWF layers, geo Fourier features, learned diffusion/reaction, and optional
+smooth spatial coefficient fields. Korea-specific behavior is kept in data handling,
+land-only collocation, sea exclusion, and observation/support losses.
+
 ## Korea Forest Service CSV Data And Notebook
 
 The repository now includes a compact, GitHub-safe subset of the provided Korea Forest
