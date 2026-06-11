@@ -107,6 +107,21 @@ The refreshed run produced `pinn_final_time_relative_l2 = 0.9769`,
 
 ![PINN evolution GIF](pinn_evolution.gif)
 
+## Ablowitz-Zeppetella PINN Planar-Wave Probe
+
+Run source: `python experiments\basic_pinn\run_zeppe_exact_1d.py --preset quick --epochs 40 --out-dir runs\goal_eval\zeppe_exact_1d_planar_quick40`.
+This probe enables the planar Fisher-KPP traveling-wave feature for the exact
+Ablowitz-Zeppetella 1D benchmark. Relative to the previous 40-epoch quick check,
+final-time relative L2 improved from `0.4628` to `0.2243`, validation MSE improved
+from `9.57e-2` to `2.13e-2`, and final-time mean absolute error improved from
+`0.3574` to `0.1632`.
+
+![AZ planar PINN vs RK4 comparison](pinn_az_planar_quick40_comparison.png)
+
+![AZ planar PINN spacetime error](pinn_az_planar_quick40_spacetime_error.png)
+
+![AZ planar PINN training diagnostics](pinn_az_planar_quick40_training_diagnostics.png)
+
 ## Korea Pine-Wilt Preview
 
 Run source: `python scripts\run_korea_pine_wilt_simulation.py --output-dir runs\figure_update_korea_pine_wilt_full --pinn-epochs 1200`.

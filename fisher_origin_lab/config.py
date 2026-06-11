@@ -77,6 +77,9 @@ class ModelConfig:
     spatial_fourier_only: bool = False
     use_seed_front_features: bool = False
     use_traveling_wave_features: bool = False
+    use_planar_wave_features: bool = False
+    planar_wave_direction_x: float = 1.0
+    planar_wave_direction_y: float = 0.0
     use_front_fourier_features: bool = False
     hard_initial_condition: bool = False
     initial_envelope_tau: float = 0.06
@@ -148,6 +151,9 @@ def shared_geo_forward_model_config(
     learn_drift: bool = False,
     use_seed_front_features: bool = True,
     use_traveling_wave_features: bool = True,
+    use_planar_wave_features: bool = False,
+    planar_wave_direction_x: float = 1.0,
+    planar_wave_direction_y: float = 0.0,
     use_front_fourier_features: bool = True,
     hard_initial_condition: bool = True,
     initial_envelope_tau: float = 0.18,
@@ -181,6 +187,9 @@ def shared_geo_forward_model_config(
         spatial_fourier_only=True,
         use_seed_front_features=bool(use_seed_front_features),
         use_traveling_wave_features=bool(use_traveling_wave_features),
+        use_planar_wave_features=bool(use_planar_wave_features),
+        planar_wave_direction_x=float(planar_wave_direction_x),
+        planar_wave_direction_y=float(planar_wave_direction_y),
         use_front_fourier_features=bool(use_front_fourier_features),
         hard_initial_condition=bool(hard_initial_condition),
         initial_envelope_tau=float(initial_envelope_tau),
@@ -353,6 +362,9 @@ class ExperimentConfig:
                 spatial_fourier_only=self.model.spatial_fourier_only,
                 use_seed_front_features=self.model.use_seed_front_features,
                 use_traveling_wave_features=self.model.use_traveling_wave_features,
+                use_planar_wave_features=self.model.use_planar_wave_features,
+                planar_wave_direction_x=self.model.planar_wave_direction_x,
+                planar_wave_direction_y=self.model.planar_wave_direction_y,
                 use_front_fourier_features=self.model.use_front_fourier_features,
                 hard_initial_condition=self.model.hard_initial_condition,
                 initial_envelope_tau=self.model.initial_envelope_tau,
@@ -553,6 +565,9 @@ class ExperimentConfig:
                 spatial_fourier_only=self.model.spatial_fourier_only,
                 use_seed_front_features=self.model.use_seed_front_features,
                 use_traveling_wave_features=self.model.use_traveling_wave_features,
+                use_planar_wave_features=self.model.use_planar_wave_features,
+                planar_wave_direction_x=self.model.planar_wave_direction_x,
+                planar_wave_direction_y=self.model.planar_wave_direction_y,
                 use_front_fourier_features=self.model.use_front_fourier_features,
                 hard_initial_condition=False,
                 initial_envelope_tau=self.model.initial_envelope_tau,
@@ -630,6 +645,7 @@ class ExperimentConfig:
                 learn_drift=False,
                 use_seed_front_features=True,
                 use_traveling_wave_features=True,
+                use_planar_wave_features=False,
                 use_front_fourier_features=True,
                 hard_initial_condition=True,
                 initial_envelope_tau=0.18,
@@ -782,6 +798,9 @@ class ExperimentConfig:
                 use_kpp_front_envelope=False,
                 use_seed_front_features=False,
                 use_traveling_wave_features=False,
+                use_planar_wave_features=True,
+                planar_wave_direction_x=1.0,
+                planar_wave_direction_y=0.0,
                 use_front_fourier_features=False,
                 use_spatial_coefficients=False,
                 learn_diffusion=False,

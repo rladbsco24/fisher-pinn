@@ -118,6 +118,32 @@ def traveling_wave_features(
     return torch.cat([xi / 8.0, torch.tanh(xi), inside_hint, front_bump, front_radius / box], dim=-1)
 
 
+def planar_traveling_wave_features(
+    xy: torch.Tensor,
+    t: torch.Tensor,
+    center: torch.Tensor,
+    direction: torch.Tensor,
+    diffusion: torch.Tensor,
+    reaction: torch.Tensor,
+    box: float,
+) -> torch.Tensor:
+    """Ablowitz-Zeppetella-style planar Fisher-KPP moving-frame features."""
+
+    center = center.to(device=xy.device, dtype=xy.dtype).view(1, 2)
+    direction = direction.to(device=xy.device, dtype=xy.dtype).view(1, 2)
+    direction = direction / torch.linalg.norm(direction, dim=-1, keepdim=True).clamp_min(1.0e-8)
+    diffusion = diffusion.to(dtype=xy.dtype, device=xy.device).clamp_min(1.0e-12)
+    reaction = reaction.to(dtype=xy.dtype, device=xy.device).clamp_min(1.0e-12)
+    projected = torch.sum((xy - center) * direction, dim=-1, keepdim=True)
+    speed = 5.0 * torch.sqrt(diffusion * reaction / 6.0)
+    thickness = torch.sqrt(6.0 * diffusion / reaction).clamp_min(1.0e-4)
+    front_position = speed * t
+    xi = ((projected - front_position) / thickness).clamp(-8.0, 8.0)
+    front_bump = torch.exp(-0.5 * xi.pow(2))
+    inside_hint = torch.sigmoid(-xi)
+    return torch.cat([xi / 8.0, torch.tanh(xi), inside_hint, front_bump, front_position / box], dim=-1)
+
+
 def front_coordinate_input(
     xy: torch.Tensor,
     t: torch.Tensor,
@@ -375,6 +401,7 @@ class OriginPINN(nn.Module):
         self.spatial_fourier_only = bool(model.spatial_fourier_only)
         self.use_seed_front_features = bool(model.use_seed_front_features)
         self.use_traveling_wave_features = bool(model.use_traveling_wave_features)
+        self.use_planar_wave_features = bool(model.use_planar_wave_features)
         self.use_front_fourier_features = bool(model.use_front_fourier_features)
         self.hard_initial_condition = bool(model.hard_initial_condition)
         self.initial_envelope_tau = float(model.initial_envelope_tau)
@@ -388,6 +415,13 @@ class OriginPINN(nn.Module):
         self.reference_reaction = float(pde.reaction)
         self.reference_front_speed = float(2.0 * math.sqrt(max(pde.diffusion, 1.0e-12) * max(pde.reaction, 1.0e-12)))
         self.register_buffer("seed_center", torch.tensor([seed.center_x, seed.center_y], dtype=torch.float32))
+        planar_direction = torch.tensor(
+            [model.planar_wave_direction_x, model.planar_wave_direction_y],
+            dtype=torch.float32,
+        )
+        if float(torch.linalg.norm(planar_direction)) < 1.0e-8:
+            planar_direction = torch.tensor([1.0, 0.0], dtype=torch.float32)
+        self.register_buffer("planar_wave_direction", planar_direction)
         fourier_dim = 2 if (self.spatial_fourier_only or self.use_nif_head) else 3
         self.features = FourierFeatures(fourier_dim, model.fourier_features, model.fourier_sigma)
         self.front_features = (
@@ -398,8 +432,17 @@ class OriginPINN(nn.Module):
         geo_dim = 8 if self.use_geo_features else 0
         seed_front_dim = 4 if self.use_seed_front_features else 0
         traveling_wave_dim = 5 if (self.use_traveling_wave_features and not self.use_nif_head) else 0
+        planar_wave_dim = 5 if (self.use_planar_wave_features and not self.use_nif_head) else 0
         front_fourier_dim = 2 * model.front_fourier_features if self.front_features is not None else 0
-        network_in_dim = 2 * model.fourier_features + front_fourier_dim + 3 + geo_dim + seed_front_dim + traveling_wave_dim
+        network_in_dim = (
+            2 * model.fourier_features
+            + front_fourier_dim
+            + 3
+            + geo_dim
+            + seed_front_dim
+            + traveling_wave_dim
+            + planar_wave_dim
+        )
         nif_spatial_dim = 2 * model.fourier_features + 2 + geo_dim + seed_front_dim
         nif_parameter_dim = 4
         if model.architecture == "gated_mlp":
@@ -480,6 +523,18 @@ class OriginPINN(nn.Module):
                     t,
                     self.seed_center,
                     self.seed_sigma,
+                    self.pde.diffusion(),
+                    self.pde.reaction(),
+                    self.domain.box,
+                )
+            )
+        if self.use_planar_wave_features:
+            pieces.append(
+                planar_traveling_wave_features(
+                    xy,
+                    t,
+                    self.seed_center,
+                    self.planar_wave_direction,
                     self.pde.diffusion(),
                     self.pde.reaction(),
                     self.domain.box,

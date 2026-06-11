@@ -341,6 +341,14 @@ the much more accurate same-problem numerical reference on this quick check
 (`rk4_final_time_relative_l2 = 0.00465`), so the PINN/RK4 gap is still an active model
 improvement target rather than a solved accuracy claim.
 
+The Ablowitz-Zeppetella 1D exact-wave profile now enables a planar KPP traveling-wave
+coordinate feature. Unlike the radial seed-front feature used by the 2D Gaussian case,
+this feature follows the exact planar phase variable with `c = 5 sqrt(D r / 6)` and
+thickness `sqrt(6D/r)`. A 40-epoch quick check improved the 1D exact-wave PINN
+final-time relative L2 from `0.4628` to `0.2243`, validation MSE from `9.57e-2` to
+`2.13e-2`, and final-time mean absolute error from `0.3574` to `0.1632`. This is a
+model-side representation improvement, not RK4 pseudo-labeling or postprocessing.
+
 Leading-edge distribution and radial-symmetry losses are implemented as explicit
 ON/OFF validation features, but their default weights are zero. Early quick checks made
 them worse on the Gaussian front regime, so they stay as research ablations until

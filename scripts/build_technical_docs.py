@@ -250,7 +250,7 @@ PINN_PAGES: list[tuple[str, list[str], tuple[list[str], list[list[str]], list[fl
     (
         "3. 기본 PINN의 모델 구조",
         [
-            "기본 forward PINN은 `OriginPINN`을 사용하며 `geo_spectral_forward` 프로파일에서 architecture는 pirate, Fourier sigma는 완화된 값, random weight factorization은 켜진다. 입력은 x, y, t와 함께 seed-relative geometry, travelling-wave 좌표, front-local Fourier feature, KPP front envelope, 공간 계수장을 사용한다.",
+            "기본 forward PINN은 `OriginPINN`을 사용하며 `geo_spectral_forward` 프로파일에서 architecture는 pirate, Fourier sigma는 완화된 값, random weight factorization은 켜진다. 입력은 x, y, t와 함께 seed-relative geometry, travelling-wave 좌표, front-local Fourier feature, KPP front envelope, 공간 계수장을 사용한다. Ablowitz-Zeppetella 1D exact-wave 검증에서는 radial front 좌표 대신 평면 travelling-wave phase feature를 켠다. 이 feature는 c = 5 sqrt(D r / 6), thickness = sqrt(6D/r)에 대응하는 Fisher-KPP 특수파의 moving coordinate를 네트워크 입력으로 제공한다.",
             "hard initial condition은 t=0 부근에서 네트워크 출력이 초기장을 쉽게 무시하지 못하도록 한다. 이전 결과에서 PINN이 처음부터 퍼진 haze처럼 보였던 현상은 sparse front 문제에서 MSE와 PDE residual만으로는 대부분의 영역을 낮은 값으로 흐리게 만드는 해가 벌점을 적게 받을 수 있기 때문에 발생했다. 현재 구현은 known IC loss와 hard IC를 동시에 써서 이 현상을 줄인다.",
             "D와 r은 기본 forward 프로파일에서 학습 가능하다. 학습 계수는 physics parameter anchor, 공간 계수 regularization, front-speed 관련 loss로 안정화된다. 이 설계는 산림청 zip에서 D_tilde와 r_tilde를 PINN으로 추정한 뒤 D_phys = D_tilde * S_km^2 / DT, r_phys = r_tilde / DT로 해석하던 원리를 확장한다.",
         ],
@@ -285,6 +285,7 @@ PINN_PAGES: list[tuple[str, list[str], tuple[list[str], list[list[str]], list[fl
         "5. 기본 PINN 검증, 주요 문제, 해결 방안",
         [
             "현재 코드의 full run은 기본적으로 1200 epochs이며, quick run은 60 또는 120 epochs로 빠른 회귀 검증을 수행한다. 최근 수정 전 full run은 D = 0.01959, r = 3.01315처럼 물리 계수는 목표값에 가깝게 맞췄지만 final-time relative L2 = 0.4135로 RK4 reference의 0.00147과는 큰 차이를 남겼다. 이 결과는 PINN이 계수와 질량을 맞추더라도 moving front의 phase와 final field shape를 별도로 제어해야 함을 보여준다.",
+            "Ablowitz-Zeppetella 1D exact-wave 문제에서는 평면파 구조가 알려져 있으므로 planar travelling-wave phase feature를 추가했다. 40 epoch quick 검증에서 final-time relative L2는 0.4628에서 0.2243으로, validation observation MSE는 9.57e-2에서 2.13e-2로, final-time mean absolute error는 0.3574에서 0.1632로 감소했다. 이 개선은 RK4 pseudo-label이나 후보정이 아니라, 해의 알려진 travelling coordinate를 모델 입력으로 반영한 표현력 개선이다.",
             "가장 최근에 확인된 직접적인 학습 절차 문제는 best checkpoint 선택 기준이었다. 기존 구현은 validation observation MSE만 기준으로 모델을 복원했기 때문에, 1200 epochs를 학습하고도 epoch 1의 낮은 관측점 MSE checkpoint가 최종 모델로 선택될 수 있었다. 이 문제는 validation MSE, late-time physics proxy, PDE residual, known initial condition, front proxy, mass proxy를 함께 보는 composite checkpoint score와 최소 checkpoint epoch 조건으로 수정했다.",
             "주요 관찰은 front area와 mass metric이 field L2보다 front failure를 더 선명하게 드러낸다는 점이다. error map은 active front 주변에서 가장 높은 정보를 제공하며, support, contrast, mass floor, IC는 all-zero 해와 diffuse haze 해를 억제한다. D/r 학습은 forward field와 front speed의 물리 일관성을 함께 추정하는 핵심 구성이지만, Fisher-KPP front speed가 주로 2 sqrt(D r)에 의해 정해지므로 계수 식별성과 field profile 정렬은 별도 검증으로 관리한다.",
         ],
@@ -294,7 +295,7 @@ PINN_PAGES: list[tuple[str, list[str], tuple[list[str], list[list[str]], list[fl
                 ["초기 checkpoint 복원", "관측점 MSE만 낮은 초기 모델이 최종장, PDE, front보다 우선됨", "composite checkpoint score와 최소 epoch 조건 적용"],
                 ["diffuse haze", "sparse front에서 낮은 농도를 넓게 깔아도 MSE 벌점이 작음", "known IC, hard IC, front profile, contrast, mass floor 강화"],
                 ["all-zero collapse", "대부분의 영역이 0인 해가 관측 sparse regime에서 유리해질 수 있음", "support Tversky, mass trajectory, density-weighted data loss 적용"],
-                ["front phase error", "moving front가 조금만 어긋나도 relative L2가 크게 증가", "level-set alignment, front-normal profile, time marching 적용"],
+                ["front phase error", "moving front가 조금만 어긋나도 relative L2가 크게 증가", "level-set alignment, front-normal profile, planar travelling-wave feature, time marching 적용"],
                 ["twin-trap error band", "front 안쪽과 바깥쪽 순서 관계가 약하고 halo가 남음", "inside/outside hinge, normal-slope, front-aware sampling 적용"],
                 ["D/r 식별성", "front speed는 D와 r의 곱에 민감하고 개별 계수는 약하게 식별됨", "physics anchor, coefficient regularization, learned physics reporting 적용"],
                 ["RK4와 큰 정확도 차이", "PINN은 연속 surrogate 최적화이고 RK4는 고정 격자 forward 적분", "RK4 reference, discrete RK4 consistency, final-field/front/mass 공동 검증 적용"],
