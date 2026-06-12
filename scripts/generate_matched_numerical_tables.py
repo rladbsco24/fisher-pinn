@@ -45,7 +45,7 @@ from fisher_kpp_rk4.config import (
 )
 
 
-ONE_D_COLUMNS = [
+ONE_D_SUMMARY_COLUMNS = [
     "dim",
     "method",
     "Nx",
@@ -60,7 +60,7 @@ ONE_D_COLUMNS = [
     "AZ_Relative_L2_Error",
 ]
 
-TWO_D_COLUMNS = [
+TWO_D_SUMMARY_COLUMNS = [
     "Nx",
     "Ny",
     "dx",
@@ -75,32 +75,29 @@ TWO_D_COLUMNS = [
     "Exact_Relative_L2_Error",
 ]
 
-ONE_D_REFERENCE_COLUMNS = [
-    "dim",
-    "method",
+ONE_D_TIME_ANALYSIS_COLUMNS = [
     "Nx",
     "dx",
     "dt",
-    "dt_ref",
     "Nt",
-    "T",
     "runtime_sec",
-    "Reference_Relative_L2_Error",
+    "AZ_Relative_L2_Error",
+    "TimeRef_dt",
+    "TimeRef_Relative_L2_Error",
     "Observed_Time_Order",
 ]
 
-TWO_D_REFERENCE_COLUMNS = [
+TWO_D_TIME_ANALYSIS_COLUMNS = [
     "Nx",
     "Ny",
     "dx",
     "dy",
     "dt",
-    "dt_ref",
     "Nt",
-    "T",
     "runtime_sec",
-    "Reference_Relative_L2_Error",
-    "Observed_Time_Order",
+    "Exact_Relative_L2_Error",
+    "TimeRef_dt",
+    "TimeRef_Relative_L2_Error",
 ]
 
 
@@ -197,14 +194,16 @@ def run_case_2d(method: str, grid: int, dt: float) -> dict[str, object]:
 
 def _observed_orders(rows: list[dict[str, object]], *, error_key: str) -> list[dict[str, object]]:
     for idx, row in enumerate(rows):
-        order = None
-        if idx + 1 < len(rows):
-            coarse_error = float(row[error_key])
-            fine_error = float(rows[idx + 1][error_key])
-            coarse_dt = float(row["dt"])
-            fine_dt = float(rows[idx + 1]["dt"])
-            if coarse_error > 0.0 and fine_error > 0.0 and coarse_dt > fine_dt:
-                order = float(np.log(coarse_error / fine_error) / np.log(coarse_dt / fine_dt))
+        if idx == 0:
+            row["Observed_Time_Order"] = np.nan
+            continue
+        coarse_error = float(rows[idx - 1][error_key])
+        fine_error = float(row[error_key])
+        coarse_dt = float(rows[idx - 1]["dt"])
+        fine_dt = float(row["dt"])
+        order = np.nan
+        if coarse_error > 0.0 and fine_error > 0.0 and coarse_dt > fine_dt:
+            order = float(np.log(coarse_error / fine_error) / np.log(coarse_dt / fine_dt))
         row["Observed_Time_Order"] = order
     return rows
 
@@ -259,15 +258,15 @@ def run_temporal_reference_1d(
                 "Nx": int(nx),
                 "dx": float(x[1] - x[0]),
                 "dt": float(dt_eff),
-                "dt_ref": float(dt_ref_eff),
                 "Nt": int(nt),
-                "T": float(T),
                 "runtime_sec": float(runtime),
-                "Reference_Relative_L2_Error": float(relative_l2(final, ref_final)),
-                "Observed_Time_Order": None,
+                "AZ_Relative_L2_Error": float(sol["relative_l2_final"]),
+                "TimeRef_dt": float(dt_ref_eff),
+                "TimeRef_Relative_L2_Error": float(relative_l2(final, ref_final)),
+                "Observed_Time_Order": np.nan,
             }
         )
-    return _observed_orders(rows, error_key="Reference_Relative_L2_Error")
+    return _observed_orders(rows, error_key="TimeRef_Relative_L2_Error")
 
 
 def run_temporal_reference_2d(
@@ -321,52 +320,24 @@ def run_temporal_reference_2d(
                 "dx": float(x[1] - x[0]),
                 "dy": float(y[1] - y[0]),
                 "dt": float(dt_eff),
-                "dt_ref": float(dt_ref_eff),
                 "Nt": int(nt),
-                "T": float(T_2D),
                 "runtime_sec": float(runtime),
-                "Reference_Relative_L2_Error": float(relative_l2(final, ref_final)),
-                "Observed_Time_Order": None,
+                "Exact_Relative_L2_Error": float(sol["relative_l2_final"]),
+                "TimeRef_dt": float(dt_ref_eff),
+                "TimeRef_Relative_L2_Error": float(relative_l2(final, ref_final)),
             }
         )
-    return _observed_orders(rows, error_key="Reference_Relative_L2_Error")
-
-
-def _format_value(column: str, value: object) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, bool):
-        return "True" if value else "False"
-    if isinstance(value, (int, np.integer)):
-        return str(int(value))
-    if isinstance(value, (float, np.floating)):
-        number = float(value)
-        if column in {"runtime_sec"}:
-            return f"{number:.6f}"
-        if column in {"T"}:
-            return f"{number:.1f}"
-        if column in {"dx", "dy"}:
-            return f"{number:.3f}"
-        if column in {"dt", "dt_ref"}:
-            return f"{number:.4f}".rstrip("0").rstrip(".")
-        if "Relative_L2_Error" in column:
-            return f"{number:.6e}" if number < 1.0e-4 else f"{number:.6f}"
-        if column == "Observed_Time_Order":
-            return "" if not math.isfinite(number) else f"{number:.3f}"
-        if column.startswith("min_") or column.startswith("max_") or column.startswith("mean_"):
-            return f"{number:.6f}"
-        return f"{number:.6f}".rstrip("0").rstrip(".")
-    return str(value)
+    return rows
 
 
 def _display_frame(rows: list[dict[str, object]], columns: list[str]) -> pd.DataFrame:
-    return pd.DataFrame([{column: _format_value(column, row.get(column, "")) for column in columns} for row in rows], columns=columns)
+    return pd.DataFrame([{column: row.get(column, np.nan) for column in columns} for row in rows], columns=columns)
 
 
 def _write_csv(path: Path, rows: list[dict[str, object]], columns: list[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=columns)
+        writer = csv.DictWriter(f, fieldnames=columns, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
 
@@ -379,66 +350,78 @@ def _write_markdown(path: Path, title: str, rows: list[dict[str, object]], colum
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def _column_widths(frame: pd.DataFrame, columns: list[str]) -> list[float]:
-    weights: list[float] = []
-    for column in columns:
-        text_width = max(len(str(column)), *(len(str(value)) for value in frame[column].tolist()))
-        weights.append(max(0.70, min(3.20, text_width / 8.2)))
-    total = sum(weights)
-    return [weight / total for weight in weights]
+def _load_monospace_font(size: int):
+    from PIL import ImageFont
+
+    candidates = [
+        r"C:\Windows\Fonts\consola.ttf",
+        r"C:\Windows\Fonts\cour.ttf",
+        "DejaVuSansMono.ttf",
+    ]
+    for candidate in candidates:
+        try:
+            return ImageFont.truetype(candidate, size)
+        except Exception:
+            continue
+    return ImageFont.load_default()
 
 
-def _standard_table_png(path: Path, rows: list[dict[str, object]], columns: list[str], *, show_index: bool) -> None:
+def _text_width(draw, text: str, font) -> int:
+    left, _, right, _ = draw.textbbox((0, 0), text, font=font)
+    return int(right - left)
+
+
+def _console_table_png(
+    path: Path,
+    rows: list[dict[str, object]],
+    columns: list[str],
+    *,
+    show_index: bool,
+    pre_lines: list[str] | None = None,
+    post_lines: list[str] | None = None,
+    target_width: int = 704,
+) -> None:
+    from PIL import Image, ImageDraw
+
     frame = _display_frame(rows, columns)
-    display_columns = list(columns)
-    if show_index:
-        frame.insert(0, "", [str(index) for index in range(len(frame))])
-        display_columns = [""] + display_columns
+    with pd.option_context("display.max_columns", None, "display.width", 2000, "display.precision", 6):
+        table_lines = frame.to_string(index=show_index, na_rep="NaN").splitlines()
+    pre = pre_lines or []
+    post = post_lines or []
+    lines = pre + table_lines + post
 
-    col_widths = _column_widths(frame, display_columns)
-    total_chars = sum(max(len(str(column)), *(len(str(value)) for value in frame[column].tolist())) for column in display_columns)
-    width = max(12.0, min(24.0, total_chars * 0.155))
-    height = max(1.55, 0.43 * (len(rows) + 1))
-    fig, ax = plt.subplots(figsize=(width, height))
-    fig.patch.set_facecolor("#24272a")
-    ax.set_facecolor("#24272a")
-    ax.axis("off")
-    ax.set_position([0.0, 0.0, 1.0, 1.0])
+    scratch = Image.new("RGB", (target_width, 32), "#24272a")
+    draw = ImageDraw.Draw(scratch)
+    font_size = 11
+    while font_size > 5:
+        font = _load_monospace_font(font_size)
+        widest = max(_text_width(draw, line, font) for line in lines)
+        if widest <= target_width - 6:
+            break
+        font_size -= 1
+    font = _load_monospace_font(font_size)
+    _, top, _, bottom = draw.textbbox((0, 0), "Ag", font=font)
+    text_h = int(bottom - top)
+    line_height = max(text_h + 4, font_size + 6)
+    pad_x = 3
+    pad_y = 2
+    height = pad_y * 2 + line_height * len(lines)
+    image = Image.new("RGB", (target_width, height), "#24272a")
+    draw = ImageDraw.Draw(image)
 
-    table = ax.table(
-        cellText=frame.to_numpy(),
-        colLabels=display_columns,
-        colWidths=col_widths,
-        cellLoc="right",
-        colLoc="right",
-        bbox=[0.0, 0.0, 1.0, 1.0],
-    )
-    table.auto_set_font_size(False)
-    for (row_idx, col_idx), cell in table.get_celld().items():
-        cell.PAD = 0.016
-        cell.set_edgecolor("#24272a")
-        cell.set_linewidth(0.0)
-        cell.get_text().set_fontfamily("monospace")
-        cell.get_text().set_clip_on(False)
-        if row_idx == 0:
-            cell.set_facecolor("#24272a")
-            cell.get_text().set_color("#f2f2f2")
-            cell.get_text().set_weight("bold")
-            cell.get_text().set_fontsize(10.5)
-            cell.get_text().set_ha("right")
-        else:
-            cell.set_facecolor("#4a4a4a" if row_idx % 2 else "#282b2e")
-            cell.get_text().set_color("#e5e5e5")
-            cell.get_text().set_fontsize(10.0)
-            visible_column = display_columns[col_idx]
-            if visible_column in {"dim", "method", "converged_all"}:
-                cell.get_text().set_ha("center")
-            else:
-                cell.get_text().set_ha("right")
+    table_start = len(pre)
+    data_start = table_start + 1
+    data_end = data_start + len(rows)
+    for idx, line in enumerate(lines):
+        y0 = pad_y + idx * line_height
+        if data_start <= idx < data_end:
+            data_idx = idx - data_start
+            fill = "#4a4a4a" if data_idx % 2 == 0 else "#282b2e"
+            draw.rectangle((0, y0, target_width, y0 + line_height), fill=fill)
+        draw.text((pad_x, y0 + max(0, (line_height - text_h) // 2 - 1)), line, fill="#e8e8e8", font=font)
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(path, dpi=220, facecolor=fig.get_facecolor(), bbox_inches="tight", pad_inches=0.015)
-    plt.close(fig)
+    image.save(path)
 
 
 def _write_table_bundle(
@@ -449,11 +432,13 @@ def _write_table_bundle(
     columns: list[str],
     *,
     show_index: bool,
+    pre_lines: list[str] | None = None,
+    post_lines: list[str] | None = None,
 ) -> Path:
     _write_csv(out_dir / f"{name}.csv", rows, columns)
     _write_markdown(out_dir / f"{name}.md", title, rows, columns)
     png = out_dir / f"{name}.png"
-    _standard_table_png(png, rows, columns, show_index=show_index)
+    _console_table_png(png, rows, columns, show_index=show_index, pre_lines=pre_lines, post_lines=post_lines)
     return png
 
 
@@ -489,34 +474,72 @@ def _method_tables(method: str, out_dir: Path) -> list[Path]:
     method_name = _method_label(method)
     method_dir = out_dir / method_name
     pngs: list[Path] = []
+    method_dir.mkdir(parents=True, exist_ok=True)
+    for stale in method_dir.glob(f"{method_name}_*temporal_reference_convergence.*"):
+        stale.unlink()
 
     one_d_spatial = [run_case_1d(method_name, nx=nx, dt=0.005) for nx in (101, 201, 401)]
-    one_d_time = [run_case_1d(method_name, nx=201, dt=dt_value) for dt_value in (0.02, 0.01, 0.005, 0.0025)]
     one_d_ref = run_temporal_reference_1d(method_name)
 
     if method_name == "forward_euler":
         two_d_time_values = (0.01, 0.005, 0.0025, 0.00125)
-        two_d_ref_values = (0.01, 0.005, 0.0025)
-        two_d_ref_dt = 0.00125
     else:
         two_d_time_values = (0.02, 0.01, 0.005, 0.0025)
-        two_d_ref_values = (0.02, 0.01, 0.005)
-        two_d_ref_dt = 0.0025
 
     two_d_spatial = [run_case_2d(method_name, grid=grid, dt=0.01) for grid in (41, 61, 81)]
-    two_d_time = [run_case_2d(method_name, grid=121, dt=dt_value) for dt_value in two_d_time_values]
-    two_d_ref = run_temporal_reference_2d(method_name, grid=81, dt_values=two_d_ref_values, dt_ref=two_d_ref_dt)
+    two_d_ref = run_temporal_reference_2d(method_name, grid=121, dt_values=two_d_time_values, dt_ref=0.00125)
 
     bundles = [
-        ("1d_spatial_comparison", "1D spatial comparison", one_d_spatial, ONE_D_COLUMNS, True),
-        ("1d_time_comparison", "1D time comparison", one_d_time, ONE_D_COLUMNS, True),
-        ("1d_temporal_reference_convergence", "1D temporal reference convergence", one_d_ref, ONE_D_REFERENCE_COLUMNS, True),
-        ("2d_spatial_comparison", "2D spatial comparison", two_d_spatial, TWO_D_COLUMNS, False),
-        ("2d_time_comparison", "2D time comparison", two_d_time, TWO_D_COLUMNS, False),
-        ("2d_temporal_reference_convergence", "2D temporal reference convergence", two_d_ref, TWO_D_REFERENCE_COLUMNS, False),
+        (
+            "1d_spatial_comparison",
+            "1D spatial comparison",
+            one_d_spatial,
+            ONE_D_SUMMARY_COLUMNS,
+            True,
+            ["==============================", "1D spatial comparison", "=============================="],
+            [f"Running 1D time test: dt = {dt_value:g}" for dt_value in (0.02, 0.01, 0.005, 0.0025)],
+        ),
+        (
+            "1d_time_comparison",
+            "1D Time Error Analysis",
+            one_d_ref,
+            ONE_D_TIME_ANALYSIS_COLUMNS,
+            True,
+            ["==============================", "1D Time Error Analysis", "=============================="],
+            None,
+        ),
+        (
+            "2d_spatial_comparison",
+            "2D spatial comparison",
+            two_d_spatial,
+            TWO_D_SUMMARY_COLUMNS,
+            False,
+            None,
+            None,
+        ),
+        (
+            "2d_time_comparison",
+            "2D Time Error Analysis",
+            two_d_ref,
+            TWO_D_TIME_ANALYSIS_COLUMNS,
+            False,
+            ["==============================", "2D Time Error Analysis", "=============================="],
+            None,
+        ),
     ]
-    for stem, title, rows, columns, show_index in bundles:
-        pngs.append(_write_table_bundle(method_dir, f"{method_name}_{stem}", f"{method_name}: {title}", rows, columns, show_index=show_index))
+    for stem, title, rows, columns, show_index, pre_lines, post_lines in bundles:
+        pngs.append(
+            _write_table_bundle(
+                method_dir,
+                f"{method_name}_{stem}",
+                f"{method_name}: {title}",
+                rows,
+                columns,
+                show_index=show_index,
+                pre_lines=pre_lines,
+                post_lines=post_lines,
+            )
+        )
     return pngs
 
 
