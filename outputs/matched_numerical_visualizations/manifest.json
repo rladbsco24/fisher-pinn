@@ -1,0 +1,11 @@
+{
+  "output_dir": "C:\\Users\\yoonc\\Downloads\\fisher-pinn-github-worktree\\outputs\\matched_numerical_visualizations",
+  "methods": {
+    "trapezoidal_newton": "C:\\Users\\yoonc\\Downloads\\fisher-pinn-github-worktree\\outputs\\matched_numerical_visualizations\\trapezoidal_newton",
+    "backward_euler_newton": "C:\\Users\\yoonc\\Downloads\\fisher-pinn-github-worktree\\outputs\\matched_numerical_visualizations\\backward_euler_newton",
+    "rk4": "C:\\Users\\yoonc\\Downloads\\fisher-pinn-github-worktree\\outputs\\matched_numerical_visualizations\\rk4",
+    "forward_euler": "C:\\Users\\yoonc\\Downloads\\fisher-pinn-github-worktree\\outputs\\matched_numerical_visualizations\\forward_euler"
+  },
+  "figure_count": 103,
+  "preview": "C:\\Users\\yoonc\\Downloads\\fisher-pinn-github-worktree\\outputs\\matched_numerical_visualizations\\all_methods_preview_contact_sheet.png"
+}

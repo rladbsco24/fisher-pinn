@@ -34,6 +34,7 @@ generalized Fisher-KPP exact-wave family, so the reaction term is again
 - `src/fisher_kpp_rk4/solver.py`: 1D/2D RHS functions, RK4 steps, solvers, stability checks, and diagnostics.
 - `scripts/run_demo.py`: runs both 1D and 2D examples and saves NPZ/PNG outputs.
 - `scripts/run_convergence.py`: compact 1D and 2D convergence sanity check.
+- `scripts/run_forward_euler.py`: unified 1D/2D Forward Euler exact-wave figures and PPT-ready tables.
 - `scripts/run_long_time_methods.py`: fair long-time 1D comparison of forward Euler, backward Euler, trapezoidal, and RK4.
 - `scripts/run_long_time_rk4_adjusted.py`: adjusted RK4-only long-time run using the same fair parameter set.
 - `scripts/run_long_time_curve_trend.py`: reference-style damped `rho(t)` curve trend comparison for forward Euler, backward Euler, trapezoidal, and RK4.
@@ -125,6 +126,39 @@ same generalized Fisher-KPP equation, grid, time step, exact initial condition,
 and exact Dirichlet boundaries as the 2D benchmark; it only extends the final
 visualized time to \(T=8\) so the moving front and error surfaces match the
 report figures.
+
+## Matched Visualizations And PPT Tables
+
+The top-level scripts regenerate the same 1D/2D exact-wave visualization format
+for trapezoidal-Newton, backward-Euler-Newton, RK4, and Forward Euler:
+
+```bash
+cd ..
+python scripts\generate_matched_numerical_figures.py
+python scripts\generate_matched_numerical_gifs.py
+python scripts\generate_matched_numerical_tables.py
+```
+
+Outputs are written next to each other:
+
+```text
+outputs/matched_numerical_visualizations/
+outputs/matched_numerical_tables/
+```
+
+`matched_numerical_visualizations` contains method-specific 1D profiles, 1D
+absolute-error plots, 2D centerlines, heatmap snapshots, 3D solution surfaces,
+3D exact/error surfaces, and 2D heatmap/surface GIFs. `matched_numerical_tables`
+contains 16:9 PNG tables for direct PowerPoint insertion plus CSV and Markdown
+copies. The table generator currently covers RK4 and Forward Euler because both
+are implemented in the shared package solver and do not require parsing external
+notebooks.
+
+To run only the unified Forward Euler branch:
+
+```bash
+python scripts\run_forward_euler.py
+```
 
 ## Long-Time Method Comparison
 

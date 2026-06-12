@@ -1,0 +1,18 @@
+{
+  "t_end": 8.0,
+  "requested_frames": 33,
+  "gifs": [
+    "C:\\Users\\yoonc\\Downloads\\fisher-pinn-github-worktree\\outputs\\matched_numerical_visualizations\\trapezoidal_newton\\2d_evolution.gif",
+    "C:\\Users\\yoonc\\Downloads\\fisher-pinn-github-worktree\\outputs\\matched_numerical_visualizations\\backward_euler_newton\\2d_evolution.gif",
+    "C:\\Users\\yoonc\\Downloads\\fisher-pinn-github-worktree\\outputs\\matched_numerical_visualizations\\forward_euler\\2d_evolution.gif",
+    "C:\\Users\\yoonc\\Downloads\\fisher-pinn-github-worktree\\outputs\\matched_numerical_visualizations\\rk4\\2d_evolution.gif"
+  ],
+  "surface_gifs": [
+    "C:\\Users\\yoonc\\Downloads\\fisher-pinn-github-worktree\\outputs\\matched_numerical_visualizations\\trapezoidal_newton\\2d_surface_evolution.gif",
+    "C:\\Users\\yoonc\\Downloads\\fisher-pinn-github-worktree\\outputs\\matched_numerical_visualizations\\backward_euler_newton\\2d_surface_evolution.gif",
+    "C:\\Users\\yoonc\\Downloads\\fisher-pinn-github-worktree\\outputs\\matched_numerical_visualizations\\forward_euler\\2d_surface_evolution.gif",
+    "C:\\Users\\yoonc\\Downloads\\fisher-pinn-github-worktree\\outputs\\matched_numerical_visualizations\\rk4\\2d_surface_evolution.gif"
+  ],
+  "preview": "C:\\Users\\yoonc\\Downloads\\fisher-pinn-github-worktree\\outputs\\matched_numerical_visualizations\\all_methods_2d_gif_preview.png",
+  "surface_preview": "C:\\Users\\yoonc\\Downloads\\fisher-pinn-github-worktree\\outputs\\matched_numerical_visualizations\\all_methods_2d_surface_gif_preview.png"
+}

@@ -266,6 +266,24 @@ def rk4_step_2d_dirichlet_exact(
     return np.clip(apply_dirichlet_bc_2d_from_exact(u_next, x, y, t + dt, exact_solution), 0.0, 1.0)
 
 
+def forward_euler_step_2d_dirichlet_exact(
+    u: np.ndarray,
+    dt: float,
+    dx: float,
+    x: np.ndarray,
+    y: np.ndarray,
+    t: float,
+    D: float,
+    r: float,
+    exact_solution,
+) -> np.ndarray:
+    """One forward-Euler step for the 2D exact-Dirichlet Fisher-KPP system."""
+    u0 = apply_dirichlet_bc_2d_from_exact(u, x, y, t, exact_solution)
+    rhs = fisher_kpp_rhs_2d_dirichlet(u0, dx, D, r)
+    u_next = u0 + dt * rhs
+    return np.clip(apply_dirichlet_bc_2d_from_exact(u_next, x, y, t + dt, exact_solution), 0.0, 1.0)
+
+
 def check_rk4_stability(dx: float, dt: float, D: float, r: float, dim: int = 1, safety: float = 0.95) -> dict[str, float | bool]:
     """Practical explicit RK4 stability estimate for diffusion-reaction systems."""
     if D <= 0.0 or r <= 0.0:
@@ -689,6 +707,98 @@ def solve_rk4_2d(
 
     result: dict[str, np.ndarray] = {
         "dimension": np.array(2),
+        "x": x,
+        "y": y,
+        "times": np.asarray(times),
+        "snapshots": np.asarray(snapshots),
+        "mass": np.asarray(masses),
+        "u_final": u,
+    }
+    for level, values in areas.items():
+        result[f"area_ge_{level:.2f}"] = np.asarray(values)
+    if exact_solution is not None:
+        exact_final = np.asarray(exact_solution(xx, yy, Nt * dt), dtype=np.float64)
+        result["exact_final"] = exact_final
+        result["abs_error_final"] = np.abs(u - exact_final)
+        result["relative_l2_final"] = np.array(relative_l2(u, exact_final))
+    return result
+
+
+def solve_2d_method(
+    method: str,
+    x: np.ndarray,
+    y: np.ndarray,
+    dt: float,
+    Nt: int,
+    D: float,
+    r: float,
+    initial_condition,
+    save_interval: float = 0.05,
+    front_levels: tuple[float, ...] = (0.05, 0.10),
+    boundary_condition: str = "dirichlet_exact",
+    exact_solution=None,
+) -> dict[str, np.ndarray]:
+    """Solve the same 2D Fisher-KPP benchmark with forward Euler or RK4.
+
+    The matched-visualization notebooks use exact time-dependent Dirichlet
+    boundaries. The no-flux branch is retained only for RK4 compatibility.
+    """
+    normalized = method.lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "fe": "forward_euler",
+        "forward": "forward_euler",
+        "forward_euler": "forward_euler",
+        "rk4": "rk4",
+    }
+    if normalized not in aliases:
+        raise ValueError(f"Unsupported 2D method {method!r}.")
+    method_name = aliases[normalized]
+
+    x = np.asarray(x, dtype=np.float64)
+    y = np.asarray(y, dtype=np.float64)
+    if x.ndim != 1 or y.ndim != 1 or len(x) != len(y):
+        raise ValueError("x and y must be one-dimensional grids with the same length.")
+    dx = float(x[1] - x[0])
+    if not np.allclose(np.diff(x), dx) or not np.allclose(np.diff(y), dx):
+        raise ValueError("2D solver expects a uniform square grid.")
+
+    xx, yy = np.meshgrid(x, y, indexing="ij")
+    if boundary_condition == "dirichlet_exact":
+        if exact_solution is None:
+            raise ValueError("exact_solution is required when boundary_condition='dirichlet_exact'.")
+        u = np.clip(apply_dirichlet_bc_2d_from_exact(initial_condition(xx, yy), x, y, 0.0, exact_solution), 0.0, 1.0)
+    elif boundary_condition == "neumann" and method_name == "rk4":
+        u = np.clip(apply_neumann_bc_2d(initial_condition(xx, yy)), 0.0, 1.0)
+    else:
+        raise ValueError("forward Euler 2D currently supports exact Dirichlet boundaries only.")
+
+    snapshots: list[np.ndarray] = []
+    times: list[float] = []
+    masses: list[float] = []
+    areas: dict[float, list[float]] = {level: [] for level in front_levels}
+    next_save_t = 0.0
+
+    for n in range(Nt + 1):
+        t = n * dt
+        if t >= next_save_t - 1.0e-12 or n == Nt:
+            snapshots.append(u.copy())
+            times.append(t)
+            masses.append(mean_mass(u))
+            for level in front_levels:
+                areas[level].append(area_fraction_2d(u, level=level))
+            next_save_t += save_interval
+        if n == Nt:
+            break
+        if method_name == "forward_euler":
+            u = forward_euler_step_2d_dirichlet_exact(u, dt, dx, x, y, t, D, r, exact_solution)
+        elif boundary_condition == "dirichlet_exact":
+            u = rk4_step_2d_dirichlet_exact(u, dt, dx, x, y, t, D, r, exact_solution)
+        else:
+            u = rk4_step_2d(u, dt, dx, D, r)
+
+    result: dict[str, np.ndarray] = {
+        "dimension": np.array(2),
+        "method": np.array(method_name),
         "x": x,
         "y": y,
         "times": np.asarray(times),

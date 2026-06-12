@@ -17,6 +17,7 @@ from fisher_kpp_rk4 import (
     check_rk4_stability,
     relative_l2,
     solve_1d_method,
+    solve_2d_method,
     solve_long_time_curve,
     solve_rk4,
     solve_rk4_2d,
@@ -131,6 +132,27 @@ def test_generalized_fisher_kpp_2d_rk4_matches_exact_solution() -> None:
         exact_solution=generalized_fisher_kpp_exact_2d,
     )
     assert float(result["relative_l2_final"]) < 3.0e-3
+
+
+def test_generalized_fisher_kpp_2d_forward_euler_method_matches_exact_solution() -> None:
+    result = solve_2d_method(
+        "forward_euler",
+        x=x_2d,
+        y=y_2d,
+        dt=0.005,
+        Nt=int(round(0.5 / 0.005)),
+        D=D_2D,
+        r=r_2D,
+        initial_condition=initial_condition_2d,
+        save_interval=0.5,
+        boundary_condition="dirichlet_exact",
+        exact_solution=generalized_fisher_kpp_exact_2d,
+    )
+    assert result["snapshots"].shape[1:] == (len(x_2d), len(y_2d))
+    assert np.isfinite(result["snapshots"]).all()
+    assert result["snapshots"].min() >= 0.0
+    assert result["snapshots"].max() <= 1.0
+    assert float(result["relative_l2_final"]) < 4.0e-3
 
 
 def test_stability_check_accepts_1d_and_2d() -> None:
