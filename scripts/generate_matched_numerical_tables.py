@@ -11,9 +11,9 @@ import matplotlib
 
 matplotlib.use("Agg")
 
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,7 +22,7 @@ RK4_SRC = RK4_ROOT / "src"
 if str(RK4_SRC) not in sys.path:
     sys.path.insert(0, str(RK4_SRC))
 
-from fisher_kpp_rk4 import check_forward_euler_stability, check_rk4_stability, relative_l2, solve_1d_method, solve_2d_method
+from fisher_kpp_rk4 import relative_l2, solve_1d_method, solve_2d_method
 from fisher_kpp_rk4.config import (
     D,
     D_2D,
@@ -54,7 +54,6 @@ ONE_D_COLUMNS = [
     "Nt",
     "T",
     "runtime_sec",
-    "stability_safe",
     "min_u",
     "max_u",
     "mean_u",
@@ -62,8 +61,6 @@ ONE_D_COLUMNS = [
 ]
 
 TWO_D_COLUMNS = [
-    "dim",
-    "method",
     "Nx",
     "Ny",
     "dx",
@@ -72,7 +69,6 @@ TWO_D_COLUMNS = [
     "Nt",
     "T",
     "runtime_sec",
-    "stability_safe",
     "min_U",
     "max_U",
     "mean_U",
@@ -94,8 +90,6 @@ ONE_D_REFERENCE_COLUMNS = [
 ]
 
 TWO_D_REFERENCE_COLUMNS = [
-    "dim",
-    "method",
     "Nx",
     "Ny",
     "dx",
@@ -124,13 +118,6 @@ def _method_label(method: str) -> str:
     if normalized == "rk4":
         return "rk4"
     raise ValueError(f"Unsupported method {method!r}")
-
-
-def _stability_safe(method: str, *, dx: float, dt: float, D_value: float, r_value: float, dim: int) -> bool:
-    method_name = _method_label(method)
-    if method_name == "forward_euler":
-        return bool(check_forward_euler_stability(dx=dx, dt=dt, D=D_value, r=r_value, dim=dim, safety=1.0)["is_practically_safe"])
-    return bool(check_rk4_stability(dx=dx, dt=dt, D=D_value, r=r_value, dim=dim, safety=1.0)["is_practically_safe"])
 
 
 def run_case_1d(method: str, nx: int, dt: float) -> dict[str, object]:
@@ -163,7 +150,6 @@ def run_case_1d(method: str, nx: int, dt: float) -> dict[str, object]:
         "Nt": int(nt),
         "T": float(T),
         "runtime_sec": float(runtime),
-        "stability_safe": _stability_safe(method_name, dx=dx, dt=dt_eff, D_value=D, r_value=r, dim=1),
         "min_u": float(final.min()),
         "max_u": float(final.max()),
         "mean_u": float(final.mean()),
@@ -194,8 +180,6 @@ def run_case_2d(method: str, grid: int, dt: float) -> dict[str, object]:
     runtime = time.perf_counter() - start
     final = np.asarray(sol["u_final"], dtype=np.float64)
     return {
-        "dim": "2D",
-        "method": method_name,
         "Nx": int(grid),
         "Ny": int(grid),
         "dx": dx,
@@ -204,7 +188,6 @@ def run_case_2d(method: str, grid: int, dt: float) -> dict[str, object]:
         "Nt": int(nt),
         "T": float(T_2D),
         "runtime_sec": float(runtime),
-        "stability_safe": _stability_safe(method_name, dx=dx, dt=dt_eff, D_value=D_2D, r_value=r_2D, dim=2),
         "min_U": float(final.min()),
         "max_U": float(final.max()),
         "mean_U": float(final.mean()),
@@ -333,8 +316,6 @@ def run_temporal_reference_2d(
         final = np.asarray(sol["u_final"], dtype=np.float64)
         rows.append(
             {
-                "dim": "2D",
-                "method": method_name,
                 "Nx": int(grid),
                 "Ny": int(grid),
                 "dx": float(x[1] - x[0]),
@@ -398,44 +379,65 @@ def _write_markdown(path: Path, title: str, rows: list[dict[str, object]], colum
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def _ppt_table_png(path: Path, title: str, rows: list[dict[str, object]], columns: list[str], *, subtitle: str) -> None:
-    frame = _display_frame(rows, columns)
-    fig, ax = plt.subplots(figsize=(13.333, 7.5))
-    fig.patch.set_facecolor("#f8fafc")
-    ax.axis("off")
-    ax.text(0.035, 0.94, title, transform=ax.transAxes, fontsize=24, fontweight="bold", color="#111827", va="top")
-    ax.text(0.035, 0.885, subtitle, transform=ax.transAxes, fontsize=11, color="#4b5563", va="top")
+def _column_widths(frame: pd.DataFrame, columns: list[str]) -> list[float]:
+    weights: list[float] = []
+    for column in columns:
+        text_width = max(len(str(column)), *(len(str(value)) for value in frame[column].tolist()))
+        weights.append(max(0.70, min(3.20, text_width / 8.2)))
+    total = sum(weights)
+    return [weight / total for weight in weights]
 
-    char_widths = [max(len(str(column)), *(len(str(v)) for v in frame[column].tolist())) for column in frame.columns]
-    total = sum(char_widths)
-    col_widths = [max(0.045, width / total) for width in char_widths]
-    width_sum = sum(col_widths)
-    col_widths = [width / width_sum for width in col_widths]
+
+def _standard_table_png(path: Path, rows: list[dict[str, object]], columns: list[str], *, show_index: bool) -> None:
+    frame = _display_frame(rows, columns)
+    display_columns = list(columns)
+    if show_index:
+        frame.insert(0, "", [str(index) for index in range(len(frame))])
+        display_columns = [""] + display_columns
+
+    col_widths = _column_widths(frame, display_columns)
+    total_chars = sum(max(len(str(column)), *(len(str(value)) for value in frame[column].tolist())) for column in display_columns)
+    width = max(12.0, min(24.0, total_chars * 0.155))
+    height = max(1.55, 0.43 * (len(rows) + 1))
+    fig, ax = plt.subplots(figsize=(width, height))
+    fig.patch.set_facecolor("#24272a")
+    ax.set_facecolor("#24272a")
+    ax.axis("off")
+    ax.set_position([0.0, 0.0, 1.0, 1.0])
 
     table = ax.table(
         cellText=frame.to_numpy(),
-        colLabels=list(frame.columns),
+        colLabels=display_columns,
         colWidths=col_widths,
-        cellLoc="center",
-        colLoc="center",
-        bbox=[0.025, 0.08, 0.95, 0.75],
+        cellLoc="right",
+        colLoc="right",
+        bbox=[0.0, 0.0, 1.0, 1.0],
     )
     table.auto_set_font_size(False)
-    table.set_fontsize(8.2 if len(columns) <= 13 else 7.1)
-    table.scale(1.0, 1.35)
-
-    for (row_idx, _), cell in table.get_celld().items():
-        cell.set_edgecolor("#f8fafc")
-        cell.set_linewidth(1.0)
+    for (row_idx, col_idx), cell in table.get_celld().items():
+        cell.PAD = 0.016
+        cell.set_edgecolor("#24272a")
+        cell.set_linewidth(0.0)
+        cell.get_text().set_fontfamily("monospace")
+        cell.get_text().set_clip_on(False)
         if row_idx == 0:
-            cell.set_facecolor("#1f2937")
-            cell.set_text_props(color="white", fontweight="bold")
+            cell.set_facecolor("#24272a")
+            cell.get_text().set_color("#f2f2f2")
+            cell.get_text().set_weight("bold")
+            cell.get_text().set_fontsize(10.5)
+            cell.get_text().set_ha("right")
         else:
-            cell.set_facecolor("#e5e7eb" if row_idx % 2 else "#f3f4f6")
-            cell.set_text_props(color="#111827")
+            cell.set_facecolor("#4a4a4a" if row_idx % 2 else "#282b2e")
+            cell.get_text().set_color("#e5e5e5")
+            cell.get_text().set_fontsize(10.0)
+            visible_column = display_columns[col_idx]
+            if visible_column in {"dim", "method", "converged_all"}:
+                cell.get_text().set_ha("center")
+            else:
+                cell.get_text().set_ha("right")
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(path, dpi=180, facecolor=fig.get_facecolor(), bbox_inches="tight", pad_inches=0.02)
+    fig.savefig(path, dpi=220, facecolor=fig.get_facecolor(), bbox_inches="tight", pad_inches=0.015)
     plt.close(fig)
 
 
@@ -446,12 +448,12 @@ def _write_table_bundle(
     rows: list[dict[str, object]],
     columns: list[str],
     *,
-    subtitle: str,
+    show_index: bool,
 ) -> Path:
     _write_csv(out_dir / f"{name}.csv", rows, columns)
     _write_markdown(out_dir / f"{name}.md", title, rows, columns)
     png = out_dir / f"{name}.png"
-    _ppt_table_png(png, title, rows, columns, subtitle=subtitle)
+    _standard_table_png(png, rows, columns, show_index=show_index)
     return png
 
 
@@ -486,7 +488,6 @@ def _contact_sheet(paths: list[Path], out_path: Path) -> None:
 def _method_tables(method: str, out_dir: Path) -> list[Path]:
     method_name = _method_label(method)
     method_dir = out_dir / method_name
-    subtitle = "Same exact Fisher-KPP traveling-wave benchmark; columns unavailable for the method are omitted."
     pngs: list[Path] = []
 
     one_d_spatial = [run_case_1d(method_name, nx=nx, dt=0.005) for nx in (101, 201, 401)]
@@ -507,15 +508,15 @@ def _method_tables(method: str, out_dir: Path) -> list[Path]:
     two_d_ref = run_temporal_reference_2d(method_name, grid=81, dt_values=two_d_ref_values, dt_ref=two_d_ref_dt)
 
     bundles = [
-        ("1d_spatial_comparison", "1D spatial comparison", one_d_spatial, ONE_D_COLUMNS),
-        ("1d_time_comparison", "1D time comparison", one_d_time, ONE_D_COLUMNS),
-        ("1d_temporal_reference_convergence", "1D temporal reference convergence", one_d_ref, ONE_D_REFERENCE_COLUMNS),
-        ("2d_spatial_comparison", "2D spatial comparison", two_d_spatial, TWO_D_COLUMNS),
-        ("2d_time_comparison", "2D time comparison", two_d_time, TWO_D_COLUMNS),
-        ("2d_temporal_reference_convergence", "2D temporal reference convergence", two_d_ref, TWO_D_REFERENCE_COLUMNS),
+        ("1d_spatial_comparison", "1D spatial comparison", one_d_spatial, ONE_D_COLUMNS, True),
+        ("1d_time_comparison", "1D time comparison", one_d_time, ONE_D_COLUMNS, True),
+        ("1d_temporal_reference_convergence", "1D temporal reference convergence", one_d_ref, ONE_D_REFERENCE_COLUMNS, True),
+        ("2d_spatial_comparison", "2D spatial comparison", two_d_spatial, TWO_D_COLUMNS, False),
+        ("2d_time_comparison", "2D time comparison", two_d_time, TWO_D_COLUMNS, False),
+        ("2d_temporal_reference_convergence", "2D temporal reference convergence", two_d_ref, TWO_D_REFERENCE_COLUMNS, False),
     ]
-    for stem, title, rows, columns in bundles:
-        pngs.append(_write_table_bundle(method_dir, f"{method_name}_{stem}", f"{method_name}: {title}", rows, columns, subtitle=subtitle))
+    for stem, title, rows, columns, show_index in bundles:
+        pngs.append(_write_table_bundle(method_dir, f"{method_name}_{stem}", f"{method_name}: {title}", rows, columns, show_index=show_index))
     return pngs
 
 

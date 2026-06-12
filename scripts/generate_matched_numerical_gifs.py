@@ -145,7 +145,7 @@ def _save_surface_gif(
         ax.set_xlim(float(x.min()), float(x.max()))
         ax.set_ylim(float(y.min()), float(y.max()))
         ax.set_zlim(zmin, zmax)
-        ax.view_init(elev=30, azim=-60)
+        ax.view_init(elev=30, azim=45)
         ax.set_xlabel("x")
         ax.set_ylabel("y")
         ax.set_zlabel("u(x,y,t)")

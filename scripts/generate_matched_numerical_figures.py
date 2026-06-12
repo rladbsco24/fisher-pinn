@@ -159,7 +159,7 @@ def _save_2d(
         ax.set_xlabel("x")
         ax.set_ylabel("y")
         ax.set_zlabel("u(x,y,t)")
-        ax.view_init(elev=30, azim=-60)
+        ax.view_init(elev=30, azim=45)
         ax.set_title(f"2D generalized Fisher-KPP 3D Surface at t = {t_float:g}")
         fig.colorbar(surf, ax=ax, shrink=0.65, label="u(x,y,t)")
         fig.tight_layout()
@@ -169,9 +169,9 @@ def _save_2d(
         paths.append(path)
 
         for title, data, cmap, zlabel, stem in [
-            ("Numerical", field, "viridis", "u_num", "2d_numerical"),
-            ("Exact", exact, "viridis", "u_exact", "2d_exact"),
-            ("Absolute Error", abs_error, "magma", "|u_num-u_exact|", "2d_absolute_error"),
+            ("Numerical", field, "viridis", "u_num(x,y,t)", "2d_numerical"),
+            ("Exact", exact, "viridis", "u_exact(x,y,t)", "2d_exact"),
+            ("Absolute Error", abs_error, "viridis", "|u_num - u_exact|", "2d_absolute_error"),
         ]:
             fig = plt.figure(figsize=(9, 6))
             ax = fig.add_subplot(111, projection="3d")
@@ -179,9 +179,10 @@ def _save_2d(
             ax.set_xlabel("x")
             ax.set_ylabel("y")
             ax.set_zlabel(zlabel)
-            ax.view_init(elev=30, azim=-60)
+            ax.view_init(elev=30, azim=45)
             ax.set_title(f"{title} 3D Surface at t = {t_float:g}")
-            fig.colorbar(surf, ax=ax, shrink=0.65, label=zlabel)
+            colorbar_label = "absolute error" if title == "Absolute Error" else stem.removeprefix("2d_")
+            fig.colorbar(surf, ax=ax, shrink=0.6, aspect=12, label=colorbar_label)
             fig.tight_layout()
             path = out_dir / f"{stem}_t{label}.png"
             fig.savefig(path, dpi=180)
