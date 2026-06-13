@@ -163,6 +163,8 @@ def residual_front_maps(
     front_alpha: float = 0.0,
     front_gradient: float = 0.0,
     front_speed_min_grad: float = 1.0e-2,
+    use_curvature_correction: bool = False,
+    curvature_correction_weight: float = 0.05,
 ) -> dict[str, np.ndarray]:
     xs = np.linspace(0.0, model.domain.box, n)
     x, y = np.meshgrid(xs, xs, indexing="ij")
@@ -171,7 +173,14 @@ def residual_front_maps(
     residual, u, u_xy, _, _ = pde_residual_terms(model, xy, t)
     grad_norm = torch.linalg.norm(u_xy, dim=-1, keepdim=True)
     weights = front_indicator_weights(u, u_xy, front_alpha, front_gradient)
-    kin = front_speed_kinematics(model, xy, t)
+    kin = front_speed_kinematics(
+        model,
+        xy,
+        t,
+        use_curvature_correction=use_curvature_correction,
+        curvature_correction_weight=curvature_correction_weight,
+        compute_curvature=True,
+    )
     front_band = (
         (u.detach() > 0.05)
         & (u.detach() < 0.95)
@@ -180,6 +189,9 @@ def residual_front_maps(
     normal_speed = kin["observed_normal_speed"].detach().cpu().numpy().reshape(n, n)
     target_speed = kin["target_normal_speed"].detach().cpu().numpy().reshape(n, n)
     speed_error = np.abs(kin["speed_error"].detach().cpu().numpy().reshape(n, n))
+    speed_residual = kin["signed_residual"].detach().cpu().numpy().reshape(n, n)
+    mean_curvature = kin["mean_curvature"].detach().cpu().numpy().reshape(n, n)
+    curvature_correction = kin["curvature_speed_correction"].detach().cpu().numpy().reshape(n, n)
     return {
         "u": u.detach().cpu().numpy().reshape(n, n),
         "residual_abs": residual.detach().abs().cpu().numpy().reshape(n, n),
@@ -189,6 +201,9 @@ def residual_front_maps(
         "normal_speed": np.where(front_band, normal_speed, np.nan),
         "target_speed": np.where(front_band, target_speed, np.nan),
         "front_speed_error": np.where(front_band, speed_error, np.nan),
+        "speed_residual": np.where(front_band, speed_residual, np.nan),
+        "mean_curvature": np.where(front_band, mean_curvature, np.nan),
+        "curvature_correction": np.where(front_band, curvature_correction, np.nan),
     }
 
 
@@ -362,6 +377,8 @@ def save_training_diagnostics_figure(
         ("front_contrast", COLORS["rose"]),
         ("front_profile", COLORS["blue"]),
         ("level_set", COLORS["gold"]),
+        ("intrinsic_phase_gradient_alignment", COLORS["teal"]),
+        ("intrinsic_phase_monotonicity", COLORS["rose"]),
         ("front_speed", COLORS["blue_light"]),
         ("front_grad", COLORS["pink"]),
         ("grad", COLORS["neutral"]),
@@ -425,6 +442,8 @@ def save_training_diagnostics_figure(
         ("aw_front_contrast", COLORS["rose"]),
         ("aw_front_profile", COLORS["blue"]),
         ("aw_level_set", COLORS["gold"]),
+        ("aw_intrinsic_phase_gradient_alignment", COLORS["teal"]),
+        ("aw_intrinsic_phase_monotonicity", COLORS["rose"]),
         ("aw_front_speed", COLORS["blue_light"]),
         ("aw_front_grad", COLORS["pink"]),
         ("aw_coefficient_field", COLORS["teal"]),
@@ -470,6 +489,8 @@ def save_residual_front_diagnostics_figure(
     time_value: float,
     front_alpha: float = 0.0,
     front_gradient: float = 0.0,
+    use_curvature_correction: bool = False,
+    curvature_correction_weight: float = 0.05,
     n: int = 64,
 ) -> None:
     _apply_chart_theme()
@@ -482,6 +503,8 @@ def save_residual_front_diagnostics_figure(
         device=device,
         front_alpha=front_alpha,
         front_gradient=front_gradient,
+        use_curvature_correction=use_curvature_correction,
+        curvature_correction_weight=curvature_correction_weight,
     )
     abs_error = np.abs(maps["u"] - true_field)
     residual_log = np.log10(maps["residual_abs"] + 1.0e-8)
@@ -495,17 +518,195 @@ def save_residual_front_diagnostics_figure(
         ("front/adaptive weight", maps["front_weight"], WEIGHT_CMAP, None, None),
         ("normal front speed", maps["normal_speed"], SIGNED_ERROR_CMAP, None, None),
         ("front-speed error", maps["front_speed_error"], ERROR_CMAP, 0.0, None),
+        ("mean curvature kappa", maps["mean_curvature"], SIGNED_ERROR_CMAP, None, None),
+        ("signed speed residual", maps["speed_residual"], SIGNED_ERROR_CMAP, None, None),
     ]
-    fig, axes = plt.subplots(2, 4, figsize=(15.2, 7.4), constrained_layout=False)
-    fig.subplots_adjust(left=0.04, right=0.94, bottom=0.06, top=0.84, hspace=0.30, wspace=0.24)
-    for ax, (title, field, cmap, vmin, vmax) in zip(axes.ravel(), panels):
+    fig, axes = plt.subplots(3, 4, figsize=(15.2, 10.8), constrained_layout=False)
+    fig.subplots_adjust(left=0.04, right=0.94, bottom=0.07, top=0.84, hspace=0.36, wspace=0.24)
+    flat_axes = axes.ravel()
+    for ax, (title, field, cmap, vmin, vmax) in zip(flat_axes, panels):
         _imshow(fig, ax, field, domain, title=title, cmap=cmap, vmin=vmin, vmax=vmax, colorbar=True)
+    hist_specs = [
+        ("front-band kappa distribution", maps["mean_curvature"], COLORS["teal"]),
+        ("front-band speed residual distribution", maps["speed_residual"], COLORS["rose"]),
+    ]
+    for ax, (title, field, color) in zip(flat_axes[len(panels) :], hist_specs):
+        values = np.asarray(field, dtype=np.float64)
+        values = values[np.isfinite(values)]
+        if values.size:
+            ax.hist(values, bins=min(32, max(8, int(np.sqrt(values.size)))), color=color, alpha=0.82)
+            ax.axvline(float(np.mean(values)), color=TOKENS["ink"], linewidth=1.1, linestyle="--")
+            ax.set_xlabel("Value")
+            ax.set_ylabel("Count")
+        else:
+            ax.text(0.5, 0.5, "no active front samples", ha="center", va="center", transform=ax.transAxes)
+        ax.set_title(title, fontsize=8)
+        _style_axis(ax, grid=True)
 
     _write_title(
         fig,
         "Residual and active-front diagnostics",
-        f"Maps at t={time_value:.2f}; residual, active-front weights, and normal speed explain moving-front behavior.",
+        (
+            f"Maps at t={time_value:.2f}; curvature correction "
+            f"{'on' if use_curvature_correction else 'off'} with weight={curvature_correction_weight:.3g}."
+        ),
         top=0.84,
+    )
+    _save_figure(fig, path, dpi=150)
+    plt.close(fig)
+
+
+def _initial_phase_target_numpy(
+    domain: DomainConfig,
+    seed: SeedConfig,
+    x: np.ndarray,
+    y: np.ndarray,
+    *,
+    level: float,
+    benchmark_kind: str = "gaussian_seed",
+    x_left: float = -20.0,
+    x_right: float = 20.0,
+    x0: float = 0.0,
+) -> np.ndarray:
+    if benchmark_kind == "ablowitz_zeppetella":
+        level_safe = np.clip(float(level), 1.0e-8, 1.0 - 1.0e-8)
+        x_level_physical = float(x0) + np.sqrt(6.0) * np.log(level_safe ** -0.5 - 1.0)
+        x_level_unit = (x_level_physical - float(x_left)) / (float(x_right) - float(x_left))
+        return x / max(float(domain.box), 1.0e-12) - x_level_unit
+    amplitude = max(float(seed.amplitude), 1.0e-8)
+    level_clamped = min(max(float(level), 1.0e-8), amplitude * (1.0 - 1.0e-7))
+    radius = float(seed.sigma) * np.sqrt(max(0.0, -2.0 * np.log(level_clamped / amplitude)))
+    dist = np.sqrt((x - float(seed.center_x)) ** 2 + (y - float(seed.center_y)) ** 2)
+    return (dist - radius) / max(float(domain.box), 1.0e-12)
+
+
+def save_initial_phase_contour_diagnostic_figure(
+    path: Path,
+    model: OriginPINN,
+    domain: DomainConfig,
+    seed: SeedConfig,
+    device: torch.device,
+    *,
+    level: float = 0.10,
+    benchmark_kind: str = "gaussian_seed",
+    x_left: float = -20.0,
+    x_right: float = 20.0,
+    x0: float = 0.0,
+    n: int = 96,
+) -> None:
+    if getattr(model, "front_phase_head", None) is None:
+        return
+    _apply_chart_theme()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    xs = np.linspace(0.0, domain.box, n)
+    x, y = np.meshgrid(xs, xs, indexing="ij")
+    xy = torch.tensor(np.stack([x.reshape(-1), y.reshape(-1)], axis=1), dtype=torch.float32, device=device)
+    t0 = torch.zeros(len(xy), 1, dtype=torch.float32, device=device)
+    with torch.no_grad():
+        u0 = model(xy, t0).detach().cpu().numpy().reshape(n, n)
+        psi = model.phase(xy, t0).detach().cpu().numpy().reshape(n, n)
+    target = _initial_phase_target_numpy(
+        domain,
+        seed,
+        x,
+        y,
+        level=level,
+        benchmark_kind=benchmark_kind,
+        x_left=x_left,
+        x_right=x_right,
+        x0=x0,
+    )
+    error = psi - target
+    value_lim = max(
+        float(np.nanmax(np.abs(psi))),
+        float(np.nanmax(np.abs(target))),
+        0.1,
+    )
+    err_lim = float(np.nanmax(np.abs(error)))
+    if not np.isfinite(err_lim) or err_lim <= 0.0:
+        err_lim = 1.0e-12
+
+    fig, axes = plt.subplots(1, 4, figsize=(16.4, 4.1), constrained_layout=False)
+    fig.subplots_adjust(left=0.04, right=0.94, bottom=0.14, top=0.76, wspace=0.30)
+    panels = [
+        (axes[0], f"initial u, level={level:.2f}", u0, FIELD_CMAP, 0.0, 1.0),
+        (axes[1], "learned psi at t=0", psi, SIGNED_ERROR_CMAP, -value_lim, value_lim),
+        (axes[2], "target signed distance", target, SIGNED_ERROR_CMAP, -value_lim, value_lim),
+        (axes[3], "psi - target", error, SIGNED_ERROR_CMAP, -err_lim, err_lim),
+    ]
+    for ax, title, field, cmap, vmin, vmax in panels:
+        _imshow(fig, ax, field, domain, title=title, cmap=cmap, vmin=vmin, vmax=vmax, colorbar=True)
+        try:
+            ax.contour(xs, xs, u0.T, levels=[float(level)], colors=[COLORS["teal"]], linewidths=1.4)
+            ax.contour(xs, xs, psi.T, levels=[0.0], colors=[COLORS["rose"]], linewidths=1.4, linestyles="--")
+            ax.contour(xs, xs, target.T, levels=[0.0], colors=[COLORS["gold"]], linewidths=1.1, linestyles=":")
+        except ValueError:
+            continue
+    axes[0].plot([], [], color=COLORS["teal"], linewidth=1.4, label=f"u={level:.2f}")
+    axes[0].plot([], [], color=COLORS["rose"], linewidth=1.4, linestyle="--", label="psi=0")
+    axes[0].plot([], [], color=COLORS["gold"], linewidth=1.1, linestyle=":", label="target=0")
+    axes[0].legend(frameon=False, fontsize=6, loc="upper right")
+    _write_title(
+        fig,
+        "Initial intrinsic phase contour diagnostic",
+        "At t=0, psi=0 should coincide with the selected initial u-level contour; negative psi is the high-u side.",
+        top=0.78,
+    )
+    _save_figure(fig, path, dpi=150)
+    plt.close(fig)
+
+
+def save_phase_u_contour_diagnostic_figure(
+    path: Path,
+    truth: TruthData,
+    model: OriginPINN,
+    domain: DomainConfig,
+    device: torch.device,
+    *,
+    time_value: float,
+    level: float = 0.10,
+    n: int = 96,
+) -> None:
+    _apply_chart_theme()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    xs, true_field = truth_field_at(truth, time_value, n=n)
+    _, pred = predict_field(model, time_value, n=n, device=device)
+    x, y = np.meshgrid(xs, xs, indexing="ij")
+    xy = torch.tensor(np.stack([x.reshape(-1), y.reshape(-1)], axis=1), dtype=torch.float32, device=device)
+    t = torch.full((n * n, 1), float(time_value), dtype=torch.float32, device=device)
+    with torch.no_grad():
+        psi = model.phase(xy, t).detach().cpu().numpy().reshape(n, n)
+    psi_lim = max(float(np.nanmax(np.abs(psi))), 0.1)
+
+    fig, axes = plt.subplots(1, 3, figsize=(13.8, 4.4), constrained_layout=False)
+    fig.subplots_adjust(left=0.045, right=0.94, bottom=0.14, top=0.78, wspace=0.30)
+    _imshow(fig, axes[0], pred, domain, title=f"PINN u with contours, t={time_value:.2f}", cmap=FIELD_CMAP, vmin=0.0, vmax=1.0, colorbar=True)
+    _imshow(fig, axes[1], true_field, domain, title="truth/PINN u-threshold", cmap=FIELD_CMAP, vmin=0.0, vmax=1.0, colorbar=True)
+    _imshow(fig, axes[2], psi, domain, title="learned psi with u contour", cmap=SIGNED_ERROR_CMAP, vmin=-psi_lim, vmax=psi_lim, colorbar=True)
+
+    for ax in axes:
+        try:
+            ax.contour(xs, xs, pred.T, levels=[float(level)], colors=[COLORS["teal"]], linewidths=1.5)
+        except ValueError:
+            pass
+        if np.nanmin(psi) <= 0.0 <= np.nanmax(psi):
+            try:
+                ax.contour(xs, xs, psi.T, levels=[0.0], colors=[COLORS["rose"]], linewidths=1.4, linestyles="--")
+            except ValueError:
+                pass
+    try:
+        axes[1].contour(xs, xs, true_field.T, levels=[float(level)], colors=[COLORS["gold"]], linewidths=1.4, linestyles=":")
+    except ValueError:
+        pass
+    axes[0].plot([], [], color=COLORS["teal"], linewidth=1.5, label=f"PINN u={level:.2f}")
+    axes[0].plot([], [], color=COLORS["rose"], linewidth=1.4, linestyle="--", label="psi=0")
+    axes[0].plot([], [], color=COLORS["gold"], linewidth=1.4, linestyle=":", label=f"truth u={level:.2f}")
+    axes[0].legend(frameon=False, fontsize=7, loc="upper right")
+    _write_title(
+        fig,
+        "Phase/u contour diagnostic",
+        "The learned psi=0 contour should stabilize, not replace, the physical u-threshold front.",
+        top=0.80,
     )
     _save_figure(fig, path, dpi=150)
     plt.close(fig)
@@ -810,6 +1011,8 @@ def generated_figure_names() -> list[str]:
         "reconstruction.png",
         "spacetime_error.png",
         "residual_front_diagnostics.png",
+        "initial_phase_contour_diagnostic.png",
+        "phase_u_contour_diagnostic.png",
         "pinn_vs_rk4_comparison.png",
         "pinn_evolution.gif",
         "training_diagnostics.png",

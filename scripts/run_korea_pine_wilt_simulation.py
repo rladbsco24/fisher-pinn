@@ -547,6 +547,69 @@ def _save_pinn_baseline_figure(path: Path, grid, pinn_years: np.ndarray, pinn_fi
     plt.close(fig)
 
 
+def _save_korea_phase_contour_figure(
+    path: Path,
+    grid,
+    pinn_years: np.ndarray,
+    pinn_fields: np.ndarray,
+    phase_fields: np.ndarray | None,
+    *,
+    level: float = 0.10,
+) -> None:
+    if phase_fields is None or len(phase_fields) == 0:
+        return
+    year_to_obs = {int(year): idx for idx, year in enumerate(grid.years.tolist())}
+    year_to_pinn = {int(year): idx for idx, year in enumerate(pinn_years.tolist())}
+    selected = [int(grid.years[0])]
+    if int(grid.years[-1]) in year_to_pinn and int(grid.years[-1]) not in selected:
+        selected.append(int(grid.years[-1]))
+    selected = selected[:2]
+    fig, axes = plt.subplots(len(selected), 3, figsize=(11.0, 3.2 * len(selected)), constrained_layout=True)
+    axes_arr = np.atleast_2d(axes)
+    extent = [grid.x_edges[0], grid.x_edges[-1], grid.y_edges[0], grid.y_edges[-1]]
+    phase_lim = float(np.nanpercentile(np.abs(phase_fields), 97.5)) if np.any(np.isfinite(phase_fields)) else 1.0
+    phase_lim = max(phase_lim, 0.05)
+    for row, year in enumerate(selected):
+        obs = grid.density[year_to_obs[year]] if year in year_to_obs else None
+        pred = pinn_fields[year_to_pinn[year]]
+        phase = phase_fields[year_to_pinn[year]]
+        panels = [
+            (f"{_format_grid_time_title(grid, year)} observed", obs if obs is not None else pred, FIELD_CMAP, 0.0, 1.0),
+            (f"{_format_grid_time_title(grid, year)} PINN + u={level:.2f}", pred, FIELD_CMAP, 0.0, 1.0),
+            (f"{_format_grid_time_title(grid, year)} phase psi=0", phase, "coolwarm", -phase_lim, phase_lim),
+        ]
+        for col, (title, field, cmap, vmin, vmax) in enumerate(panels):
+            ax = axes_arr[row, col]
+            im = ax.imshow(
+                field,
+                origin="lower",
+                extent=extent,
+                cmap=cmap,
+                vmin=vmin,
+                vmax=vmax,
+                interpolation="nearest",
+            )
+            ax.set_title(title)
+            ax.set_xticks([])
+            ax.set_yticks([])
+            try:
+                if col == 0 and obs is not None:
+                    ax.contour(obs, levels=[level], origin="lower", extent=extent, colors=["#f43f5e"], linewidths=1.2)
+                if col in {1, 2}:
+                    ax.contour(pred, levels=[level], origin="lower", extent=extent, colors=["#f43f5e"], linewidths=1.2)
+                    if np.nanmin(phase) <= 0.0 <= np.nanmax(phase):
+                        ax.contour(phase, levels=[0.0], origin="lower", extent=extent, colors=["#111827"], linewidths=1.2, linestyles="--")
+            except ValueError:
+                pass
+            _add_vertical_colorbar(fig, im, ax, shrink=0.75)
+    axes_arr[0, 1].plot([], [], color="#f43f5e", linewidth=1.2, label=f"u={level:.2f}")
+    axes_arr[0, 1].plot([], [], color="#111827", linewidth=1.2, linestyle="--", label="psi=0")
+    axes_arr[0, 1].legend(loc="lower right", fontsize=8)
+    fig.suptitle("Korea pine-wilt intrinsic front phase diagnostic", fontsize=13)
+    _save_figure_with_padding(fig, path, dpi=180)
+    plt.close(fig)
+
+
 def _save_baseline_comparison_figure(path: Path, rows: list[dict[str, float | int | str]]) -> None:
     methods = sorted({str(row["method"]) for row in rows})
     fig, axes = plt.subplots(1, 2, figsize=(11.0, 4.0), constrained_layout=True)
@@ -795,6 +858,30 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             mass_trajectory_points=getattr(args, "pinn_mass_trajectory_points", 2048),
             mass_trajectory_times=getattr(args, "pinn_mass_trajectory_times", 4),
             phase_pde_weight=getattr(args, "pinn_phase_pde_weight", 0.02),
+            intrinsic_phase_initial_weight=getattr(args, "pinn_intrinsic_phase_initial_weight", 0.03),
+            intrinsic_phase_anchor_points=getattr(args, "pinn_intrinsic_phase_anchor_points", 2048),
+            intrinsic_phase_anchor_level=getattr(args, "pinn_intrinsic_phase_anchor_level", 0.10),
+            intrinsic_phase_anchor_band=getattr(args, "pinn_intrinsic_phase_anchor_band", 0.025),
+            intrinsic_phase_anchor_sign_margin=getattr(args, "pinn_intrinsic_phase_anchor_sign_margin", 0.015),
+            intrinsic_phase_gradient_alignment_weight=getattr(
+                args,
+                "pinn_intrinsic_phase_gradient_alignment_weight",
+                0.01,
+            ),
+            intrinsic_phase_monotonicity_weight=getattr(args, "pinn_intrinsic_phase_monotonicity_weight", 0.01),
+            intrinsic_phase_compatibility_points=getattr(args, "pinn_intrinsic_phase_compatibility_points", 512),
+            intrinsic_phase_compatibility_low=getattr(args, "pinn_intrinsic_phase_compatibility_low", 0.02),
+            intrinsic_phase_compatibility_high=getattr(args, "pinn_intrinsic_phase_compatibility_high", 0.98),
+            intrinsic_phase_compatibility_temperature=getattr(
+                args,
+                "pinn_intrinsic_phase_compatibility_temperature",
+                0.03,
+            ),
+            intrinsic_phase_compatibility_min_grad=getattr(
+                args,
+                "pinn_intrinsic_phase_compatibility_min_grad",
+                1.0e-4,
+            ),
             residual_cvar_weight=getattr(args, "pinn_residual_cvar_weight", 0.03),
             residual_cvar_fraction=getattr(args, "pinn_residual_cvar_fraction", 0.10),
             diffusion=diffusion,
@@ -802,7 +889,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             physics_anchor_weight=getattr(args, "pinn_physics_anchor_weight", 0.08),
             coefficient_field_weight=getattr(args, "pinn_coefficient_field_weight", 0.02),
             physics_length_scale_mode=length_scale_mode,
-            checkpoint_path=out_dir / "korea_pinn_latest.pt",
+            checkpoint_path=out_dir / "korea_front_phase_pinn_latest.pt",
             resume_from_checkpoint=not getattr(args, "no_pinn_resume", False),
             checkpoint_every=getattr(args, "pinn_checkpoint_every", 1),
             seed=getattr(args, "seed", 7),
@@ -850,9 +937,19 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         field_payload["pinn_years"] = pinn_result.years
         field_payload["pinn_time_values"] = korea_grid_time_values(grid) if time_axis != "year" else pinn_result.years.astype(float) - float(pinn_result.years[0])
         field_payload["pinn_fields"] = pinn_result.fields
+        if pinn_result.phase_fields is not None:
+            field_payload["pinn_phase_fields"] = pinn_result.phase_fields
     np.savez_compressed(out_dir / "korea_pine_wilt_fields.npz", **field_payload)
     if pinn_result is not None:
         _save_pinn_baseline_figure(out_dir / "pinn_baseline_observed_years.png", grid, pinn_result.years, pinn_result.fields)
+        _save_korea_phase_contour_figure(
+            out_dir / "korea_phase_contours.png",
+            grid,
+            pinn_result.years,
+            pinn_result.fields,
+            pinn_result.phase_fields,
+            level=getattr(args, "pinn_intrinsic_phase_anchor_level", 0.10),
+        )
 
     rk4_summary = _method_summary([row for row in baseline_rows if row["method"] == "rk4"])
     pinn_rows = [row for row in baseline_rows if row["method"] == "pinn"]
@@ -861,6 +958,8 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         "initial_condition": "first_observed_density",
         "same_initial_density": True,
         "same_observed_period_metrics": True,
+        "same_phase_capable_backbone_as_flagship": True,
+        "front_phase_head_enabled_for_pinn": pinn_result is not None,
         "grid_size": int(args.grid_size),
         "time_axis": time_axis,
         "time_unit": grid.time_unit,
@@ -967,15 +1066,27 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             "mass_trajectory_weight": float(getattr(args, "pinn_mass_trajectory_weight", 0.75)),
             "mass_trajectory_points": int(getattr(args, "pinn_mass_trajectory_points", 2048)),
             "mass_trajectory_times": int(getattr(args, "pinn_mass_trajectory_times", 4)),
+            "phase_pde_weight": float(getattr(args, "pinn_phase_pde_weight", 0.02)),
+            "intrinsic_phase_initial_weight": float(getattr(args, "pinn_intrinsic_phase_initial_weight", 0.03)),
+            "intrinsic_phase_anchor_points": int(getattr(args, "pinn_intrinsic_phase_anchor_points", 2048)),
+            "intrinsic_phase_anchor_level": float(getattr(args, "pinn_intrinsic_phase_anchor_level", 0.10)),
+            "intrinsic_phase_anchor_band": float(getattr(args, "pinn_intrinsic_phase_anchor_band", 0.025)),
+            "intrinsic_phase_anchor_sign_margin": float(getattr(args, "pinn_intrinsic_phase_anchor_sign_margin", 0.015)),
+            "intrinsic_phase_gradient_alignment_weight": float(
+                getattr(args, "pinn_intrinsic_phase_gradient_alignment_weight", 0.01)
+            ),
+            "intrinsic_phase_monotonicity_weight": float(getattr(args, "pinn_intrinsic_phase_monotonicity_weight", 0.01)),
+            "intrinsic_phase_compatibility_points": int(getattr(args, "pinn_intrinsic_phase_compatibility_points", 512)),
             "physics_anchor_weight": float(getattr(args, "pinn_physics_anchor_weight", 0.08)),
             "coefficient_field_weight": float(getattr(args, "pinn_coefficient_field_weight", 0.02)),
             "resume_from_checkpoint": not bool(getattr(args, "no_pinn_resume", False)),
             "checkpoint_every": int(getattr(args, "pinn_checkpoint_every", 1)),
-            "checkpoint_path": "korea_pinn_latest.pt",
+            "checkpoint_path": "korea_front_phase_pinn_latest.pt",
             **pinn_summary,
             "history": pinn_result.history,
         }
         summary["outputs"].append("pinn_baseline_observed_years.png")
+        summary["outputs"].append("korea_phase_contours.png")
     (out_dir / "korea_pine_wilt_summary.json").write_text(
         json.dumps(summary, indent=2, ensure_ascii=False),
         encoding="utf-8",
@@ -1025,12 +1136,28 @@ def main() -> None:
     parser.add_argument("--pinn-mass-trajectory-points", type=int, default=2048)
     parser.add_argument("--pinn-mass-trajectory-times", type=int, default=4)
     parser.add_argument("--pinn-phase-pde-weight", type=float, default=0.02)
+    parser.add_argument("--pinn-intrinsic-phase-initial-weight", type=float, default=0.03)
+    parser.add_argument("--pinn-intrinsic-phase-anchor-points", type=int, default=2048)
+    parser.add_argument("--pinn-intrinsic-phase-anchor-level", type=float, default=0.10)
+    parser.add_argument("--pinn-intrinsic-phase-anchor-band", type=float, default=0.025)
+    parser.add_argument("--pinn-intrinsic-phase-anchor-sign-margin", type=float, default=0.015)
+    parser.add_argument("--pinn-intrinsic-phase-gradient-alignment-weight", type=float, default=0.01)
+    parser.add_argument("--pinn-intrinsic-phase-monotonicity-weight", type=float, default=0.01)
+    parser.add_argument("--pinn-intrinsic-phase-compatibility-points", type=int, default=512)
+    parser.add_argument("--pinn-intrinsic-phase-compatibility-low", type=float, default=0.02)
+    parser.add_argument("--pinn-intrinsic-phase-compatibility-high", type=float, default=0.98)
+    parser.add_argument("--pinn-intrinsic-phase-compatibility-temperature", type=float, default=0.03)
+    parser.add_argument("--pinn-intrinsic-phase-compatibility-min-grad", type=float, default=1.0e-4)
     parser.add_argument("--pinn-residual-cvar-weight", type=float, default=0.03)
     parser.add_argument("--pinn-residual-cvar-fraction", type=float, default=0.10)
     parser.add_argument("--pinn-initial-reaction", type=float, default=None)
     parser.add_argument("--pinn-physics-anchor-weight", type=float, default=0.08)
     parser.add_argument("--pinn-coefficient-field-weight", type=float, default=0.02)
-    parser.add_argument("--no-pinn-resume", action="store_true", help="Disable resume from output-dir/korea_pinn_latest.pt.")
+    parser.add_argument(
+        "--no-pinn-resume",
+        action="store_true",
+        help="Disable resume from output-dir/korea_front_phase_pinn_latest.pt.",
+    )
     parser.add_argument("--pinn-checkpoint-every", type=int, default=1, help="Save Korea PINN training state every N epochs.")
     parser.add_argument("--map-gif-fps", type=float, default=1.2)
     parser.add_argument("--map-gif-max-frames", type=int, default=15)

@@ -55,12 +55,15 @@
       "name": "korea_pine_flagship",
       "problem": "Korea pine-wilt land-mask reaction-diffusion PINN/RK4 comparison",
       "epochs": 20000,
-      "command": "python experiments/korea_pine_pinn/run_pine_pinn.py --preset flagship --output-dir runs\\korea_pine_pinn_flagship",
+      "command": "python experiments/korea_pine_pinn/run_pine_pinn.py --preset flagship --pinn-epochs 20000 --output-dir runs\\korea_pine_pinn_flagship",
       "output_dir": "runs\\korea_pine_pinn_flagship",
       "expected_outputs": [
-        "runs\\korea_pine_pinn_flagship\\metrics.json",
-        "runs\\korea_pine_pinn_flagship\\pinn_vs_rk4_comparison.png",
-        "runs\\korea_pine_pinn_flagship\\prediction_evolution.gif"
+        "runs\\korea_pine_pinn_flagship\\korea_pine_wilt_summary.json",
+        "runs\\korea_pine_pinn_flagship\\baseline_metric_comparison.png",
+        "runs\\korea_pine_pinn_flagship\\korea_map_baselines.gif",
+        "runs\\korea_pine_pinn_flagship\\korea_error_baselines.gif",
+        "runs\\korea_pine_pinn_flagship\\korea_phase_contours.png",
+        "runs\\korea_pine_pinn_flagship\\korea_front_phase_pinn_latest.pt"
       ],
       "fairness_constraints": {
         "rk4_teacher_labels": false,
@@ -73,7 +76,7 @@
           "mass trajectory error"
         ]
       },
-      "notes": "Uses the Korea-specific land mask, sea exclusion, and observation timeline while keeping the same PINN training budget scale."
+      "notes": "Uses the Korea-specific land mask, sea exclusion, and observation timeline, while keeping the same phase-capable PINN backbone and explicit training budget scale as the synthetic flagship runs."
     }
   ]
 }

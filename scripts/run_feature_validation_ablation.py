@@ -113,6 +113,27 @@ def make_feature_validation_pairs(base: ExperimentConfig) -> list[dict[str, Any]
         train=replace(base.train, front_speed_points=0, front_gradient_expected_points=0),
     )
 
+    phase_compat_without = replace(
+        base,
+        weights=replace(
+            base.weights,
+            intrinsic_phase_gradient_alignment=0.0,
+            intrinsic_phase_monotonicity=0.0,
+        ),
+    )
+    phase_compat_with = replace(
+        base,
+        weights=replace(
+            base.weights,
+            intrinsic_phase_gradient_alignment=max(base.weights.intrinsic_phase_gradient_alignment, 0.02),
+            intrinsic_phase_monotonicity=max(base.weights.intrinsic_phase_monotonicity, 0.01),
+        ),
+        train=replace(
+            base.train,
+            intrinsic_phase_compatibility_points=max(base.train.intrinsic_phase_compatibility_points, 256),
+        ),
+    )
+
     balancing_without = replace(
         base,
         train=replace(base.train, adaptive_loss_balancing=False, gradient_norm_balancing=False),
@@ -216,6 +237,22 @@ def make_feature_validation_pairs(base: ExperimentConfig) -> list[dict[str, Any]
             _variant("with_front_speed_gpinn", base, "front speed/gPINN on", "front-local derivative losses enabled"),
         ),
         _pair(
+            "intrinsic_phase_compatibility",
+            "Weak anti-parallel grad-u/grad-psi alignment and du/dpsi monotonicity for the learned phase coordinate.",
+            _variant(
+                "without_intrinsic_phase_compatibility",
+                phase_compat_without,
+                "phase compatibility off",
+                "grad-u/grad-psi compatibility losses removed",
+            ),
+            _variant(
+                "with_intrinsic_phase_compatibility",
+                phase_compat_with,
+                "phase compatibility on",
+                "weak phase-coordinate compatibility enabled",
+            ),
+        ),
+        _pair(
             "adaptive_balancing",
             "Adaptive loss balancing and gradient-norm balancing.",
             _variant("without_adaptive_balancing", balancing_without, "adaptive balancing off", "fixed manual loss weights"),
@@ -292,6 +329,9 @@ def _row(pair: dict[str, Any], variant_key: str, seed: int, out_dir: Path, metri
         "pinn_final_time_max_abs_error": metrics.get("pinn_final_time_max_abs_error"),
         "front_area_010_mae": metrics.get("front_area_010_mae"),
         "active_front_area_mae": metrics.get("active_front_area_mae"),
+        "front_mae_010": metrics.get("front_mae_010"),
+        "hausdorff_010": metrics.get("hausdorff_010"),
+        "front_speed_mae_010": metrics.get("front_speed_mae_010"),
         "mass_mae": metrics.get("mass_mae"),
         "note": variant["note"],
     }
@@ -314,6 +354,9 @@ def summarize_feature_validation_rows(rows: list[dict[str, Any]]) -> dict[str, A
         "pinn_final_time_max_abs_error",
         "front_area_010_mae",
         "active_front_area_mae",
+        "front_mae_010",
+        "hausdorff_010",
+        "front_speed_mae_010",
         "mass_mae",
     ]
     features = sorted({row["feature"] for row in rows})

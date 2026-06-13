@@ -21,6 +21,7 @@ def _case(
     output_dir: Path,
     epochs: int,
     notes: str,
+    expected_outputs: list[Path] | None = None,
 ) -> dict[str, object]:
     return {
         "name": name,
@@ -29,9 +30,16 @@ def _case(
         "command": _command(command),
         "output_dir": str(output_dir),
         "expected_outputs": [
-            str(output_dir / "metrics.json"),
-            str(output_dir / "pinn_vs_rk4_comparison.png"),
-            str(output_dir / "prediction_evolution.gif"),
+            str(path)
+            for path in (
+                expected_outputs
+                if expected_outputs is not None
+                else [
+                    output_dir / "metrics.json",
+                    output_dir / "pinn_vs_rk4_comparison.png",
+                    output_dir / "prediction_evolution.gif",
+                ]
+            )
         ],
         "fairness_constraints": {
             "rk4_teacher_labels": False,
@@ -101,14 +109,25 @@ def build_manifest(epochs: int, root: Path) -> dict[str, object]:
                 "experiments/korea_pine_pinn/run_pine_pinn.py",
                 "--preset",
                 "flagship",
+                "--pinn-epochs",
+                str(epochs),
                 "--output-dir",
                 str(runs_root / "korea_pine_pinn_flagship"),
             ],
             output_dir=runs_root / "korea_pine_pinn_flagship",
             epochs=epochs,
+            expected_outputs=[
+                runs_root / "korea_pine_pinn_flagship" / "korea_pine_wilt_summary.json",
+                runs_root / "korea_pine_pinn_flagship" / "baseline_metric_comparison.png",
+                runs_root / "korea_pine_pinn_flagship" / "korea_map_baselines.gif",
+                runs_root / "korea_pine_pinn_flagship" / "korea_error_baselines.gif",
+                runs_root / "korea_pine_pinn_flagship" / "korea_phase_contours.png",
+                runs_root / "korea_pine_pinn_flagship" / "korea_front_phase_pinn_latest.pt",
+            ],
             notes=(
-                "Uses the Korea-specific land mask, sea exclusion, and observation timeline "
-                "while keeping the same PINN training budget scale."
+                "Uses the Korea-specific land mask, sea exclusion, and observation timeline, "
+                "while keeping the same phase-capable PINN backbone and explicit training "
+                "budget scale as the synthetic flagship runs."
             ),
         ),
     ]

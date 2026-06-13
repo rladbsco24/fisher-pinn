@@ -17,8 +17,10 @@ import torch
 from scripts.run_inverse_origin import build_config
 from scripts.run_forward_ablation import aggregate as aggregate_forward_ablation
 from scripts.run_forward_ablation import make_forward_cases
+from scripts.run_front_phase_ablation import aggregate as aggregate_front_phase_ablation
+from scripts.run_front_phase_ablation import make_front_phase_ablation_cases
 from scripts.run_feature_validation_ablation import make_feature_validation_pairs, summarize_feature_validation_rows
-from scripts.run_korea_pine_wilt_simulation import _save_korea_map_baseline_gif
+from scripts.run_korea_pine_wilt_simulation import _save_korea_map_baseline_gif, _save_korea_phase_contour_figure
 from scripts.prepare_flagship_budget_manifest import build_manifest
 
 from PIL import Image
@@ -73,6 +75,8 @@ from fisher_origin_lab.losses import (
     front_support_tversky_loss,
     front_speed_consistency_loss,
     front_speed_kinematics,
+    intrinsic_phase_compatibility_losses,
+    intrinsic_phase_initial_anchor_loss,
     known_initial_condition_loss,
     leading_edge_area_loss,
     leading_edge_distribution_loss,
@@ -89,9 +93,13 @@ from fisher_origin_lab.losses import (
     time_slab_interface_loss,
 )
 from fisher_origin_lab.models import OriginPINN
+from fisher_origin_lab.metrics import front_boundary_metrics, front_speed_error_from_fields
 from fisher_origin_lab.rk4 import forward_ablowitz_zeppetella_rk4
 from fisher_origin_lab.plotting import (
+    residual_front_maps,
+    save_initial_phase_contour_diagnostic_figure,
     save_observation_coverage_figure,
+    save_phase_u_contour_diagnostic_figure,
     save_pinn_evolution_gif,
     save_pinn_rk4_comparison_figure,
     save_residual_front_diagnostics_figure,
@@ -202,6 +210,37 @@ def test_rk4_solver_matches_current_problem_shape_and_bounds() -> None:
     assert truth.fields.max() <= 1.0
 
 
+def test_front_boundary_and_speed_metrics_are_finite_for_shifted_fronts() -> None:
+    xs = np.linspace(0.0, 1.0, 32)
+    x, y = np.meshgrid(xs, xs, indexing="ij")
+    truth0 = np.exp(-((x - 0.38) ** 2 + (y - 0.50) ** 2) / 0.025)
+    pred0 = np.exp(-((x - 0.42) ** 2 + (y - 0.50) ** 2) / 0.025)
+    boundary = front_boundary_metrics(xs, pred0, truth0, level=0.10)
+    assert boundary["front_mae"] > 0.0
+    assert boundary["hausdorff"] >= boundary["front_mae"]
+
+    times = np.array([0.0, 0.2, 0.4])
+    truth_fields = [
+        np.exp(-((x - (0.36 + 0.05 * t)) ** 2 + (y - 0.50) ** 2) / 0.025)
+        for t in times
+    ]
+    pred_fields = [
+        np.exp(-((x - (0.36 + 0.03 * t)) ** 2 + (y - 0.50) ** 2) / 0.025)
+        for t in times
+    ]
+    speed = front_speed_error_from_fields(
+        xs,
+        times,
+        pred_fields,
+        truth_fields,
+        level=0.10,
+        mode="radius",
+        center=(0.36, 0.50),
+    )
+    assert np.isfinite(speed["mae"])
+    assert speed["mae"] >= 0.0
+
+
 def test_long_time_curve_reference_shape_and_integrators() -> None:
     cfg = CurveTrendConfig()
     times = np.linspace(0.0, cfg.t_end, cfg.steps + 1)
@@ -296,6 +335,82 @@ def test_source_envelope_can_be_disabled() -> None:
     assert torch.allclose(before, after)
 
 
+def test_intrinsic_front_phase_head_is_opt_in_and_shape_stable() -> None:
+    domain = DomainConfig(grid=25, truth_steps=80)
+    xy = torch.rand(10, 2)
+    t = torch.rand(10, 1) * domain.t_end
+
+    cfg_off = ModelConfig(hidden=16, layers=1, fourier_features=8, use_source_envelope=False)
+    model_off = OriginPINN(domain, PDEConfig(), SeedConfig(), cfg_off)
+    off_features = model_off._joint_features(xy, t)
+    assert model_off.front_phase_head is None
+    assert model_off.phase(xy, t).shape == (10, 1)
+    assert torch.count_nonzero(model_off.phase(xy, t)) == 0
+    assert not any(name.startswith("front_phase_head.") for name in model_off.state_dict())
+    assert model_off(xy, t).shape == (10, 1)
+
+    phase_freqs = 3
+    cfg_on = ModelConfig(
+        hidden=16,
+        layers=1,
+        fourier_features=8,
+        use_source_envelope=False,
+        use_intrinsic_front_phase=True,
+        intrinsic_front_phase_fourier_features=4,
+        intrinsic_front_phase_hidden=12,
+        intrinsic_front_phase_layers=1,
+        intrinsic_front_phase_feature_frequencies=phase_freqs,
+    )
+    model_on = OriginPINN(domain, PDEConfig(), SeedConfig(), cfg_on)
+    on_features = model_on._joint_features(xy, t)
+    phase = model_on.phase(xy, t)
+    assert model_on.front_phase_head is not None
+    assert phase.shape == (10, 1)
+    assert on_features.shape[0] == off_features.shape[0]
+    assert on_features.shape[1] == off_features.shape[1] + 1 + 2 * phase_freqs
+    assert model_on._intrinsic_phase_features(xy, t).shape == (10, 1 + 2 * phase_freqs)
+    assert model_on(xy, t).shape == (10, 1)
+    assert torch.isfinite(phase).all()
+    assert torch.isfinite(model_on(xy, t)).all()
+    anchor_loss = intrinsic_phase_initial_anchor_loss(
+        model_on,
+        SeedConfig(),
+        24,
+        torch.device("cpu"),
+        level=0.10,
+    )
+    assert torch.isfinite(anchor_loss)
+    compatibility = intrinsic_phase_compatibility_losses(model_on, xy, t)
+    assert torch.isfinite(compatibility["alignment"])
+    assert torch.isfinite(compatibility["monotonicity"])
+
+
+def test_intrinsic_front_phase_head_supports_nif_forward_shapes() -> None:
+    domain = DomainConfig(grid=25, truth_steps=80)
+    model = OriginPINN(
+        domain,
+        PDEConfig(),
+        SeedConfig(),
+        ModelConfig(
+            architecture="nif_pirate",
+            hidden=16,
+            layers=1,
+            fourier_features=8,
+            nif_rank=4,
+            use_source_envelope=False,
+            use_intrinsic_front_phase=True,
+            intrinsic_front_phase_fourier_features=4,
+            intrinsic_front_phase_feature_frequencies=2,
+        ),
+    )
+    xy = torch.rand(8, 2)
+    t = torch.rand(8, 1) * domain.t_end
+    assert model.phase(xy, t).shape == (8, 1)
+    assert model._nif_spatial_features(xy, t).shape[0] == 8
+    assert model(xy, t).shape == (8, 1)
+    assert torch.isfinite(model(xy, t)).all()
+
+
 def test_geo_spectral_forward_model_terms_are_finite() -> None:
     domain = DomainConfig(grid=25, truth_steps=80)
     cfg = ExperimentConfig(domain=domain).geo_spectral_forward()
@@ -307,6 +422,22 @@ def test_geo_spectral_forward_model_terms_are_finite() -> None:
     front_grad = front_local_gradient_residual_loss(model, xy, t, max_points=6)
     phase_loss = logit_phase_residual_loss(model, xy, t)
     cvar_loss = residual_cvar_loss(residual.pow(2), tail_fraction=0.25)
+    intrinsic_phase_initial = intrinsic_phase_initial_anchor_loss(
+        model,
+        cfg.seed,
+        24,
+        torch.device("cpu"),
+        level=cfg.train.intrinsic_phase_anchor_level,
+    )
+    intrinsic_phase_compatibility = intrinsic_phase_compatibility_losses(
+        model,
+        xy,
+        t,
+        active_low=cfg.train.intrinsic_phase_compatibility_low,
+        active_high=cfg.train.intrinsic_phase_compatibility_high,
+        temperature=cfg.train.intrinsic_phase_compatibility_temperature,
+        min_grad=cfg.train.intrinsic_phase_compatibility_min_grad,
+    )
     coefficient_loss = spatial_coefficient_regularization_loss(model, xy)
     sparse = model.sparse_last_layer_l1()
     assert pred.shape == (12, 1)
@@ -316,6 +447,9 @@ def test_geo_spectral_forward_model_terms_are_finite() -> None:
     assert torch.isfinite(front_grad)
     assert torch.isfinite(phase_loss)
     assert torch.isfinite(cvar_loss)
+    assert torch.isfinite(intrinsic_phase_initial)
+    assert torch.isfinite(intrinsic_phase_compatibility["alignment"])
+    assert torch.isfinite(intrinsic_phase_compatibility["monotonicity"])
     assert torch.isfinite(coefficient_loss)
     assert torch.isfinite(sparse)
     assert model.has_spatial_coefficients()
@@ -431,11 +565,30 @@ def test_front_speed_consistency_loss_is_finite() -> None:
     xy = torch.rand(16, 2)
     t = torch.rand(16, 1) * domain.t_end
     kin = front_speed_kinematics(model, xy, t)
+    kin_curved = front_speed_kinematics(
+        model,
+        xy,
+        t,
+        use_curvature_correction=True,
+        curvature_correction_weight=0.05,
+    )
     loss = front_speed_consistency_loss(model, xy, t, max_points=8)
+    curved_loss = front_speed_consistency_loss(
+        model,
+        xy,
+        t,
+        max_points=8,
+        use_curvature_correction=True,
+        curvature_correction_weight=0.05,
+    )
     assert kin["speed_error"].shape == (16, 1)
+    assert kin["mean_curvature"].shape == (16, 1)
     assert loss.shape == ()
+    assert curved_loss.shape == ()
     assert torch.isfinite(kin["speed_error"]).all()
+    assert torch.isfinite(kin_curved["mean_curvature"]).all()
     assert torch.isfinite(loss)
+    assert torch.isfinite(curved_loss)
 
 
 def test_expected_front_losses_are_finite() -> None:
@@ -498,12 +651,18 @@ def test_korea_pine_style_matches_forward_pinn_setup() -> None:
     assert cfg.model.use_source_envelope is False
     assert cfg.model.use_geo_features is True
     assert cfg.model.spatial_fourier_only is True
+    assert cfg.model.use_intrinsic_front_phase is True
+    assert cfg.model.intrinsic_front_phase_fourier_features > 0
     assert cfg.model.use_spatial_coefficients is True
     assert cfg.weights.boundary == 0.0
     assert cfg.weights.initial_condition == 0.0
     assert cfg.weights.seed_match == 0.0
     assert cfg.weights.shooting == 0.0
     assert cfg.weights.data_density_gain == 4.0
+    assert 0.0 < cfg.weights.intrinsic_phase_initial <= 0.05
+    assert 0.0 < cfg.weights.intrinsic_phase_gradient_alignment <= 0.02
+    assert 0.0 < cfg.weights.intrinsic_phase_monotonicity <= 0.02
+    assert cfg.train.use_front_curvature_correction is False
 
 
 def test_korea_pine_wilt_compact_dataset_and_rk4_smoke(tmp_path) -> None:
@@ -582,6 +741,8 @@ def test_korea_pine_wilt_compact_dataset_and_rk4_smoke(tmp_path) -> None:
     )
     assert pinn.years.tolist() == [2016, 2017]
     assert pinn.fields.shape == (2, 24, 24)
+    assert pinn.phase_fields is not None
+    assert pinn.phase_fields.shape == (2, 24, 24)
     assert len(pinn.metrics) == 2
     assert pinn.status == "diagnostic_only_low_epoch"
     assert np.isfinite(pinn.fields).all()
@@ -598,6 +759,12 @@ def test_korea_pine_wilt_compact_dataset_and_rk4_smoke(tmp_path) -> None:
     assert np.isfinite(pinn.history[-1]["support_area"])
     assert "phase_pde" in pinn.history[-1]
     assert np.isfinite(pinn.history[-1]["phase_pde"])
+    assert "intrinsic_phase_initial" in pinn.history[-1]
+    assert np.isfinite(pinn.history[-1]["intrinsic_phase_initial"])
+    assert "intrinsic_phase_gradient_alignment" in pinn.history[-1]
+    assert np.isfinite(pinn.history[-1]["intrinsic_phase_gradient_alignment"])
+    assert "intrinsic_phase_monotonicity" in pinn.history[-1]
+    assert np.isfinite(pinn.history[-1]["intrinsic_phase_monotonicity"])
     assert "residual_cvar" in pinn.history[-1]
     assert np.isfinite(pinn.history[-1]["residual_cvar"])
     assert "mass_trajectory" in pinn.history[-1]
@@ -611,6 +778,8 @@ def test_korea_pine_wilt_compact_dataset_and_rk4_smoke(tmp_path) -> None:
     assert "support_area_weight" in pinn.physics
     assert "mass_trajectory_weight" in pinn.physics
     assert "phase_pde_weight" in pinn.physics
+    assert "intrinsic_front_phase_enabled" in pinn.physics
+    assert "intrinsic_phase_initial_weight" in pinn.physics
     assert "residual_cvar_weight" in pinn.physics
 
     gif_info = _save_korea_map_baseline_gif(
@@ -626,6 +795,14 @@ def test_korea_pine_wilt_compact_dataset_and_rk4_smoke(tmp_path) -> None:
     assert (tmp_path / "korea_map_baselines_preview.png").exists()
     assert gif_info["frames"] == 2
     assert gif_info["panels"] == ["observed", "rk4", "pinn"]
+    _save_korea_phase_contour_figure(
+        tmp_path / "korea_phase_contours.png",
+        grid,
+        pinn.years,
+        pinn.fields,
+        pinn.phase_fields,
+    )
+    assert (tmp_path / "korea_phase_contours.png").exists()
 
 
 def test_korea_action_time_points_and_rk4_smoke(tmp_path) -> None:
@@ -690,6 +867,7 @@ def test_geo_spectral_forward_profile_extends_korea_setup() -> None:
     assert cfg.model.use_seed_front_features is True
     assert cfg.model.use_traveling_wave_features is True
     assert cfg.model.use_front_fourier_features is True
+    assert cfg.model.use_intrinsic_front_phase is True
     assert cfg.model.front_fourier_features > 0
     assert cfg.model.hard_initial_condition is True
     assert cfg.model.use_spatial_coefficients is True
@@ -707,6 +885,9 @@ def test_geo_spectral_forward_profile_extends_korea_setup() -> None:
     assert cfg.weights.observation_support_area > 0.0
     assert cfg.weights.phase_pde > 0.0
     assert cfg.weights.residual_cvar > 0.0
+    assert cfg.weights.intrinsic_phase_initial > 0.0
+    assert 0.0 < cfg.weights.intrinsic_phase_gradient_alignment <= 0.05
+    assert 0.0 < cfg.weights.intrinsic_phase_monotonicity <= 0.05
     assert cfg.weights.expected_front_pde == 0.0
     assert cfg.weights.leading_edge > 0.0
     assert cfg.weights.leading_edge_area > 0.0
@@ -726,8 +907,12 @@ def test_geo_spectral_forward_profile_extends_korea_setup() -> None:
     assert cfg.train.mass_balance_times > 0
     assert cfg.train.mass_balance_grid > 1
     assert cfg.train.front_speed_points > 0
+    assert cfg.train.intrinsic_phase_anchor_points > 0
+    assert cfg.train.intrinsic_phase_compatibility_points > 0
     assert cfg.train.front_speed_max_points > 0
     assert cfg.train.front_speed_min_grad > 0.0
+    assert cfg.train.use_front_curvature_correction is True
+    assert 0.0 < cfg.train.front_curvature_correction_weight <= 0.10
     assert cfg.train.expected_front_points > 0
     assert cfg.train.expected_front_width > 0.0
     assert cfg.train.expected_front_speed_factor > 0.0
@@ -802,6 +987,8 @@ def test_shared_forward_model_factory_specializes_korea_without_changing_backbon
     assert korea.hard_initial_condition is False
     assert baseline.use_kpp_front_envelope is True
     assert korea.use_kpp_front_envelope is False
+    assert baseline.use_intrinsic_front_phase is True
+    assert korea.use_intrinsic_front_phase is True
 
 
 def test_front_aware_adaptive_sampler_refreshes_anchors() -> None:
@@ -874,6 +1061,7 @@ def test_forward_ablation_cases_report_front_metrics() -> None:
     assert "geo_no_physics_anchor" in names
     assert "geo_no_spatial_coefficients" in names
     assert "geo_no_discrete_rk4" in names
+    assert "geo_no_intrinsic_phase_compatibility" in names
     assert "geo_no_radial_symmetry" in names
     assert "geo_no_collapse_guards" in names
     assert "geo_no_tw_front_area" in names
@@ -901,6 +1089,8 @@ def test_forward_ablation_cases_report_front_metrics() -> None:
     assert any(case["cfg"].weights.physics_parameter_anchor == 0.0 for case in cases)
     assert any(case["cfg"].model.use_spatial_coefficients is False for case in cases)
     assert any(case["cfg"].weights.discrete_rk4 == 0.0 for case in cases)
+    assert any(case["cfg"].weights.intrinsic_phase_gradient_alignment == 0.0 for case in cases)
+    assert any(case["cfg"].weights.intrinsic_phase_gradient_alignment > 0.0 for case in cases)
     assert any(case["cfg"].weights.radial_symmetry == 0.0 for case in cases)
     assert any(case["cfg"].train.rk4_teacher_late_fraction > 0.0 for case in cases)
     assert any(case["cfg"].train.rk4_pretrain_steps > 0 for case in cases)
@@ -926,6 +1116,36 @@ def test_forward_ablation_cases_report_front_metrics() -> None:
     assert summary["cases"][0]["front_area_010_mae_mean"] == 0.02
 
 
+def test_front_phase_ablation_entrypoint_cases_and_metrics() -> None:
+    cases = make_front_phase_ablation_cases(problem="both", preset="smoke", epochs=2)
+    keys = {(case["problem"], case["method"]) for case in cases}
+    for problem in ("az1d", "gaussian2d"):
+        assert (problem, "vanilla_pinn") in keys
+        assert (problem, "geo_spectral_pinn") in keys
+        assert (problem, "explicit_front_phase_pinn") in keys
+    explicit = [case for case in cases if case["method"] == "explicit_front_phase_pinn"]
+    assert all(case["cfg"].model.use_intrinsic_front_phase for case in explicit)
+    assert all(case["cfg"].weights.intrinsic_phase_initial > 0.0 for case in explicit)
+    geo = [case for case in cases if case["method"] == "geo_spectral_pinn"]
+    assert all(not case["cfg"].model.use_intrinsic_front_phase for case in geo)
+
+    summary = aggregate_front_phase_ablation(
+        [
+            {
+                "problem": "gaussian2d",
+                "method": "explicit_front_phase_pinn",
+                "final_time_relative_l2": 0.4,
+                "front_mae_010": 0.02,
+                "hausdorff_010": 0.05,
+                "front_speed_mae_010": 0.1,
+                "note": "test",
+            }
+        ]
+    )
+    assert summary["cases"][0]["front_mae_010_mean"] == 0.02
+    assert summary["cases"][0]["hausdorff_010_mean"] == 0.05
+
+
 def test_feature_validation_pairs_and_visual_exports(tmp_path) -> None:
     cfg = ExperimentConfig(domain=DomainConfig(grid=21, truth_steps=60)).geo_spectral_forward().quick()
     pairs = make_feature_validation_pairs(cfg)
@@ -935,6 +1155,7 @@ def test_feature_validation_pairs_and_visual_exports(tmp_path) -> None:
     assert "moving_front_features" in names
     assert "mass_support_guards" in names
     assert "front_speed_gpinn" in names
+    assert "intrinsic_phase_compatibility" in names
     assert "adaptive_balancing" in names
     assert "spatial_coefficients" in names
     assert "discrete_rk4_consistency" in names
@@ -1105,7 +1326,22 @@ def test_hard_initial_condition_matches_seed_profile() -> None:
 def test_visualization_exports_are_created(tmp_path) -> None:
     domain = DomainConfig(grid=21, truth_steps=60)
     cfg = ExperimentConfig(domain=domain).geo_spectral_forward().quick()
-    model = OriginPINN(cfg.domain, cfg.pde, cfg.seed, ModelConfig(hidden=16, layers=1, fourier_features=8, use_geo_features=True, spatial_fourier_only=True, use_source_envelope=False))
+    model = OriginPINN(
+        cfg.domain,
+        cfg.pde,
+        cfg.seed,
+        ModelConfig(
+            hidden=16,
+            layers=1,
+            fourier_features=8,
+            use_geo_features=True,
+            spatial_fourier_only=True,
+            use_source_envelope=False,
+            use_intrinsic_front_phase=True,
+            intrinsic_front_phase_fourier_features=4,
+            intrinsic_front_phase_feature_frequencies=2,
+        ),
+    )
     truth = forward_fisher_kpp(cfg.domain, cfg.pde, cfg.seed, snapshots=6)
     rng = np.random.default_rng(123)
     observations = sample_observations(truth, cfg.domain, cfg.observations, rng)
@@ -1148,6 +1384,37 @@ def test_visualization_exports_are_created(tmp_path) -> None:
         time_value=cfg.domain.t_end,
         front_alpha=cfg.weights.front_pde_alpha,
         front_gradient=cfg.weights.front_pde_gradient,
+        use_curvature_correction=cfg.train.use_front_curvature_correction,
+        curvature_correction_weight=cfg.train.front_curvature_correction_weight,
+        n=16,
+    )
+    maps = residual_front_maps(
+        model,
+        cfg.domain.t_end,
+        n=12,
+        device=torch.device("cpu"),
+        use_curvature_correction=True,
+        curvature_correction_weight=0.05,
+    )
+    assert "mean_curvature" in maps
+    assert "speed_residual" in maps
+    save_initial_phase_contour_diagnostic_figure(
+        tmp_path / "initial_phase.png",
+        model,
+        cfg.domain,
+        cfg.seed,
+        torch.device("cpu"),
+        level=cfg.train.intrinsic_phase_anchor_level,
+        n=16,
+    )
+    save_phase_u_contour_diagnostic_figure(
+        tmp_path / "phase_u_contour.png",
+        truth,
+        model,
+        cfg.domain,
+        torch.device("cpu"),
+        time_value=cfg.domain.t_end,
+        level=cfg.train.intrinsic_phase_anchor_level,
         n=16,
     )
     rk4_truth = forward_fisher_kpp_rk4(cfg.domain, cfg.pde, cfg.seed, snapshots=6)
@@ -1182,7 +1449,16 @@ def test_visualization_exports_are_created(tmp_path) -> None:
         warning="DIAGNOSTIC ONLY: smoke visualization.",
     )
 
-    for name in ["coverage.png", "spacetime.png", "residual.png", "pinn_vs_rk4.png", "training.png", "pinn_evolution.gif"]:
+    for name in [
+        "coverage.png",
+        "spacetime.png",
+        "residual.png",
+        "initial_phase.png",
+        "phase_u_contour.png",
+        "pinn_vs_rk4.png",
+        "training.png",
+        "pinn_evolution.gif",
+    ]:
         assert (tmp_path / name).exists()
         assert (tmp_path / name).stat().st_size > 1000
     assert (tmp_path / "pinn_evolution.gif").read_bytes()[:6] in {b"GIF87a", b"GIF89a"}

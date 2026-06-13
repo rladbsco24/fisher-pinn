@@ -37,6 +37,8 @@ from .losses import (
     front_support_tversky_loss,
     front_speed_consistency_loss,
     gradient_residual_loss,
+    intrinsic_phase_compatibility_losses,
+    intrinsic_phase_initial_anchor_loss,
     known_initial_condition_loss,
     leading_edge_floor_loss,
     leading_edge_area_loss,
@@ -55,12 +57,14 @@ from .losses import (
     transverse_invariance_loss,
     time_slab_interface_loss,
 )
-from .metrics import origin_error, relative_l2, tensor_center
+from .metrics import front_boundary_metrics, front_speed_error_from_fields, origin_error, relative_l2, tensor_center
 from .models import OriginPINN
 from .plotting import (
     generated_figure_names,
     predict_field,
+    save_initial_phase_contour_diagnostic_figure,
     save_observation_coverage_figure,
+    save_phase_u_contour_diagnostic_figure,
     save_pinn_evolution_gif,
     save_pinn_rk4_comparison_figure,
     save_reconstruction_figure,
@@ -376,10 +380,24 @@ def _front_geometry_summary(
         "truth_active_band": [],
         "pinn_active_band": [],
         "area_above": {f"{level:.2f}": {"truth": [], "pinn": []} for level in levels},
+        "boundary": {
+            f"{level:.2f}": {
+                "front_mae": [],
+                "hausdorff": [],
+                "truth_boundary_points": [],
+                "pinn_boundary_points": [],
+            }
+            for level in levels
+        },
     }
+    fields_for_speed: dict[str, list[np.ndarray]] = {"truth": [], "pinn": []}
+    xs_for_speed: np.ndarray | None = None
     for time_value in times:
-        _, true_field = truth_field_at(truth, float(time_value), n=n)
+        xs, true_field = truth_field_at(truth, float(time_value), n=n)
+        xs_for_speed = xs
         _, pred = predict_field(model, float(time_value), n=n, device=device)
+        fields_for_speed["truth"].append(true_field)
+        fields_for_speed["pinn"].append(pred)
         summary["truth_mass"].append(float(true_field.mean()))
         summary["pinn_mass"].append(float(pred.mean()))
         summary["truth_active_band"].append(float(np.mean((true_field > 0.1) & (true_field < 0.9))))
@@ -388,6 +406,12 @@ def _front_geometry_summary(
             bucket = summary["area_above"][f"{level:.2f}"]
             bucket["truth"].append(float(np.mean(true_field > level)))
             bucket["pinn"].append(float(np.mean(pred > level)))
+            boundary_metrics = front_boundary_metrics(xs, pred, true_field, level=level)
+            boundary_bucket = summary["boundary"][f"{level:.2f}"]
+            boundary_bucket["front_mae"].append(float(boundary_metrics["front_mae"]))
+            boundary_bucket["hausdorff"].append(float(boundary_metrics["hausdorff"]))
+            boundary_bucket["truth_boundary_points"].append(float(boundary_metrics["truth_boundary_points"]))
+            boundary_bucket["pinn_boundary_points"].append(float(boundary_metrics["pred_boundary_points"]))
 
     mass_truth = np.asarray(summary["truth_mass"], dtype=np.float64)
     mass_pred = np.asarray(summary["pinn_mass"], dtype=np.float64)
@@ -402,6 +426,29 @@ def _front_geometry_summary(
         pred_area = np.asarray(bucket["pinn"], dtype=np.float64)
         summary["area_mae"][f"{level:.2f}"] = float(np.mean(np.abs(pred_area - truth_area)))
         summary[f"area_above_{int(round(level * 1000)):03d}_mae"] = summary["area_mae"][f"{level:.2f}"]
+        boundary_bucket = summary["boundary"][f"{level:.2f}"]
+        front_mae = np.asarray(boundary_bucket["front_mae"], dtype=np.float64)
+        hausdorff = np.asarray(boundary_bucket["hausdorff"], dtype=np.float64)
+        summary[f"front_mae_{int(round(level * 1000)):03d}"] = (
+            float(np.nanmean(front_mae)) if np.isfinite(front_mae).any() else None
+        )
+        summary[f"hausdorff_{int(round(level * 1000)):03d}"] = (
+            float(np.nanmean(hausdorff)) if np.isfinite(hausdorff).any() else None
+        )
+    if xs_for_speed is not None:
+        speed_mode = "x" if cfg.benchmark.kind == "ablowitz_zeppetella" else "radius"
+        speed_summary = front_speed_error_from_fields(
+            xs_for_speed,
+            np.asarray(times, dtype=np.float64),
+            fields_for_speed["pinn"],
+            fields_for_speed["truth"],
+            level=0.10,
+            mode=speed_mode,
+            center=(cfg.seed.center_x, cfg.seed.center_y),
+        )
+        summary["front_speed_error"] = speed_summary
+        speed_mae = speed_summary.get("mae")
+        summary["front_speed_mae_010"] = float(speed_mae) if speed_mae is not None and np.isfinite(speed_mae) else None
     return summary
 
 
@@ -682,6 +729,9 @@ def _combine_loss_terms(
         "pde",
         "phase_pde",
         "residual_cvar",
+        "intrinsic_phase_initial",
+        "intrinsic_phase_gradient_alignment",
+        "intrinsic_phase_monotonicity",
         "bc",
         "seed_match",
         "seed_mass",
@@ -1033,6 +1083,41 @@ def train_single(
             residual_cvar = residual_cvar_loss(weighted_residual_sq, cfg.train.residual_cvar_fraction)
         else:
             residual_cvar = torch.zeros((), device=device)
+        if cfg.weights.intrinsic_phase_initial > 0.0 and cfg.train.intrinsic_phase_anchor_points > 0:
+            intrinsic_phase_initial = intrinsic_phase_initial_anchor_loss(
+                model,
+                cfg.seed,
+                cfg.train.intrinsic_phase_anchor_points,
+                device,
+                level=cfg.train.intrinsic_phase_anchor_level,
+                band=cfg.train.intrinsic_phase_anchor_band,
+                sign_margin=cfg.train.intrinsic_phase_anchor_sign_margin,
+                benchmark_kind=cfg.benchmark.kind,
+                x_left=cfg.benchmark.x_left,
+                x_right=cfg.benchmark.x_right,
+                x0=cfg.benchmark.wave_x0,
+            )
+        else:
+            intrinsic_phase_initial = torch.zeros((), device=device)
+        if (
+            (cfg.weights.intrinsic_phase_gradient_alignment > 0.0 or cfg.weights.intrinsic_phase_monotonicity > 0.0)
+            and cfg.train.intrinsic_phase_compatibility_points > 0
+        ):
+            compat_points = min(cfg.train.intrinsic_phase_compatibility_points, len(xy_col))
+            phase_compat = intrinsic_phase_compatibility_losses(
+                model,
+                xy_col[:compat_points],
+                t_col[:compat_points],
+                active_low=cfg.train.intrinsic_phase_compatibility_low,
+                active_high=cfg.train.intrinsic_phase_compatibility_high,
+                temperature=cfg.train.intrinsic_phase_compatibility_temperature,
+                min_grad=cfg.train.intrinsic_phase_compatibility_min_grad,
+            )
+            intrinsic_phase_gradient_alignment = phase_compat["alignment"]
+            intrinsic_phase_monotonicity = phase_compat["monotonicity"]
+        else:
+            intrinsic_phase_gradient_alignment = torch.zeros((), device=device)
+            intrinsic_phase_monotonicity = torch.zeros((), device=device)
 
         if cfg.weights.boundary > 0.0 and cfg.train.boundary_points > 0:
             if is_az_benchmark:
@@ -1116,6 +1201,8 @@ def train_single(
                 t_col[:fs_subset],
                 max_points=cfg.train.front_speed_max_points,
                 min_grad=cfg.train.front_speed_min_grad,
+                use_curvature_correction=cfg.train.use_front_curvature_correction,
+                curvature_correction_weight=cfg.train.front_curvature_correction_weight,
             )
         else:
             front_speed_loss = torch.zeros((), device=device)
@@ -1306,6 +1393,17 @@ def train_single(
                 ("pde", pde_weight, pde_loss_value),
                 ("phase_pde", cfg.weights.phase_pde * schedule["pde"], phase_pde_loss),
                 ("residual_cvar", cfg.weights.residual_cvar * schedule["pde"], residual_cvar),
+                ("intrinsic_phase_initial", cfg.weights.intrinsic_phase_initial, intrinsic_phase_initial),
+                (
+                    "intrinsic_phase_gradient_alignment",
+                    cfg.weights.intrinsic_phase_gradient_alignment * front_weight,
+                    intrinsic_phase_gradient_alignment,
+                ),
+                (
+                    "intrinsic_phase_monotonicity",
+                    cfg.weights.intrinsic_phase_monotonicity * front_weight,
+                    intrinsic_phase_monotonicity,
+                ),
                 ("ic", cfg.weights.initial_condition, ic_loss),
                 ("bc", cfg.weights.boundary, bc_loss),
                 ("seed_match", cfg.weights.seed_match, seed_match),
@@ -1407,6 +1505,9 @@ def train_single(
                         front_contrast,
                         front_profile,
                         level_set_loss,
+                        intrinsic_phase_initial,
+                        intrinsic_phase_gradient_alignment,
+                        intrinsic_phase_monotonicity,
                         transverse_loss,
                         front_support_tversky,
                         observation_support_loss,
@@ -1443,6 +1544,9 @@ def train_single(
                 "pde": float(pde_loss_value.detach().cpu()),
                 "phase_pde": float(phase_pde_loss.detach().cpu()),
                 "residual_cvar": float(residual_cvar.detach().cpu()),
+                "intrinsic_phase_initial": float(intrinsic_phase_initial.detach().cpu()),
+                "intrinsic_phase_gradient_alignment": float(intrinsic_phase_gradient_alignment.detach().cpu()),
+                "intrinsic_phase_monotonicity": float(intrinsic_phase_monotonicity.detach().cpu()),
                 "ic": float(ic_loss.detach().cpu()),
                 "bc": float(bc_loss.detach().cpu()),
                 "seed_match": float(seed_match.detach().cpu()),
@@ -1711,6 +1815,41 @@ def _lbfgs_polish(
             residual_cvar = residual_cvar_loss(weighted_residual_sq, cfg.train.residual_cvar_fraction)
         else:
             residual_cvar = torch.zeros((), device=device)
+        if cfg.weights.intrinsic_phase_initial > 0.0 and cfg.train.intrinsic_phase_anchor_points > 0:
+            intrinsic_phase_initial = intrinsic_phase_initial_anchor_loss(
+                model,
+                cfg.seed,
+                min(cfg.train.intrinsic_phase_anchor_points, 512),
+                device,
+                level=cfg.train.intrinsic_phase_anchor_level,
+                band=cfg.train.intrinsic_phase_anchor_band,
+                sign_margin=cfg.train.intrinsic_phase_anchor_sign_margin,
+                benchmark_kind=cfg.benchmark.kind,
+                x_left=cfg.benchmark.x_left,
+                x_right=cfg.benchmark.x_right,
+                x0=cfg.benchmark.wave_x0,
+            )
+        else:
+            intrinsic_phase_initial = torch.zeros((), device=device)
+        if (
+            (cfg.weights.intrinsic_phase_gradient_alignment > 0.0 or cfg.weights.intrinsic_phase_monotonicity > 0.0)
+            and cfg.train.intrinsic_phase_compatibility_points > 0
+        ):
+            compat_points = min(cfg.train.intrinsic_phase_compatibility_points, len(xy_col), 256)
+            phase_compat = intrinsic_phase_compatibility_losses(
+                model,
+                xy_col[:compat_points],
+                t_col[:compat_points],
+                active_low=cfg.train.intrinsic_phase_compatibility_low,
+                active_high=cfg.train.intrinsic_phase_compatibility_high,
+                temperature=cfg.train.intrinsic_phase_compatibility_temperature,
+                min_grad=cfg.train.intrinsic_phase_compatibility_min_grad,
+            )
+            intrinsic_phase_gradient_alignment = phase_compat["alignment"]
+            intrinsic_phase_monotonicity = phase_compat["monotonicity"]
+        else:
+            intrinsic_phase_gradient_alignment = torch.zeros((), device=device)
+            intrinsic_phase_monotonicity = torch.zeros((), device=device)
         if cfg.weights.boundary > 0.0 and cfg.train.boundary_points > 0:
             if is_az_benchmark:
                 bc_loss = ablowitz_zeppetella_dirichlet_loss(
@@ -1747,6 +1886,8 @@ def _lbfgs_polish(
                 t_col[:fs_subset],
                 max_points=cfg.train.front_speed_max_points,
                 min_grad=cfg.train.front_speed_min_grad,
+                use_curvature_correction=cfg.train.use_front_curvature_correction,
+                curvature_correction_weight=cfg.train.front_curvature_correction_weight,
             )
         else:
             front_speed_loss = torch.zeros((), device=device)
@@ -1924,6 +2065,9 @@ def _lbfgs_polish(
             + cfg.weights.pde * pde_loss_value
             + cfg.weights.phase_pde * phase_pde_loss
             + cfg.weights.residual_cvar * residual_cvar
+            + cfg.weights.intrinsic_phase_initial * intrinsic_phase_initial
+            + cfg.weights.intrinsic_phase_gradient_alignment * intrinsic_phase_gradient_alignment
+            + cfg.weights.intrinsic_phase_monotonicity * intrinsic_phase_monotonicity
             + cfg.weights.initial_condition * ic_loss
             + cfg.weights.boundary * bc_loss
             + cfg.weights.seed_match * seed_match
@@ -2074,12 +2218,23 @@ def run_experiment(cfg: ExperimentConfig) -> dict[str, object]:
     rk4_final_time_relative_l2 = relative_l2(final_rk4, final_truth)
     pinn_vs_rk4_final_relative_l2 = relative_l2(final_pred, final_rk4)
     diagnostic_fields_path = cfg.out_dir / "diagnostic_fields.npz"
+    final_xs = np.linspace(0.0, cfg.domain.box, final_truth.shape[0])
+    x_grid, y_grid = np.meshgrid(final_xs, final_xs, indexing="ij")
+    phase_xy = torch.tensor(
+        np.stack([x_grid.reshape(-1), y_grid.reshape(-1)], axis=1),
+        dtype=torch.float32,
+        device=device,
+    )
+    phase_t = torch.full((len(phase_xy), 1), cfg.domain.t_end, dtype=torch.float32, device=device)
+    with torch.no_grad():
+        final_phase = best.model.phase(phase_xy, phase_t).detach().cpu().numpy().reshape(final_truth.shape)
     np.savez_compressed(
         diagnostic_fields_path,
-        x=np.linspace(0.0, cfg.domain.box, final_truth.shape[0]),
+        x=final_xs,
         final_time=np.array([cfg.domain.t_end], dtype=np.float64),
         truth_final=final_truth,
         pinn_final=final_pred,
+        pinn_phase_final=final_phase,
         rk4_final=final_rk4,
         pinn_signed_error=final_pred - final_truth,
         pinn_abs_error=pinn_final_abs_error,
@@ -2125,6 +2280,29 @@ def run_experiment(cfg: ExperimentConfig) -> dict[str, object]:
         time_value=cfg.domain.t_end,
         front_alpha=cfg.weights.front_pde_alpha,
         front_gradient=cfg.weights.front_pde_gradient,
+        use_curvature_correction=cfg.train.use_front_curvature_correction,
+        curvature_correction_weight=cfg.train.front_curvature_correction_weight,
+    )
+    save_initial_phase_contour_diagnostic_figure(
+        cfg.out_dir / "initial_phase_contour_diagnostic.png",
+        best.model,
+        cfg.domain,
+        cfg.seed,
+        device,
+        level=cfg.train.intrinsic_phase_anchor_level,
+        benchmark_kind=cfg.benchmark.kind,
+        x_left=cfg.benchmark.x_left,
+        x_right=cfg.benchmark.x_right,
+        x0=cfg.benchmark.wave_x0,
+    )
+    save_phase_u_contour_diagnostic_figure(
+        cfg.out_dir / "phase_u_contour_diagnostic.png",
+        truth,
+        best.model,
+        cfg.domain,
+        device,
+        time_value=cfg.domain.t_end,
+        level=cfg.train.intrinsic_phase_anchor_level,
     )
     rk4_compare_metrics = {
         "pinn_final_relative_l2": pinn_final_time_relative_l2,
@@ -2199,6 +2377,11 @@ def run_experiment(cfg: ExperimentConfig) -> dict[str, object]:
         "front_area_005_mae": front_geometry.get("area_above_050_mae"),
         "front_area_010_mae": front_geometry.get("area_above_100_mae"),
         "active_front_area_mae": front_geometry.get("active_band_mae"),
+        "front_mae_005": front_geometry.get("front_mae_050"),
+        "front_mae_010": front_geometry.get("front_mae_100"),
+        "hausdorff_005": front_geometry.get("hausdorff_050"),
+        "hausdorff_010": front_geometry.get("hausdorff_100"),
+        "front_speed_mae_010": front_geometry.get("front_speed_mae_010"),
         "mass_mae": front_geometry.get("mass_mae"),
         "train_observation_mse": train_observation_mse,
         "validation_observation_mse": validation_observation_mse,

@@ -177,12 +177,18 @@ def front_speed_kinematics(
     xy: torch.Tensor,
     t: torch.Tensor,
     eps: float = 1.0e-3,
+    *,
+    use_curvature_correction: bool = False,
+    curvature_correction_weight: float = 0.05,
+    compute_curvature: bool = False,
 ) -> dict[str, torch.Tensor]:
     """KPP moving-front kinematics for the implicit level sets of u.
 
     In the leading-edge approximation of Fisher-KPP, the asymptotic front speed
     relative to the medium is c*=2*sqrt(D*r). With outward normal n, a level set
-    should satisfy u_t + (v.n + c*) grad(u).n = 0 near the active front.
+    should satisfy u_t + (v.n + c*) grad(u).n = 0 near the active front. When
+    enabled, the optional curvature correction uses c_eff=c*-w D kappa, where
+    kappa=div(-grad(u)/|grad(u)|) is positive for convex high-u regions.
     """
 
     xy_req = xy.detach().clone().requires_grad_(True)
@@ -191,6 +197,7 @@ def front_speed_kinematics(
     grad = torch.autograd.grad
     u_t = grad(u, t_req, torch.ones_like(u), create_graph=True)[0]
     u_xy = grad(u, xy_req, torch.ones_like(u), create_graph=True)[0]
+    grad_norm = torch.linalg.norm(u_xy, dim=-1, keepdim=True)
 
     center = model.seed_center.to(dtype=xy_req.dtype, device=xy_req.device).view(1, 2)
     radial = xy_req - center
@@ -198,11 +205,29 @@ def front_speed_kinematics(
     normal = radial / radius
     directional_grad = torch.sum(u_xy * normal, dim=-1, keepdim=True)
     advective_speed = torch.sum(model.pde.velocity.view(1, 2) * normal, dim=-1, keepdim=True)
+    diffusion = model.diffusion_coefficient(xy_req).clamp_min(1.0e-10)
     kpp_speed = 2.0 * torch.sqrt(
-        model.diffusion_coefficient(xy_req).clamp_min(1.0e-10)
-        * model.reaction_coefficient(xy_req).clamp_min(1.0e-10)
+        diffusion * model.reaction_coefficient(xy_req).clamp_min(1.0e-10)
     )
-    target_normal_speed = advective_speed + kpp_speed
+    mean_curvature = torch.zeros_like(u)
+    if use_curvature_correction or compute_curvature:
+        outward_level_normal = -u_xy / grad_norm.clamp_min(eps)
+        for dim in range(2):
+            component = outward_level_normal[:, dim : dim + 1]
+            component_grad = grad(
+                component,
+                xy_req,
+                torch.ones_like(component),
+                create_graph=True,
+                retain_graph=True,
+            )[0]
+            mean_curvature = mean_curvature + component_grad[:, dim : dim + 1]
+        mean_curvature = torch.where(grad_norm.detach() > eps, mean_curvature, torch.zeros_like(mean_curvature))
+    curvature_speed_correction = -float(curvature_correction_weight) * diffusion * mean_curvature
+    if use_curvature_correction:
+        target_normal_speed = advective_speed + kpp_speed + curvature_speed_correction
+    else:
+        target_normal_speed = advective_speed + kpp_speed
     signed_residual = u_t + target_normal_speed * directional_grad
     abs_denom = directional_grad.detach().abs().clamp_min(eps)
     signed_denom = torch.where(
@@ -219,6 +244,8 @@ def front_speed_kinematics(
         "u_xy": u_xy,
         "normal": normal,
         "directional_grad": directional_grad,
+        "mean_curvature": mean_curvature,
+        "curvature_speed_correction": curvature_speed_correction,
         "target_normal_speed": target_normal_speed,
         "observed_normal_speed": observed_normal_speed,
         "signed_residual": signed_residual,
@@ -300,6 +327,121 @@ def known_initial_condition_loss(
     dist2 = (xy[:, 0:1] - seed.center_x) ** 2 + (xy[:, 1:2] - seed.center_y) ** 2
     target = seed.amplitude * torch.exp(-dist2 / (2.0 * seed.sigma**2))
     return torch.mean((pred - target) ** 2)
+
+
+def _gaussian_initial_front_signed_distance(
+    model: OriginPINN,
+    seed: SeedConfig,
+    xy: torch.Tensor,
+    *,
+    level: float,
+) -> torch.Tensor:
+    amplitude = max(float(seed.amplitude), 1.0e-8)
+    level_clamped = min(max(float(level), 1.0e-8), amplitude * (1.0 - 1.0e-7))
+    radius = float(seed.sigma) * math.sqrt(max(0.0, -2.0 * math.log(level_clamped / amplitude)))
+    center = torch.tensor([seed.center_x, seed.center_y], dtype=xy.dtype, device=xy.device).view(1, 2)
+    dist = torch.linalg.norm(xy - center, dim=-1, keepdim=True)
+    return (dist - radius) / max(float(model.domain.box), 1.0e-12)
+
+
+def intrinsic_phase_initial_anchor_loss(
+    model: OriginPINN,
+    seed: SeedConfig,
+    n: int,
+    device: torch.device,
+    *,
+    level: float = 0.10,
+    band: float = 0.025,
+    sign_margin: float = 0.015,
+    benchmark_kind: str = "gaussian_seed",
+    x_left: float = -20.0,
+    x_right: float = 20.0,
+    x0: float = 0.0,
+) -> torch.Tensor:
+    """Anchor the intrinsic phase head to the initial front geometry.
+
+    Negative psi denotes the high-u side of the front and positive psi denotes
+    the low-u exterior. The value term fixes the signed-distance scale while the
+    hinge term makes the sign robust away from the contour.
+    """
+
+    if n <= 0 or getattr(model, "front_phase_head", None) is None:
+        return torch.zeros((), device=device)
+    dtype = next(model.parameters()).dtype
+    xy = torch.rand(n, 2, dtype=dtype, device=device) * model.domain.box
+    t0 = torch.zeros(n, 1, dtype=dtype, device=device)
+    if benchmark_kind == "ablowitz_zeppetella":
+        level_tensor = torch.full((n, 1), float(level), dtype=dtype, device=device)
+        x_level = az_level_x_unit_torch(
+            level_tensor,
+            t0,
+            x_left=x_left,
+            x_right=x_right,
+            x0=x0,
+        ).clamp(0.0, 1.0)
+        target = xy[:, 0:1] / model.domain.box - x_level
+    else:
+        target = _gaussian_initial_front_signed_distance(model, seed, xy, level=level)
+    psi = model.phase(xy, t0)
+    value_loss = (psi - target.detach()).pow(2)
+    far_inside = (target < -float(band)).float()
+    far_outside = (target > float(band)).float()
+    margin = abs(float(sign_margin))
+    sign_loss = (
+        far_inside * torch.relu(psi + margin).pow(2)
+        + far_outside * torch.relu(margin - psi).pow(2)
+    )
+    return value_loss.mean() + 0.5 * sign_loss.mean()
+
+
+def intrinsic_phase_compatibility_losses(
+    model: OriginPINN,
+    xy: torch.Tensor,
+    t: torch.Tensor,
+    *,
+    active_low: float = 0.02,
+    active_high: float = 0.98,
+    temperature: float = 0.03,
+    min_grad: float = 1.0e-4,
+) -> dict[str, torch.Tensor]:
+    """Weakly align the learned phase coordinate with the KPP field geometry.
+
+    This deliberately avoids a value-level ansatz such as u=sigmoid(-psi/l).
+    Instead, psi is only encouraged to act as an auxiliary front coordinate:
+    grad(u) should point opposite grad(psi), and u should not increase as psi
+    increases across the front.
+    """
+
+    device = xy.device
+    if len(xy) == 0 or getattr(model, "front_phase_head", None) is None:
+        zero = torch.zeros((), dtype=xy.dtype, device=device)
+        return {"alignment": zero, "monotonicity": zero}
+
+    xy_req = xy.detach().clone().requires_grad_(True)
+    t_req = t.detach().clone().requires_grad_(True)
+    u = model(xy_req, t_req)
+    psi = model.phase(xy_req, t_req)
+    grad = torch.autograd.grad
+    u_xy = grad(u, xy_req, torch.ones_like(u), create_graph=True, retain_graph=True)[0]
+    psi_xy = grad(psi, xy_req, torch.ones_like(psi), create_graph=True, retain_graph=True)[0]
+
+    eps = 1.0e-8
+    u_norm = torch.linalg.norm(u_xy, dim=-1, keepdim=True)
+    psi_norm = torch.linalg.norm(psi_xy, dim=-1, keepdim=True)
+    valid_grad = ((u_norm.detach() > float(min_grad)) & (psi_norm.detach() > float(min_grad))).float()
+    cosine = torch.sum(u_xy * psi_xy, dim=-1, keepdim=True) / (u_norm * psi_norm).clamp_min(eps)
+    cosine = cosine.clamp(-1.0, 1.0)
+
+    low = max(float(active_low), 1.0e-6)
+    high = min(max(float(active_high), low + 1.0e-4), 1.0 - 1.0e-6)
+    tau = max(float(temperature), 1.0e-5)
+    active = torch.sigmoid((u.detach() - low) / tau) * torch.sigmoid((high - u.detach()) / tau)
+    weights = active * valid_grad
+    denom = weights.sum().clamp_min(1.0)
+
+    alignment = torch.sum(weights * (cosine + 1.0).pow(2)) / denom
+    monotonicity = torch.sum(weights * torch.relu(cosine).pow(2)) / denom
+    return {"alignment": alignment, "monotonicity": monotonicity}
 
 
 def ablowitz_zeppetella_initial_condition_loss(
@@ -495,8 +637,16 @@ def front_speed_consistency_loss(
     high: float = 0.95,
     max_points: int = 128,
     min_grad: float = 1.0e-2,
+    use_curvature_correction: bool = False,
+    curvature_correction_weight: float = 0.05,
 ) -> torch.Tensor:
-    kin = front_speed_kinematics(model, xy, t)
+    kin = front_speed_kinematics(
+        model,
+        xy,
+        t,
+        use_curvature_correction=use_curvature_correction,
+        curvature_correction_weight=curvature_correction_weight,
+    )
     u = kin["u"]
     grad_norm = torch.linalg.norm(kin["u_xy"].detach(), dim=-1, keepdim=True)
     front_mask = ((u.detach() > low) & (u.detach() < high) & (grad_norm > min_grad)).flatten()

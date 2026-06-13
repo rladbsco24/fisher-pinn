@@ -154,6 +154,14 @@ def make_forward_cases(base: ExperimentConfig) -> list[dict[str, Any]]:
         weights=replace(base.weights, discrete_rk4=0.0),
         train=replace(base.train, discrete_rk4_times=0, discrete_rk4_grid=0),
     )
+    geo_no_intrinsic_phase_compatibility = replace(
+        base,
+        weights=replace(
+            base.weights,
+            intrinsic_phase_gradient_alignment=0.0,
+            intrinsic_phase_monotonicity=0.0,
+        ),
+    )
     geo_no_radial_symmetry = replace(
         base,
         weights=replace(base.weights, radial_symmetry=0.0),
@@ -262,6 +270,11 @@ def make_forward_cases(base: ExperimentConfig) -> list[dict[str, Any]]:
         _case("geo_no_physics_anchor", geo_no_physics_anchor, "Ablates the weak D/r parameter anchor used during coefficient learning."),
         _case("geo_no_spatial_coefficients", geo_no_spatial_coefficients, "Ablates the smooth spatial D(x,y), r(x,y) coefficient correction field."),
         _case("geo_no_discrete_rk4", geo_no_discrete_rk4, "Ablates the self-consistent discrete RK4 time-marching physics loss."),
+        _case(
+            "geo_no_intrinsic_phase_compatibility",
+            geo_no_intrinsic_phase_compatibility,
+            "Ablates weak grad-u/grad-psi compatibility while keeping the intrinsic phase head and initial anchor.",
+        ),
         _case("geo_no_radial_symmetry", geo_no_radial_symmetry, "Ablates radial symmetry regularization for the isotropic Gaussian-front benchmark."),
         _case("geo_radial_symmetry", geo_radial_symmetry, "Enables radial symmetry regularization for the isotropic Gaussian-front benchmark."),
         _case("geo_no_collapse_guards", geo_no_collapse_guards, "Removes mass floor, support Tversky, parameter anchor, and leading-edge guards together."),
@@ -286,6 +299,9 @@ def _row(case: dict[str, Any], seed: int, metrics: dict[str, Any]) -> dict[str, 
         "front_area_005_mae": metrics.get("front_area_005_mae"),
         "front_area_010_mae": metrics.get("front_area_010_mae"),
         "active_front_area_mae": metrics.get("active_front_area_mae"),
+        "front_mae_010": metrics.get("front_mae_010"),
+        "hausdorff_010": metrics.get("hausdorff_010"),
+        "front_speed_mae_010": metrics.get("front_speed_mae_010"),
         "mass_mae": metrics.get("mass_mae"),
         "note": case["note"],
     }
@@ -317,6 +333,9 @@ def aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "front_area_005_mae",
             "front_area_010_mae",
             "active_front_area_mae",
+            "front_mae_010",
+            "hausdorff_010",
+            "front_speed_mae_010",
             "mass_mae",
         ]:
             vals = _finite([row.get(key) for row in case_rows])
@@ -340,10 +359,11 @@ def plot_summary(path: Path, summary: dict[str, Any]) -> None:
     labels = [case["case"] for case in cases]
     metrics = [
         ("final_time_relative_l2_mean", "final relative L2"),
-        ("front_area_010_mae_mean", "front area MAE, u>0.10"),
-        ("mass_mae_mean", "mass MAE"),
+        ("front_mae_010_mean", "front boundary MAE, u=0.10"),
+        ("hausdorff_010_mean", "Hausdorff, u=0.10"),
+        ("front_speed_mae_010_mean", "front speed MAE"),
     ]
-    fig, axes = plt.subplots(1, 3, figsize=(max(11.0, 1.8 * len(labels)), 4.2), constrained_layout=True)
+    fig, axes = plt.subplots(1, 4, figsize=(max(13.0, 2.1 * len(labels)), 4.2), constrained_layout=True)
     for ax, (key, title) in zip(axes, metrics):
         vals = [case[key] or 0.0 for case in cases]
         ax.bar(range(len(labels)), vals, color="#4C78A8")

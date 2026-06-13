@@ -16,6 +16,7 @@ from matplotlib.path import Path as MplPath
 from .config import DomainConfig, ModelConfig, PDEConfig, SeedConfig, korea_pine_model_config
 from .losses import (
     boundary_neumann_loss,
+    intrinsic_phase_compatibility_losses,
     observed_support_area_loss,
     observed_support_tversky_loss,
     residual_cvar_loss,
@@ -84,6 +85,7 @@ class KoreaPineWiltPhysicsPrior:
 class KoreaPineWiltPINNResult:
     years: np.ndarray
     fields: np.ndarray
+    phase_fields: np.ndarray | None
     history: list[dict[str, float]]
     metrics: list[dict[str, float | int]]
     physics: dict[str, float | str]
@@ -1176,6 +1178,133 @@ def predict_korea_pinn_fields(
     return np.asarray(fields, dtype=np.float64)
 
 
+def predict_korea_pinn_phase_fields(
+    model: OriginPINN,
+    grid: KoreaPineWiltGrid,
+    years: np.ndarray,
+    *,
+    start_year: int,
+    device: torch.device,
+    batch_size: int = 8192,
+    time_values: np.ndarray | None = None,
+) -> np.ndarray | None:
+    if getattr(model, "front_phase_head", None) is None:
+        return None
+    xy = torch.tensor(_normalized_grid_xy(grid), dtype=torch.float32, device=device)
+    if time_values is None:
+        grid_lookup = {int(year): float(korea_grid_time_values(grid)[idx]) for idx, year in enumerate(grid.years.tolist())}
+        eval_times = np.asarray(
+            [grid_lookup.get(int(year), float(int(year) - start_year)) for year in years.tolist()],
+            dtype=np.float64,
+        )
+    else:
+        eval_times = np.asarray(time_values, dtype=np.float64)
+        if len(eval_times) != len(years):
+            raise ValueError("time_values must match years length when predicting Korea PINN phase fields.")
+    fields = []
+    land_mask = grid.land_mask
+    model.eval()
+    with torch.no_grad():
+        for time_value in eval_times.tolist():
+            t = torch.full((len(xy), 1), float(time_value), dtype=torch.float32, device=device)
+            preds = []
+            for start in range(0, len(xy), batch_size):
+                preds.append(model.phase(xy[start : start + batch_size], t[start : start + batch_size]).detach().cpu())
+            phase = torch.cat(preds, dim=0).numpy().reshape(grid.density.shape[1:])
+            if land_mask is not None:
+                phase = np.where(land_mask, phase, np.nan)
+            fields.append(phase)
+    return np.asarray(fields, dtype=np.float64)
+
+
+def _chamfer_distance_to_mask(mask: np.ndarray, *, dx: float, dy: float) -> np.ndarray:
+    """Small dependency-free 8-neighbor distance transform for gridded support masks."""
+
+    source = np.asarray(mask, dtype=bool)
+    inf = np.float64(1.0e9)
+    dist = np.where(source, 0.0, inf).astype(np.float64)
+    diag = float(np.sqrt(dx * dx + dy * dy))
+    height, width = dist.shape
+    for _ in range(2):
+        for i in range(height):
+            for j in range(width):
+                best = dist[i, j]
+                if i > 0:
+                    best = min(best, dist[i - 1, j] + dy)
+                    if j > 0:
+                        best = min(best, dist[i - 1, j - 1] + diag)
+                    if j + 1 < width:
+                        best = min(best, dist[i - 1, j + 1] + diag)
+                if j > 0:
+                    best = min(best, dist[i, j - 1] + dx)
+                dist[i, j] = best
+        for i in range(height - 1, -1, -1):
+            for j in range(width - 1, -1, -1):
+                best = dist[i, j]
+                if i + 1 < height:
+                    best = min(best, dist[i + 1, j] + dy)
+                    if j > 0:
+                        best = min(best, dist[i + 1, j - 1] + diag)
+                    if j + 1 < width:
+                        best = min(best, dist[i + 1, j + 1] + diag)
+                if j + 1 < width:
+                    best = min(best, dist[i, j + 1] + dx)
+                dist[i, j] = best
+    return dist
+
+
+def _korea_initial_phase_signed_distance(
+    grid: KoreaPineWiltGrid,
+    *,
+    level: float,
+) -> np.ndarray:
+    """Pseudo-front signed distance from the first observed Korea density field.
+
+    Negative values denote the initially infected support and positive values
+    denote the exterior. The target is intentionally observation-derived rather
+    than a synthetic exact front.
+    """
+
+    initial = np.asarray(grid.density[0], dtype=np.float64)
+    land = np.ones_like(initial, dtype=bool) if grid.land_mask is None else np.asarray(grid.land_mask, dtype=bool)
+    support = (initial >= float(level)) & land
+    if not np.any(support) or np.all(support[land]):
+        return np.zeros_like(initial, dtype=np.float64)
+    dx = 1.0 / max(initial.shape[1] - 1, 1)
+    dy = 1.0 / max(initial.shape[0] - 1, 1)
+    dist_to_support = _chamfer_distance_to_mask(support, dx=dx, dy=dy)
+    dist_to_exterior = _chamfer_distance_to_mask((~support) & land, dx=dx, dy=dy)
+    signed = dist_to_support - dist_to_exterior
+    return np.where(land, signed, 0.0).astype(np.float64)
+
+
+def _korea_intrinsic_phase_initial_anchor_loss(
+    model: OriginPINN,
+    anchor_xy: torch.Tensor,
+    anchor_target: torch.Tensor,
+    anchor_indices: torch.Tensor,
+    n: int,
+    *,
+    band: float,
+    sign_margin: float,
+) -> torch.Tensor:
+    if n <= 0 or len(anchor_indices) == 0 or getattr(model, "front_phase_head", None) is None:
+        return torch.zeros((), dtype=anchor_xy.dtype, device=anchor_xy.device)
+    choice = anchor_indices[
+        torch.randint(0, len(anchor_indices), (min(int(n), len(anchor_indices)),), device=anchor_indices.device)
+    ]
+    xy = anchor_xy[choice]
+    target = anchor_target[choice]
+    t0 = torch.zeros((len(choice), 1), dtype=xy.dtype, device=xy.device)
+    psi = model.phase(xy, t0)
+    value_loss = (psi - target.detach()).pow(2)
+    far_inside = (target < -float(band)).float()
+    far_outside = (target > float(band)).float()
+    margin = abs(float(sign_margin))
+    sign_loss = far_inside * torch.relu(psi + margin).pow(2) + far_outside * torch.relu(margin - psi).pow(2)
+    return value_loss.mean() + 0.5 * sign_loss.mean()
+
+
 def fit_korea_pine_wilt_pinn(
     grid: KoreaPineWiltGrid,
     *,
@@ -1201,6 +1330,18 @@ def fit_korea_pine_wilt_pinn(
     mass_trajectory_points: int = 2048,
     mass_trajectory_times: int = 4,
     phase_pde_weight: float = 0.02,
+    intrinsic_phase_initial_weight: float = 0.03,
+    intrinsic_phase_anchor_points: int = 2048,
+    intrinsic_phase_anchor_level: float = 0.10,
+    intrinsic_phase_anchor_band: float = 0.025,
+    intrinsic_phase_anchor_sign_margin: float = 0.015,
+    intrinsic_phase_gradient_alignment_weight: float = 0.01,
+    intrinsic_phase_monotonicity_weight: float = 0.01,
+    intrinsic_phase_compatibility_points: int = 512,
+    intrinsic_phase_compatibility_low: float = 0.02,
+    intrinsic_phase_compatibility_high: float = 0.98,
+    intrinsic_phase_compatibility_temperature: float = 0.03,
+    intrinsic_phase_compatibility_min_grad: float = 1.0e-4,
     residual_cvar_weight: float = 0.03,
     residual_cvar_fraction: float = 0.10,
     diffusion: float = 0.0015,
@@ -1265,6 +1406,13 @@ def fit_korea_pine_wilt_pinn(
         use_seed_front_features=False,
         use_traveling_wave_features=False,
         use_front_fourier_features=False,
+        use_intrinsic_front_phase=True,
+        intrinsic_front_phase_fourier_features=8,
+        intrinsic_front_phase_fourier_sigma=1.0,
+        intrinsic_front_phase_hidden=32,
+        intrinsic_front_phase_layers=2,
+        intrinsic_front_phase_feature_frequencies=4,
+        intrinsic_front_phase_correction_scale=1.0,
         hard_initial_condition=False,
         use_kpp_front_envelope=False,
         use_spatial_coefficients=True,
@@ -1279,6 +1427,13 @@ def fit_korea_pine_wilt_pinn(
     initial_xy = torch.tensor(grid_xy_np, dtype=torch.float32, device=device_obj)
     initial_values = torch.tensor(grid.density[0].reshape(-1, 1), dtype=torch.float32, device=device_obj)
     initial_density_weight = 1.0 + 12.0 * initial_values.detach()
+    phase_anchor_target_np = _korea_initial_phase_signed_distance(grid, level=intrinsic_phase_anchor_level).reshape(-1, 1)
+    phase_anchor_target = torch.tensor(phase_anchor_target_np, dtype=torch.float32, device=device_obj)
+    if grid.land_mask is not None:
+        phase_anchor_mask_np = grid.land_mask.reshape(-1)
+    else:
+        phase_anchor_mask_np = np.ones(len(grid_xy_np), dtype=bool)
+    phase_anchor_indices = torch.tensor(np.flatnonzero(phase_anchor_mask_np), dtype=torch.long, device=device_obj)
     observed_times = torch.tensor(grid_times.reshape(-1, 1), dtype=torch.float32, device=device_obj)
     if grid.land_mask is not None:
         observed_means_np = np.asarray([field[grid.land_mask].mean() for field in grid.density], dtype=np.float32)
@@ -1364,6 +1519,18 @@ def fit_korea_pine_wilt_pinn(
             ic_loss = torch.mean(initial_density_weight[ic_idx] * (pred0 - initial_values[ic_idx]) ** 2)
         else:
             ic_loss = torch.zeros((), device=device_obj)
+        if intrinsic_phase_initial_weight > 0.0 and intrinsic_phase_anchor_points > 0:
+            intrinsic_phase_initial = _korea_intrinsic_phase_initial_anchor_loss(
+                model,
+                initial_xy,
+                phase_anchor_target,
+                phase_anchor_indices,
+                intrinsic_phase_anchor_points,
+                band=intrinsic_phase_anchor_band,
+                sign_margin=intrinsic_phase_anchor_sign_margin,
+            )
+        else:
+            intrinsic_phase_initial = torch.zeros((), device=device_obj)
         if sea_flags is not None:
             sea_batch = sea_flags[idx]
             sea_loss = torch.sum(sea_batch * pred**2) / torch.clamp(sea_batch.sum(), min=1.0)
@@ -1415,6 +1582,25 @@ def fit_korea_pine_wilt_pinn(
             )
         else:
             phase_pde_loss = torch.zeros((), device=device_obj)
+        if (
+            (intrinsic_phase_gradient_alignment_weight > 0.0 or intrinsic_phase_monotonicity_weight > 0.0)
+            and intrinsic_phase_compatibility_points > 0
+        ):
+            compat_points = min(int(intrinsic_phase_compatibility_points), len(xy_col))
+            phase_compat = intrinsic_phase_compatibility_losses(
+                model,
+                xy_col[:compat_points],
+                t_col[:compat_points],
+                active_low=intrinsic_phase_compatibility_low,
+                active_high=intrinsic_phase_compatibility_high,
+                temperature=intrinsic_phase_compatibility_temperature,
+                min_grad=intrinsic_phase_compatibility_min_grad,
+            )
+            intrinsic_phase_gradient_alignment = phase_compat["alignment"]
+            intrinsic_phase_monotonicity = phase_compat["monotonicity"]
+        else:
+            intrinsic_phase_gradient_alignment = torch.zeros((), device=device_obj)
+            intrinsic_phase_monotonicity = torch.zeros((), device=device_obj)
         if residual_cvar_weight > 0.0:
             residual_cvar = residual_cvar_loss(residual_sq, residual_cvar_fraction)
         else:
@@ -1458,6 +1644,9 @@ def fit_korea_pine_wilt_pinn(
             + initial_condition_weight * ic_loss
             + pde_weight * pde_loss
             + phase_pde_weight * phase_pde_loss
+            + intrinsic_phase_initial_weight * intrinsic_phase_initial
+            + intrinsic_phase_gradient_alignment_weight * intrinsic_phase_gradient_alignment
+            + intrinsic_phase_monotonicity_weight * intrinsic_phase_monotonicity
             + residual_cvar_weight * residual_cvar
             + boundary_weight * bc_loss
             + sea_weight * sea_loss
@@ -1480,6 +1669,9 @@ def fit_korea_pine_wilt_pinn(
                     "initial_condition": float(ic_loss.detach().cpu()),
                     "pde": float(pde_loss.detach().cpu()),
                     "phase_pde": float(phase_pde_loss.detach().cpu()),
+                    "intrinsic_phase_initial": float(intrinsic_phase_initial.detach().cpu()),
+                    "intrinsic_phase_gradient_alignment": float(intrinsic_phase_gradient_alignment.detach().cpu()),
+                    "intrinsic_phase_monotonicity": float(intrinsic_phase_monotonicity.detach().cpu()),
                     "residual_cvar": float(residual_cvar.detach().cpu()),
                     "boundary": float(bc_loss.detach().cpu()),
                     "sea": float(sea_loss.detach().cpu()),
@@ -1522,6 +1714,14 @@ def fit_korea_pine_wilt_pinn(
         pred_years = np.arange(start_year, model_end_year + 1, dtype=np.int16)
         pred_times = None
     fields = predict_korea_pinn_fields(
+        model,
+        grid,
+        pred_years,
+        start_year=start_year,
+        device=device_obj,
+        time_values=pred_times,
+    )
+    phase_fields = predict_korea_pinn_phase_fields(
         model,
         grid,
         pred_years,
@@ -1574,6 +1774,15 @@ def fit_korea_pine_wilt_pinn(
         "mass_trajectory_points": float(mass_trajectory_points),
         "mass_trajectory_times": float(mass_trajectory_times),
         "phase_pde_weight": float(phase_pde_weight),
+        "intrinsic_front_phase_enabled": float(1.0 if getattr(model, "front_phase_head", None) is not None else 0.0),
+        "intrinsic_phase_initial_weight": float(intrinsic_phase_initial_weight),
+        "intrinsic_phase_anchor_points": float(intrinsic_phase_anchor_points),
+        "intrinsic_phase_anchor_level": float(intrinsic_phase_anchor_level),
+        "intrinsic_phase_anchor_band": float(intrinsic_phase_anchor_band),
+        "intrinsic_phase_anchor_sign_margin": float(intrinsic_phase_anchor_sign_margin),
+        "intrinsic_phase_gradient_alignment_weight": float(intrinsic_phase_gradient_alignment_weight),
+        "intrinsic_phase_monotonicity_weight": float(intrinsic_phase_monotonicity_weight),
+        "intrinsic_phase_compatibility_points": float(intrinsic_phase_compatibility_points),
         "residual_cvar_weight": float(residual_cvar_weight),
         "residual_cvar_fraction": float(residual_cvar_fraction),
         "length_scale_km": float(physics_prior.scale.length_scale_km),
@@ -1582,6 +1791,7 @@ def fit_korea_pine_wilt_pinn(
     return KoreaPineWiltPINNResult(
         years=pred_years,
         fields=fields,
+        phase_fields=phase_fields,
         history=history,
         metrics=metrics,
         physics=physics,

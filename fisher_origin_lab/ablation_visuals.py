@@ -115,6 +115,9 @@ def save_feature_pair_error_map(
         ("final rel L2", "final_time_relative_l2"),
         ("validation MSE", "validation_observation_mse"),
         ("front u>0.10 MAE", "front_area_010_mae"),
+        ("front boundary MAE", "front_mae_010"),
+        ("Hausdorff u=0.10", "hausdorff_010"),
+        ("front speed MAE", "front_speed_mae_010"),
         ("active-front MAE", "active_front_area_mae"),
         ("mass MAE", "mass_mae"),
     ]
@@ -124,7 +127,7 @@ def save_feature_pair_error_map(
     ax.text(0.64, 0.90, "without", transform=ax.transAxes, fontsize=8, color=TOKENS["muted"], ha="right")
     ax.text(0.98, 0.90, "with", transform=ax.transAxes, fontsize=8, color=TOKENS["muted"], ha="right")
     for idx, (label, key) in enumerate(rows):
-        y = 0.78 - idx * 0.14
+        y = 0.78 - idx * 0.10
         w0 = _metric(without_metrics, key)
         w1 = _metric(with_metrics, key)
         ax.text(0.02, y, label, transform=ax.transAxes, va="center", fontsize=8, color=TOKENS["ink"])

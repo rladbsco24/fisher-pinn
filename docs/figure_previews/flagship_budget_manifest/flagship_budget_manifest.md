@@ -41,9 +41,9 @@ Problem: Korea pine-wilt land-mask reaction-diffusion PINN/RK4 comparison
 Command:
 
 ```powershell
-python experiments/korea_pine_pinn/run_pine_pinn.py --preset flagship --output-dir runs\korea_pine_pinn_flagship
+python experiments/korea_pine_pinn/run_pine_pinn.py --preset flagship --pinn-epochs 20000 --output-dir runs\korea_pine_pinn_flagship
 ```
 
 Output directory: `runs\korea_pine_pinn_flagship`
 
-Notes: Uses the Korea-specific land mask, sea exclusion, and observation timeline while keeping the same PINN training budget scale.
+Notes: Uses the Korea-specific land mask, sea exclusion, and observation timeline, while keeping the same phase-capable PINN backbone and explicit training budget scale as the synthetic flagship runs.

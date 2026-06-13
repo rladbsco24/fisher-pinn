@@ -65,6 +65,13 @@ class ModelConfig:
     fourier_sigma: float = 3.5
     front_fourier_features: int = 0
     front_fourier_sigma: float = 2.0
+    use_intrinsic_front_phase: bool = False
+    intrinsic_front_phase_fourier_features: int = 8
+    intrinsic_front_phase_fourier_sigma: float = 1.0
+    intrinsic_front_phase_hidden: int = 32
+    intrinsic_front_phase_layers: int = 2
+    intrinsic_front_phase_feature_frequencies: int = 4
+    intrinsic_front_phase_correction_scale: float = 0.25
     hidden: int = 96
     layers: int = 5
     nif_rank: int = 16
@@ -114,6 +121,9 @@ class LossWeights:
     data_density_gain: float = 0.0
     phase_pde: float = 0.0
     residual_cvar: float = 0.0
+    intrinsic_phase_initial: float = 0.0
+    intrinsic_phase_gradient_alignment: float = 0.0
+    intrinsic_phase_monotonicity: float = 0.0
     front_pde_alpha: float = 0.0
     front_pde_gradient: float = 0.0
     front_gradient: float = 0.0
@@ -167,6 +177,13 @@ def shared_geo_forward_model_config(
     az_x_right: float = AZ_X_RIGHT_1D,
     az_wave_x0: float = 0.0,
     use_front_fourier_features: bool = True,
+    use_intrinsic_front_phase: bool = False,
+    intrinsic_front_phase_fourier_features: int = 8,
+    intrinsic_front_phase_fourier_sigma: float = 1.0,
+    intrinsic_front_phase_hidden: int = 32,
+    intrinsic_front_phase_layers: int = 2,
+    intrinsic_front_phase_feature_frequencies: int = 4,
+    intrinsic_front_phase_correction_scale: float = 0.25,
     hard_initial_condition: bool = True,
     initial_envelope_tau: float = 0.18,
     use_kpp_front_envelope: bool = True,
@@ -207,6 +224,13 @@ def shared_geo_forward_model_config(
         az_x_right=float(az_x_right),
         az_wave_x0=float(az_wave_x0),
         use_front_fourier_features=bool(use_front_fourier_features),
+        use_intrinsic_front_phase=bool(use_intrinsic_front_phase),
+        intrinsic_front_phase_fourier_features=int(intrinsic_front_phase_fourier_features),
+        intrinsic_front_phase_fourier_sigma=float(intrinsic_front_phase_fourier_sigma),
+        intrinsic_front_phase_hidden=int(intrinsic_front_phase_hidden),
+        intrinsic_front_phase_layers=int(intrinsic_front_phase_layers),
+        intrinsic_front_phase_feature_frequencies=int(intrinsic_front_phase_feature_frequencies),
+        intrinsic_front_phase_correction_scale=float(intrinsic_front_phase_correction_scale),
         hard_initial_condition=bool(hard_initial_condition),
         initial_envelope_tau=float(initial_envelope_tau),
         use_kpp_front_envelope=bool(use_kpp_front_envelope),
@@ -234,6 +258,13 @@ def korea_pine_model_config(
     use_seed_front_features: bool = False,
     use_traveling_wave_features: bool = False,
     use_front_fourier_features: bool = False,
+    use_intrinsic_front_phase: bool | None = None,
+    intrinsic_front_phase_fourier_features: int | None = None,
+    intrinsic_front_phase_fourier_sigma: float | None = None,
+    intrinsic_front_phase_hidden: int | None = None,
+    intrinsic_front_phase_layers: int | None = None,
+    intrinsic_front_phase_feature_frequencies: int | None = None,
+    intrinsic_front_phase_correction_scale: float | None = None,
     hard_initial_condition: bool = False,
     use_kpp_front_envelope: bool = False,
     use_spatial_coefficients: bool = True,
@@ -261,6 +292,39 @@ def korea_pine_model_config(
         use_seed_front_features=use_seed_front_features,
         use_traveling_wave_features=use_traveling_wave_features,
         use_front_fourier_features=use_front_fourier_features,
+        use_intrinsic_front_phase=(
+            base.use_intrinsic_front_phase if use_intrinsic_front_phase is None else bool(use_intrinsic_front_phase)
+        ),
+        intrinsic_front_phase_fourier_features=(
+            base.intrinsic_front_phase_fourier_features
+            if intrinsic_front_phase_fourier_features is None
+            else intrinsic_front_phase_fourier_features
+        ),
+        intrinsic_front_phase_fourier_sigma=(
+            base.intrinsic_front_phase_fourier_sigma
+            if intrinsic_front_phase_fourier_sigma is None
+            else intrinsic_front_phase_fourier_sigma
+        ),
+        intrinsic_front_phase_hidden=(
+            base.intrinsic_front_phase_hidden
+            if intrinsic_front_phase_hidden is None
+            else intrinsic_front_phase_hidden
+        ),
+        intrinsic_front_phase_layers=(
+            base.intrinsic_front_phase_layers
+            if intrinsic_front_phase_layers is None
+            else intrinsic_front_phase_layers
+        ),
+        intrinsic_front_phase_feature_frequencies=(
+            base.intrinsic_front_phase_feature_frequencies
+            if intrinsic_front_phase_feature_frequencies is None
+            else intrinsic_front_phase_feature_frequencies
+        ),
+        intrinsic_front_phase_correction_scale=(
+            base.intrinsic_front_phase_correction_scale
+            if intrinsic_front_phase_correction_scale is None
+            else intrinsic_front_phase_correction_scale
+        ),
         hard_initial_condition=hard_initial_condition,
         use_kpp_front_envelope=use_kpp_front_envelope,
         use_spatial_coefficients=use_spatial_coefficients,
@@ -314,6 +378,15 @@ class TrainConfig:
     phase_residual_temperature: float = 0.02
     phase_residual_clip: float = 25.0
     residual_cvar_fraction: float = 0.10
+    intrinsic_phase_anchor_points: int = 512
+    intrinsic_phase_anchor_level: float = 0.10
+    intrinsic_phase_anchor_band: float = 0.025
+    intrinsic_phase_anchor_sign_margin: float = 0.015
+    intrinsic_phase_compatibility_points: int = 256
+    intrinsic_phase_compatibility_low: float = 0.02
+    intrinsic_phase_compatibility_high: float = 0.98
+    intrinsic_phase_compatibility_temperature: float = 0.03
+    intrinsic_phase_compatibility_min_grad: float = 1.0e-4
     pde_loss_warmup_fraction: float = 0.0
     front_loss_start_fraction: float = 0.0
     front_loss_warmup_fraction: float = 0.0
@@ -343,6 +416,8 @@ class TrainConfig:
     front_speed_points: int = 256
     front_speed_max_points: int = 128
     front_speed_min_grad: float = 1.0e-2
+    use_front_curvature_correction: bool = False
+    front_curvature_correction_weight: float = 0.05
     expected_front_points: int = 256
     expected_front_width: float = 0.08
     expected_front_speed_factor: float = 0.45
@@ -514,6 +589,19 @@ class ExperimentConfig:
                 az_x_right=self.model.az_x_right,
                 az_wave_x0=self.model.az_wave_x0,
                 use_front_fourier_features=self.model.use_front_fourier_features,
+                use_intrinsic_front_phase=self.model.use_intrinsic_front_phase,
+                intrinsic_front_phase_fourier_features=min(
+                    self.model.intrinsic_front_phase_fourier_features,
+                    6,
+                ),
+                intrinsic_front_phase_fourier_sigma=self.model.intrinsic_front_phase_fourier_sigma,
+                intrinsic_front_phase_hidden=min(self.model.intrinsic_front_phase_hidden, 24),
+                intrinsic_front_phase_layers=self.model.intrinsic_front_phase_layers,
+                intrinsic_front_phase_feature_frequencies=min(
+                    self.model.intrinsic_front_phase_feature_frequencies,
+                    3,
+                ),
+                intrinsic_front_phase_correction_scale=self.model.intrinsic_front_phase_correction_scale,
                 hard_initial_condition=self.model.hard_initial_condition,
                 initial_envelope_tau=self.model.initial_envelope_tau,
                 use_kpp_front_envelope=self.model.use_kpp_front_envelope,
@@ -541,6 +629,9 @@ class ExperimentConfig:
                 data_density_gain=self.weights.data_density_gain,
                 phase_pde=self.weights.phase_pde,
                 residual_cvar=self.weights.residual_cvar,
+                intrinsic_phase_initial=self.weights.intrinsic_phase_initial,
+                intrinsic_phase_gradient_alignment=self.weights.intrinsic_phase_gradient_alignment,
+                intrinsic_phase_monotonicity=self.weights.intrinsic_phase_monotonicity,
                 front_pde_alpha=self.weights.front_pde_alpha,
                 front_pde_gradient=self.weights.front_pde_gradient,
                 front_gradient=self.weights.front_gradient,
@@ -597,6 +688,15 @@ class ExperimentConfig:
                 phase_residual_temperature=self.train.phase_residual_temperature,
                 phase_residual_clip=self.train.phase_residual_clip,
                 residual_cvar_fraction=self.train.residual_cvar_fraction,
+                intrinsic_phase_anchor_points=min(self.train.intrinsic_phase_anchor_points, 128),
+                intrinsic_phase_anchor_level=self.train.intrinsic_phase_anchor_level,
+                intrinsic_phase_anchor_band=self.train.intrinsic_phase_anchor_band,
+                intrinsic_phase_anchor_sign_margin=self.train.intrinsic_phase_anchor_sign_margin,
+                intrinsic_phase_compatibility_points=min(self.train.intrinsic_phase_compatibility_points, 128),
+                intrinsic_phase_compatibility_low=self.train.intrinsic_phase_compatibility_low,
+                intrinsic_phase_compatibility_high=self.train.intrinsic_phase_compatibility_high,
+                intrinsic_phase_compatibility_temperature=self.train.intrinsic_phase_compatibility_temperature,
+                intrinsic_phase_compatibility_min_grad=self.train.intrinsic_phase_compatibility_min_grad,
                 pde_loss_warmup_fraction=self.train.pde_loss_warmup_fraction,
                 front_loss_start_fraction=self.train.front_loss_start_fraction,
                 front_loss_warmup_fraction=self.train.front_loss_warmup_fraction,
@@ -617,6 +717,8 @@ class ExperimentConfig:
                 front_speed_points=min(self.train.front_speed_points, 128),
                 front_speed_max_points=min(self.train.front_speed_max_points, 64),
                 front_speed_min_grad=self.train.front_speed_min_grad,
+                use_front_curvature_correction=self.train.use_front_curvature_correction,
+                front_curvature_correction_weight=self.train.front_curvature_correction_weight,
                 expected_front_points=min(self.train.expected_front_points, 128),
                 expected_front_width=self.train.expected_front_width,
                 expected_front_speed_factor=self.train.expected_front_speed_factor,
@@ -690,10 +792,11 @@ class ExperimentConfig:
     def korea_pine_style(self) -> "ExperimentConfig":
         """Match the PINN problem setup used in the Korea pine-wilt notebook.
 
-        The referenced notebook trains a forward Fisher-KPP PINN with diffusion
-        and logistic growth only. It has no explicit PINN boundary-condition loss;
-        land/coast masking is used in data preparation and plotting rather than as
-        a Neumann or Dirichlet penalty in the neural loss.
+        The Korea specialization keeps the same phase-capable geo-spectral
+        backbone as the synthetic flagship model, while disabling synthetic
+        travelling-wave and seed-front priors. Its phase loss is intentionally
+        weak because the observed Korea front is a data-derived support contour,
+        not an exact analytic level set.
         """
 
         return ExperimentConfig(
@@ -709,7 +812,16 @@ class ExperimentConfig:
             observations=self.observations,
             geo=self.geo,
             benchmark=self.benchmark,
-            model=korea_pine_model_config(self.model),
+            model=korea_pine_model_config(
+                self.model,
+                use_intrinsic_front_phase=True,
+                intrinsic_front_phase_fourier_features=8,
+                intrinsic_front_phase_fourier_sigma=1.0,
+                intrinsic_front_phase_hidden=32,
+                intrinsic_front_phase_layers=2,
+                intrinsic_front_phase_feature_frequencies=4,
+                intrinsic_front_phase_correction_scale=1.0,
+            ),
             weights=LossWeights(
                 data=1.0,
                 pde=1.0,
@@ -723,6 +835,9 @@ class ExperimentConfig:
                 data_density_gain=4.0,
                 phase_pde=0.03,
                 residual_cvar=0.05,
+                intrinsic_phase_initial=0.03,
+                intrinsic_phase_gradient_alignment=0.01,
+                intrinsic_phase_monotonicity=0.01,
                 front_pde_alpha=0.0,
                 front_pde_gradient=0.0,
                 front_gradient=0.0,
@@ -779,6 +894,13 @@ class ExperimentConfig:
                 use_traveling_wave_features=True,
                 use_planar_wave_features=False,
                 use_front_fourier_features=True,
+                use_intrinsic_front_phase=True,
+                intrinsic_front_phase_fourier_features=8,
+                intrinsic_front_phase_fourier_sigma=1.0,
+                intrinsic_front_phase_hidden=32,
+                intrinsic_front_phase_layers=2,
+                intrinsic_front_phase_feature_frequencies=4,
+                intrinsic_front_phase_correction_scale=0.25,
                 hard_initial_condition=True,
                 initial_envelope_tau=0.18,
                 use_kpp_front_envelope=True,
@@ -806,6 +928,9 @@ class ExperimentConfig:
                 data_density_gain=4.0,
                 phase_pde=0.18,
                 residual_cvar=0.12,
+                intrinsic_phase_initial=0.20,
+                intrinsic_phase_gradient_alignment=0.02,
+                intrinsic_phase_monotonicity=0.01,
                 front_pde_alpha=2.0,
                 front_pde_gradient=0.5,
                 front_gradient=0.005,
@@ -840,6 +965,15 @@ class ExperimentConfig:
                 phase_residual_temperature=0.018,
                 phase_residual_clip=20.0,
                 residual_cvar_fraction=0.12,
+                intrinsic_phase_anchor_points=512,
+                intrinsic_phase_anchor_level=0.10,
+                intrinsic_phase_anchor_band=0.025,
+                intrinsic_phase_anchor_sign_margin=0.015,
+                intrinsic_phase_compatibility_points=256,
+                intrinsic_phase_compatibility_low=0.02,
+                intrinsic_phase_compatibility_high=0.98,
+                intrinsic_phase_compatibility_temperature=0.03,
+                intrinsic_phase_compatibility_min_grad=1.0e-4,
                 pde_loss_warmup_fraction=0.05,
                 front_loss_start_fraction=0.05,
                 front_loss_warmup_fraction=0.20,
@@ -852,6 +986,8 @@ class ExperimentConfig:
                 adaptive_loss_min=0.33,
                 adaptive_loss_max=3.0,
                 front_speed_min_grad=1.0e-2,
+                use_front_curvature_correction=True,
+                front_curvature_correction_weight=0.05,
                 expected_front_points=256,
                 expected_front_width=0.08,
                 expected_front_speed_factor=0.45,
@@ -959,6 +1095,9 @@ class ExperimentConfig:
                 pde=1.0,
                 phase_pde=0.25,
                 residual_cvar=0.10,
+                intrinsic_phase_initial=0.40,
+                intrinsic_phase_gradient_alignment=0.02,
+                intrinsic_phase_monotonicity=0.01,
                 initial_condition=8.0,
                 boundary=4.0,
                 front_speed=0.0,

@@ -391,6 +391,100 @@ class PDEParameters(nn.Module):
         return F.softplus(self.raw_reaction)
 
 
+class FrontPhaseHead(nn.Module):
+    """Learnable intrinsic front phase psi(x, y, t).
+
+    The head is initialized around a conservative Fisher-KPP moving-front prior
+    and learns a correction. It is intentionally independent of OriginPINN's main
+    field network so psi can be used as an input feature without recursion.
+    """
+
+    def __init__(self, domain: DomainConfig, pde: PDEConfig, seed: SeedConfig, model: ModelConfig) -> None:
+        super().__init__()
+        self.box = float(domain.box)
+        self.t_end = float(domain.t_end)
+        self.seed_sigma = float(seed.sigma)
+        self.reference_diffusion = float(pde.diffusion)
+        self.reference_reaction = float(pde.reaction)
+        self.include_advection = bool(pde.include_advection)
+        self.velocity_x = float(pde.velocity_x)
+        self.velocity_y = float(pde.velocity_y)
+        self.use_geo_features = bool(model.use_geo_features)
+        self.use_seed_front_features = bool(model.use_seed_front_features)
+        self.use_planar_prior = bool(model.use_planar_wave_features or model.use_az_hard_constraints)
+        self.correction_scale = float(model.intrinsic_front_phase_correction_scale)
+        self.register_buffer("seed_center", torch.tensor([seed.center_x, seed.center_y], dtype=torch.float32))
+        direction = torch.tensor(
+            [model.planar_wave_direction_x, model.planar_wave_direction_y],
+            dtype=torch.float32,
+        )
+        if float(torch.linalg.norm(direction)) < 1.0e-8:
+            direction = torch.tensor([1.0, 0.0], dtype=torch.float32)
+        self.register_buffer("planar_wave_direction", direction)
+
+        features = max(1, int(model.intrinsic_front_phase_fourier_features))
+        self.features = FourierFeatures(3, features, float(model.intrinsic_front_phase_fourier_sigma))
+        geo_dim = 8 if self.use_geo_features else 0
+        seed_front_dim = 4 if self.use_seed_front_features else 0
+        in_dim = 3 + 2 * features + geo_dim + seed_front_dim
+        hidden = max(8, int(model.intrinsic_front_phase_hidden))
+        layers = []
+        current_dim = in_dim
+        for _ in range(max(1, int(model.intrinsic_front_phase_layers))):
+            layers.extend([_linear(current_dim, hidden, factorized=False), nn.Tanh()])
+            current_dim = hidden
+        layers.append(_linear(current_dim, 1, factorized=False))
+        self.net = nn.Sequential(*layers)
+        last = self.net[-1]
+        if isinstance(last, nn.Linear):
+            nn.init.zeros_(last.weight)
+            nn.init.zeros_(last.bias)
+
+    def _moving_center(self, t: torch.Tensor) -> torch.Tensor:
+        center = self.seed_center.to(device=t.device, dtype=t.dtype).view(1, 2)
+        if self.include_advection:
+            velocity = torch.tensor([self.velocity_x, self.velocity_y], dtype=t.dtype, device=t.device).view(1, 2)
+            center = center + velocity * t
+        return center
+
+    def _phase_prior(self, xy: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        center = self._moving_center(t)
+        diffusion = torch.as_tensor(self.reference_diffusion, dtype=xy.dtype, device=xy.device).clamp_min(1.0e-12)
+        reaction = torch.as_tensor(self.reference_reaction, dtype=xy.dtype, device=xy.device).clamp_min(1.0e-12)
+        if self.use_planar_prior:
+            direction = self.planar_wave_direction.to(device=xy.device, dtype=xy.dtype).view(1, 2)
+            direction = direction / torch.linalg.norm(direction, dim=-1, keepdim=True).clamp_min(1.0e-8)
+            projected = torch.sum((xy - center) * direction, dim=-1, keepdim=True)
+            front_position = 5.0 * torch.sqrt(diffusion * reaction / 6.0) * t
+            return (projected - front_position) / max(self.box, 1.0e-12)
+        radius = torch.linalg.norm(xy - center, dim=-1, keepdim=True)
+        front_radius = self.seed_sigma * 3.0 + 2.0 * torch.sqrt(diffusion * reaction) * t
+        return (radius - front_radius) / max(self.box, 1.0e-12)
+
+    def _features(self, xy: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        xyt = torch.cat([xy / self.box, t / self.t_end], dim=-1)
+        pieces = [xyt, self.features(xyt)]
+        if self.use_geo_features:
+            pieces.append(square_geo_features(xy, self.box))
+        if self.use_seed_front_features:
+            pieces.append(
+                seed_front_features(
+                    xy,
+                    t,
+                    self.seed_center,
+                    self.seed_sigma,
+                    self.reference_diffusion,
+                    2.0 * math.sqrt(max(self.reference_diffusion, 1.0e-12) * max(self.reference_reaction, 1.0e-12)),
+                    self.box,
+                )
+            )
+        return torch.cat(pieces, dim=-1)
+
+    def forward(self, xy: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        correction = self.correction_scale * self.net(self._features(xy, t))
+        return self._phase_prior(xy, t) + correction
+
+
 class OriginPINN(nn.Module):
     def __init__(self, domain: DomainConfig, pde: PDEConfig, seed: SeedConfig, model: ModelConfig) -> None:
         super().__init__()
@@ -408,6 +502,8 @@ class OriginPINN(nn.Module):
         self.az_x_right = float(model.az_x_right)
         self.az_wave_x0 = float(model.az_wave_x0)
         self.use_front_fourier_features = bool(model.use_front_fourier_features)
+        self.use_intrinsic_front_phase = bool(model.use_intrinsic_front_phase)
+        self.intrinsic_front_phase_feature_frequencies = max(0, int(model.intrinsic_front_phase_feature_frequencies))
         self.hard_initial_condition = bool(model.hard_initial_condition)
         self.initial_envelope_tau = float(model.initial_envelope_tau)
         self.use_kpp_front_envelope = bool(model.use_kpp_front_envelope)
@@ -434,21 +530,26 @@ class OriginPINN(nn.Module):
             if self.use_front_fourier_features and model.front_fourier_features > 0 and not self.use_nif_head
             else None
         )
+        self.front_phase_head = FrontPhaseHead(domain, pde, seed, model) if self.use_intrinsic_front_phase else None
         geo_dim = 8 if self.use_geo_features else 0
         seed_front_dim = 4 if self.use_seed_front_features else 0
         traveling_wave_dim = 5 if (self.use_traveling_wave_features and not self.use_nif_head) else 0
         planar_wave_dim = 5 if (self.use_planar_wave_features and not self.use_nif_head) else 0
         front_fourier_dim = 2 * model.front_fourier_features if self.front_features is not None else 0
+        intrinsic_phase_dim = (
+            1 + 2 * self.intrinsic_front_phase_feature_frequencies if self.use_intrinsic_front_phase else 0
+        )
         network_in_dim = (
             2 * model.fourier_features
             + front_fourier_dim
+            + intrinsic_phase_dim
             + 3
             + geo_dim
             + seed_front_dim
             + traveling_wave_dim
             + planar_wave_dim
         )
-        nif_spatial_dim = 2 * model.fourier_features + 2 + geo_dim + seed_front_dim
+        nif_spatial_dim = 2 * model.fourier_features + 2 + geo_dim + seed_front_dim + intrinsic_phase_dim
         nif_parameter_dim = 4
         if model.architecture == "gated_mlp":
             self.mlp = GatedMLP(
@@ -484,7 +585,7 @@ class OriginPINN(nn.Module):
 
     def forward(self, xy: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         if self.use_nif_head:
-            neural_field = torch.sigmoid(self.mlp(self._nif_spatial_features(xy), self._nif_parameter_features(t)))
+            neural_field = torch.sigmoid(self.mlp(self._nif_spatial_features(xy, t), self._nif_parameter_features(t)))
         else:
             neural_field = torch.sigmoid(self.mlp(self._joint_features(xy, t)))
         if self.use_az_hard_constraints:
@@ -504,6 +605,11 @@ class OriginPINN(nn.Module):
         # as a post-hoc argmax.
         blend = torch.exp(-t / (0.08 * self.domain.t_end + 1.0e-8))
         return blend * source_field + (1.0 - blend) * neural_field
+
+    def phase(self, xy: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        if self.front_phase_head is None:
+            return torch.zeros_like(t)
+        return self.front_phase_head(xy, t)
 
     def _az_hard_constrained_field(
         self,
@@ -612,16 +718,36 @@ class OriginPINN(nn.Module):
                     )
                 )
             )
+        if self.use_intrinsic_front_phase:
+            pieces.append(self._intrinsic_phase_features(xy, t))
         return torch.cat(pieces, dim=-1)
 
-    def _nif_spatial_features(self, xy: torch.Tensor) -> torch.Tensor:
+    def _nif_spatial_features(self, xy: torch.Tensor, t: torch.Tensor | None = None) -> torch.Tensor:
         xy_scaled = xy / self.domain.box
         pieces = [xy_scaled, self.features(xy_scaled)]
         if self.use_geo_features:
             pieces.append(square_geo_features(xy, self.domain.box))
         if self.use_seed_front_features:
             pieces.append(seed_spatial_features(xy, self.seed_center, self.seed_sigma, self.domain.box))
+        if self.use_intrinsic_front_phase:
+            if t is None:
+                raise ValueError("t is required when intrinsic front phase features are enabled.")
+            pieces.append(self._intrinsic_phase_features(xy, t))
         return torch.cat(pieces, dim=-1)
+
+    def _intrinsic_phase_features(self, xy: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        psi = self.phase(xy, t)
+        features = [psi]
+        if self.intrinsic_front_phase_feature_frequencies > 0:
+            frequencies = torch.arange(
+                1,
+                self.intrinsic_front_phase_feature_frequencies + 1,
+                dtype=psi.dtype,
+                device=psi.device,
+            ).view(1, -1)
+            projection = 2.0 * math.pi * psi * frequencies
+            features.extend([torch.sin(projection), torch.cos(projection)])
+        return torch.cat(features, dim=-1)
 
     def _nif_parameter_features(self, t: torch.Tensor) -> torch.Tensor:
         t_scaled = t / self.domain.t_end

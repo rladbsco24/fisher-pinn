@@ -115,9 +115,12 @@ data loss form `1 + 4u_obs`.
 
 The synthetic forward PINN and Korea pine-wilt PINN share the
 `korea_pine_model_config()` / `shared_geo_forward_model_config()` backbone family:
-Pirate/RWF layers, geo Fourier features, learned diffusion/reaction, and optional
-smooth spatial coefficient fields. Korea-specific behavior is kept in data handling,
-land-only collocation, sea exclusion, and observation/support losses.
+Pirate/RWF layers, geo Fourier features, the learnable `FrontPhaseHead`,
+learned diffusion/reaction, and smooth spatial coefficient fields. Korea-specific
+behavior is kept in data handling, land-only collocation, sea exclusion, and
+observation/support losses. The Korea phase supervision is weak and data-derived:
+the initial phase anchor is built from the first observed support contour instead
+of an analytic travelling-wave front.
 
 ## Korea Forest Service CSV Data And Notebook
 
@@ -240,6 +243,11 @@ Every experiment now computes an RK4 reference run after PINN training and repor
 - `pinn_vs_rk4_final_relative_l2`: final-time field difference between the two solvers.
 - `front_area_005_mae` / `front_area_010_mae`: mean absolute error of the area where
   `u>0.05` and `u>0.10` across time.
+- `front_mae_005` / `front_mae_010`: symmetric boundary-distance MAE between the
+  predicted and reference threshold fronts.
+- `hausdorff_005` / `hausdorff_010`: Hausdorff distance between predicted and reference
+  threshold-front point sets.
+- `front_speed_mae_010`: mean absolute error of threshold-front speed over time.
 - `active_front_area_mae`: mean absolute error of the `0.1<u<0.9` active-front band.
 - `mass_mae`: mean absolute error of spatial mean density across time.
 - `train_observation_mse` / `validation_observation_mse`: PINN data fit.
@@ -313,7 +321,8 @@ Important ablation axes:
 
 For the Korea-style forward Fisher-KPP setting, use the dedicated forward ablation
 script. It scores the same problem by field error, RK4 comparison, low-level front
-geometry, active-front coverage, and mass trajectory:
+geometry, threshold-boundary distance, Hausdorff distance, front speed, active-front
+coverage, and mass trajectory:
 
 ```bash
 python scripts\run_forward_ablation.py --preset smoke --seeds 7 --out-dir runs\forward_ablation_smoke
@@ -323,9 +332,24 @@ python scripts\run_forward_ablation.py --preset quick --seeds 7,8,9 --out-dir ru
 Forward ablation outputs:
 
 - `results.csv`: one row per method/seed.
-- `summary.json`: mean/std for final L2, validation MSE, front-area MAE, active-front
-  MAE, and mass MAE.
-- `summary.png`: side-by-side bars for final L2, `u>0.10` front-area MAE, and mass MAE.
+- `summary.json`: mean/std for final L2, validation MSE, front-area MAE,
+  threshold-front MAE, Hausdorff distance, front-speed MAE, active-front MAE, and mass
+  MAE.
+- `summary.png`: side-by-side bars for final L2, threshold-front MAE, Hausdorff
+  distance, and front-speed MAE.
+
+For the explicit front-phase model comparison, use:
+
+```bash
+python scripts\run_front_phase_ablation.py --problem both --preset smoke --seeds 7 --out-dir runs\front_phase_ablation_smoke
+python scripts\run_front_phase_ablation.py --problem both --preset quick --seeds 7,8,9 --out-dir runs\front_phase_ablation_quick
+```
+
+This compares `vanilla_pinn`, the existing `geo_spectral_pinn`, and
+`explicit_front_phase_pinn` on both the Ablowitz-Zeppetella 1D moving-front benchmark
+and the 2D Gaussian moving-front benchmark. Each full training run also writes
+`phase_u_contour_diagnostic.png`, which overlays the learned `psi=0` contour and the
+`u` threshold contour in the same figure.
 
 For visual ON/OFF validation of individual model and training features, use:
 
